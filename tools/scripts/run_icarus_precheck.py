@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shlex
 import subprocess
 from pathlib import Path
@@ -138,7 +137,9 @@ def main() -> None:
 
     compile_result = run_command(compile_cmd, cwd=ROOT, log_path=compile_log)
 
-    run_cmd = ["vvp", str(simv_path)]
+    # IMPORTANT FIX:
+    # run from out_dir, so execute the local simv binary directly
+    run_cmd = ["vvp", "simv"]
     if compile_result.returncode == 0:
         run_result = run_command(run_cmd, cwd=out_dir, log_path=run_log)
         run_rc = run_result.returncode
