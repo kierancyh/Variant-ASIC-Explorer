@@ -1,5 +1,6 @@
 name: rns_crt
 pdk: sky130A
+
 top_module: rns_top_crt
 
 clock:
@@ -9,6 +10,21 @@ clock:
 
 sources:
   - src/**/*.v
+
+precheck:
+  icarus:
+    enabled: true
+    testbench_top: tb_rns_top_crt
+    testbench_sources:
+      - tb/**/*.v
+      - tb/**/*.sv
+    vcd_name: rtl_precheck.vcd
+    stop_on_fail: true
+
+  yosys:
+    enabled: true
+    stop_on_fail: true
+    mode: structural
 
 ll_policy:
   sdc: ../_shared/ll_policy/constraints.sdc

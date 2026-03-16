@@ -5,12 +5,15 @@ import argparse
 import csv
 import html
 import json
+import os
 import re
 import shutil
+import urllib.parse
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 TT_GDS_VIEWER_URL = "https://gds-viewer.tinytapeout.com/"
+SURFER_WEB_APP_URL = "https://app.surfer-project.org/"
 
 
 def to_float(v: Any) -> Optional[float]:
@@ -22,14 +25,6 @@ def to_float(v: Any) -> Optional[float]:
         return None
 
 
-def read_csv_row(path: Path) -> Optional[Dict[str, str]]:
-    if not path.exists():
-        return None
-    with path.open("r", newline="", encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
-    return rows[0] if rows else None
-
-
 def load_json(path: Path) -> Dict[str, Any]:
     if not path.exists():
         return {}
@@ -39,16 +34,22 @@ def load_json(path: Path) -> Dict[str, Any]:
         return {}
 
 
+def read_csv_row(path: Path) -> Optional[Dict[str, str]]:
+    if not path.exists():
+        return None
+    with path.open("r", newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    return rows[0] if rows else None
+
+
 def flatten_scalar_metrics(value: Any, prefix: str = "", out: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     if out is None:
         out = {}
-
     if isinstance(value, dict):
         for key, child in value.items():
             next_prefix = f"{prefix}__{key}" if prefix else str(key)
             flatten_scalar_metrics(child, next_prefix, out)
         return out
-
     if isinstance(value, list):
         for idx, child in enumerate(value):
             if isinstance(child, (dict, list)):
@@ -58,7 +59,6 @@ def flatten_scalar_metrics(value: Any, prefix: str = "", out: Optional[Dict[str,
             next_prefix = f"{prefix}__{idx}" if prefix else str(idx)
             out[next_prefix] = child
         return out
-
     if prefix and value not in (None, ""):
         out[prefix] = value
     return out
@@ -102,11 +102,7 @@ def explain_row(row: Dict[str, str]) -> str:
     if classify_status(row) == "FLOW_FAIL":
         return "Flow failed before valid timing metrics were produced."
     reasons: List[str] = []
-    for k, label in (
-        ("drc_errors", "DRC"),
-        ("lvs_errors", "LVS"),
-        ("antenna_violations", "Antenna"),
-    ):
+    for k, label in (("drc_errors", "DRC"), ("lvs_errors", "LVS"), ("antenna_violations", "Antenna")):
         v = to_float(row.get(k))
         if v not in (None, 0.0):
             reasons.append(f"{label}={int(v) if float(v).is_integer() else v}")
@@ -125,10 +121,7 @@ def best_sort_key(row: Dict[str, str]) -> Tuple[Any, ...]:
     clk = to_float(row.get("clock_ns"))
     swns = to_float(row.get("setup_wns_ns"))
     stns = to_float(row.get("setup_tns_ns"))
-    penalty = sum(
-        (to_float(row.get(k)) or 0.0)
-        for k in ("antenna_violations", "drc_errors", "lvs_errors")
-    )
+    penalty = sum((to_float(row.get(k)) or 0.0) for k in ("antenna_violations", "drc_errors", "lvs_errors"))
     return (
         0 if clean and ok else 1,
         0 if clean else 1,
@@ -137,30 +130,6 @@ def best_sort_key(row: Dict[str, str]) -> Tuple[Any, ...]:
         -(swns if swns is not None else -1e12),
         -(stns if stns is not None else -1e12),
     )
-
-
-def first_matching(base: Path, rel: Path) -> Optional[Path]:
-    p = base / rel
-    return p if p.exists() else None
-
-
-def first_gds_path(base_dir: Path) -> Optional[Path]:
-    gds_dir = base_dir / "final" / "gds"
-    if not gds_dir.exists():
-        return None
-    files = sorted(gds_dir.glob("*.gds"))
-    return files[0] if files else None
-
-
-def first_render_path(base_dir: Path) -> Optional[Path]:
-    renders_dir = base_dir / "renders"
-    if not renders_dir.exists():
-        return None
-    for pattern in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
-        files = sorted(renders_dir.glob(pattern))
-        if files:
-            return files[0]
-    return None
 
 
 def parse_attempt_started(path: Path) -> Dict[str, str]:
@@ -183,7 +152,6 @@ def infer_stage_label(row: Dict[str, str]) -> str:
             str(row.get("_variant", "")),
         ]
     ).lower()
-
     if "coarse" in haystack:
         return "coarse"
     if "mid" in haystack or "5ns" in haystack or "5 ns" in haystack or "step5" in haystack:
@@ -194,88 +162,35 @@ def infer_stage_label(row: Dict[str, str]) -> str:
         return "0.5 ns"
     if "1.0" in haystack or "1ns" in haystack or "1 ns" in haystack or "refine1" in haystack or "refine_1" in haystack:
         return "1.0 ns"
-
-    match = re.search(r"step[_\s-]?([0-9]+(?:\.[0-9]+)?)", haystack)
-    if match:
-        return f"{match.group(1)} ns"
-
     return ""
+
+
+def first_gds_path(base_dir: Path) -> Optional[Path]:
+    gds_dir = base_dir / "final" / "gds"
+    if not gds_dir.exists():
+        return None
+    files = sorted(gds_dir.glob("*.gds"))
+    return files[0] if files else None
+
+
+def first_render_path(base_dir: Path) -> Optional[Path]:
+    renders_dir = base_dir / "renders"
+    if not renders_dir.exists():
+        return None
+    for pattern in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
+        files = sorted(renders_dir.glob(pattern))
+        if files:
+            return files[0]
+    return None
 
 
 def raw_row_key(raw_key: str) -> str:
     return f"_raw__{raw_key}"
 
 
-def raw_metric_value(row: Dict[str, Any], raw_key: str) -> Any:
-    return row.get(raw_row_key(raw_key), "")
-
-
-def pretty_raw_metric_label(raw_key: str) -> str:
-    pieces = [piece.replace("_", " ").strip() for piece in raw_key.split("__") if piece.strip()]
-    return " / ".join(piece.title() for piece in pieces)
-
-
-def raw_metric_sort_priority(raw_key: str) -> Tuple[int, str]:
-    priorities = [
-        ("clock__", 0),
-        ("timing__", 0),
-        ("power__", 1),
-        ("design__", 2),
-        ("floorplan__", 2),
-        ("place__", 3),
-        ("route__", 4),
-        ("cts__", 5),
-        ("drc__", 6),
-        ("klayout__", 6),
-        ("magic__", 6),
-        ("lvs__", 6),
-        ("antenna__", 6),
-        ("ir__", 6),
-    ]
-    for prefix, rank in priorities:
-        if raw_key.startswith(prefix):
-            return (rank, raw_key)
-    return (99, raw_key)
-
-
-def iter_raw_metrics(row: Dict[str, Any]) -> List[Tuple[str, Any]]:
-    items: List[Tuple[str, Any]] = []
-    for key, value in row.items():
-        if not key.startswith("_raw__"):
-            continue
-        if value in ("", None, "None"):
-            continue
-        raw_key = key[len("_raw__") :]
-        items.append((raw_key, value))
-    items.sort(key=lambda item: raw_metric_sort_priority(item[0]))
-    return items
-
-
-def pick_raw_metric_items(
-    row: Dict[str, Any],
-    prefixes: Tuple[str, ...],
-    consumed: Set[str],
-    *,
-    limit: int = 8,
-    catch_all: bool = False,
-) -> List[Tuple[str, Any]]:
-    selected: List[Tuple[str, Any]] = []
-    for raw_key, value in iter_raw_metrics(row):
-        if raw_key in consumed:
-            continue
-        matches = True if catch_all else any(raw_key.startswith(prefix) for prefix in prefixes)
-        if not matches:
-            continue
-        consumed.add(raw_key)
-        selected.append((pretty_raw_metric_label(raw_key), value))
-        if len(selected) >= limit:
-            break
-    return selected
-
-
 def collect_rows(artifacts_root: Path) -> List[Dict[str, str]]:
     rows: List[Dict[str, str]] = []
-    seen: set[Path] = set()
+    seen: Set[Path] = set()
     for pattern in ("**/ci_out/*/clk_*ns_*/metrics.csv", "**/*/clk_*ns_*/metrics.csv"):
         for csv_path in sorted(artifacts_root.glob(pattern)):
             if csv_path in seen:
@@ -286,13 +201,8 @@ def collect_rows(artifacts_root: Path) -> List[Dict[str, str]]:
                 continue
             base_dir = csv_path.parent
             meta_path = base_dir / "run_meta.json"
-            meta: Dict[str, Any] = (
-                json.loads(meta_path.read_text(encoding="utf-8"))
-                if meta_path.exists()
-                else {}
-            )
+            meta = load_json(meta_path)
             started = parse_attempt_started(base_dir / "attempt_started.txt")
-
             raw_metrics = load_json(base_dir / "metrics_raw.json")
             raw_flat = flatten_scalar_metrics(raw_metrics)
             failure_summary = load_json(base_dir / "failure_summary.json")
@@ -301,9 +211,7 @@ def collect_rows(artifacts_root: Path) -> List[Dict[str, str]]:
             row["_artifact"] = str(meta.get("artifact_name", ""))
             row["_run_dir"] = base_dir.name
             row["_base_dir"] = str(base_dir)
-            row["_clock_requested"] = str(
-                meta.get("clock_ns_requested", row.get("clock_ns", ""))
-            )
+            row["_clock_requested"] = str(meta.get("clock_ns_requested", row.get("clock_ns", "")))
             row["_github_run_id"] = str(meta.get("github_run_id", ""))
             row["_synth_strategy_override"] = str(meta.get("synth_strategy_override", ""))
             row["_attempt_number"] = started.get("attempt", "")
@@ -312,133 +220,103 @@ def collect_rows(artifacts_root: Path) -> List[Dict[str, str]]:
             row["_raw_metric_count"] = str(len(raw_flat))
             row["status"] = classify_status(row)
             row["selection_reason"] = explain_row(row)
-
             meta_stage = str(meta.get("stage_label", "")).strip()
             started_stage = str(started.get("stage_label", "")).strip()
             row["_stage_label"] = meta_stage or started_stage or infer_stage_label(row)
-
             row["_failure_summary_present"] = "yes" if failure_summary else "no"
             row["_failure_reason"] = str(failure_summary.get("reason", ""))
             row["_failure_phase"] = str(failure_summary.get("likely_failure_phase", ""))
             row["_failure_openlane_rc"] = str(failure_summary.get("openlane_rc", ""))
             row["_failure_config_rc"] = str(failure_summary.get("config_generation_rc", ""))
             row["_failure_summary"] = failure_summary
-
-            for raw_key, raw_value in raw_flat.items():
-                row[raw_row_key(raw_key)] = raw_value
-
+            row["_openlane_run_present"] = "yes" if (base_dir / "openlane_run").exists() else "no"
             gds = first_gds_path(base_dir)
             rnd = first_render_path(base_dir)
             row["_gds_path"] = str(gds) if gds else ""
             row["_render_path"] = str(rnd) if rnd else ""
-            row["_openlane_run_present"] = (
-                "yes" if (base_dir / "openlane_run").exists() else "no"
-            )
+            for raw_key, raw_value in raw_flat.items():
+                row[raw_row_key(raw_key)] = raw_value
             rows.append(row)
     return rows
 
 
-def write_summary_csv(path: Path, rows: List[Dict[str, str]]) -> None:
-    base_keys = [
-        "_variant",
-        "_run_dir",
-        "_artifact",
-        "_clock_requested",
-        "_stage_label",
-        "_metrics_raw_present",
-        "_raw_metric_count",
-        "_failure_summary_present",
-        "_failure_reason",
-        "_failure_phase",
-        "_failure_openlane_rc",
-        "_failure_config_rc",
-        "clock_ns",
-        "clock_ns_reported",
-        "setup_wns_ns",
-        "setup_tns_ns",
-        "hold_wns_ns",
-        "hold_tns_ns",
-        "core_area_um2",
-        "die_area_um2",
-        "instance_count",
-        "utilization_pct",
-        "wire_length_um",
-        "vias_count",
-        "power_total_W",
-        "power_internal_W",
-        "power_switching_W",
-        "power_leakage_W",
-        "power_source",
-        "power_fair_sta_rpt",
-        "drc_errors",
-        "drc_errors_klayout",
-        "drc_errors_magic",
-        "lvs_errors",
-        "antenna_violations",
-        "antenna_violating_nets",
-        "antenna_violating_pins",
-        "ir_drop_worst_V",
-        "status",
-        "selection_reason",
-        "_openlane_run_present",
-        "_attempt_number",
-        "_github_run_id",
-        "_synth_strategy_override",
-    ]
-    raw_keys = sorted(
-        {
-            key
-            for row in rows
-            for key in row.keys()
-            if key.startswith("_raw__")
-        }
-    )
-    keys = base_keys + raw_keys
-    with path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=keys)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({k: row.get(k, "") for k in keys})
+def find_first(root: Path, patterns: Sequence[str]) -> Optional[Path]:
+    for pattern in patterns:
+        matches = sorted(root.glob(pattern))
+        if matches:
+            return matches[0]
+    return None
 
 
-def write_summary_md(path: Path, rows: List[Dict[str, str]]) -> None:
-    lines = [
-        "## Best run selection",
-        "",
-        "1. Clean signoff plus non-negative setup timing wins.",
-        "2. If no full PASS exists, clean signoff wins over signoff violations.",
-        "3. Among comparable runs, lower requested clock period is preferred.",
-        "4. Setup WNS/TNS are used as tie-breakers.",
-        "",
-    ]
-    ordered = sorted(rows, key=best_sort_key)
-    if ordered:
-        best = ordered[0]
-        lines += [
-            f"- Selected: `{best.get('_variant', '')}` / `{best.get('_run_dir', '')}`",
-            f"- Clock: `{best.get('clock_ns', '')} ns`",
-            f"- Status: `{best.get('status', '')}`",
-            f"- Remarks: {best.get('selection_reason', '')}",
-            "",
-        ]
-    lines += [
-        "## All runs",
-        "",
-        "| Variant | Run | Clock (ns) | Setup WNS | Setup TNS | Core area | Power total | DRC | LVS | Antenna | Status | Remarks |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
-    ]
-    for idx, row in enumerate(ordered):
-        remarks = row.get("selection_reason", "")
-        if idx == 0:
-            remarks = f"SELECTED — {remarks}"
-        lines.append(
-            f"| {row.get('_variant', '').replace('|', '/')} | {row.get('_run_dir', '').replace('|', '/')} | "
-            f"{row.get('clock_ns', '')} | {row.get('setup_wns_ns', '')} | {row.get('setup_tns_ns', '')} | "
-            f"{row.get('core_area_um2', '')} | {row.get('power_total_W', '')} | {row.get('drc_errors', '')} | "
-            f"{row.get('lvs_errors', '')} | {row.get('antenna_violations', '')} | {row.get('status', '')} | "
-            f"{remarks.replace('|', '/')} |"
-        )
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+def collect_precheck(artifacts_root: Path) -> Dict[str, Any]:
+    rtl_status_path = find_first(artifacts_root, ["**/precheck/rtl/status.json", "**/status.json"])
+    yosys_status_path = find_first(artifacts_root, ["**/precheck/yosys/status.json", "**/yosys/status.json"])
+
+    rtl_status = {}
+    yosys_status = {}
+    rtl_root = None
+    yosys_root = None
+
+    if rtl_status_path and rtl_status_path.name == "status.json":
+        maybe = load_json(rtl_status_path)
+        if maybe.get("tool") == "icarus":
+            rtl_status = maybe
+            rtl_root = rtl_status_path.parent
+    if yosys_status_path and yosys_status_path.name == "status.json":
+        maybe = load_json(yosys_status_path)
+        if maybe.get("tool") == "yosys":
+            yosys_status = maybe
+            yosys_root = yosys_status_path.parent
+
+    data: Dict[str, Any] = {
+        "icarus": rtl_status or {"tool": "icarus", "status": "MISSING", "passed": False, "enabled": False},
+        "yosys": yosys_status or {"tool": "yosys", "status": "MISSING", "passed": False, "enabled": False},
+        "top_module": rtl_status.get("top_module") or yosys_status.get("top_module") or "",
+        "testbench_top": rtl_status.get("testbench_top") or "",
+        "vcd_present": bool(rtl_status.get("vcd_present", False)),
+        "vcd_name": rtl_status.get("vcd_name") or "rtl_precheck.vcd",
+        "rtl_root": str(rtl_root) if rtl_root else "",
+        "yosys_root": str(yosys_root) if yosys_root else "",
+    }
+
+    if rtl_root:
+        data["compile_log"] = str(rtl_root / "compile.log")
+        data["run_log"] = str(rtl_root / "run.log")
+        data["vcd_path"] = str(rtl_root / data["vcd_name"])
+        data["rtl_meta"] = str(rtl_root / "precheck_meta.json")
+    else:
+        data["compile_log"] = ""
+        data["run_log"] = ""
+        data["vcd_path"] = ""
+        data["rtl_meta"] = ""
+
+    if yosys_root:
+        synth_name = f"{data['top_module']}_synth.v" if data["top_module"] else ""
+        data["yosys_log"] = str(yosys_root / "yosys.log")
+        data["yosys_stat_txt"] = str(yosys_root / "stat.txt")
+        data["yosys_stat_json"] = str(yosys_root / "stat.json")
+        data["yosys_netlist"] = str(yosys_root / synth_name) if synth_name else ""
+        data["yosys_meta"] = str(yosys_root / "precheck_meta.json")
+    else:
+        data["yosys_log"] = ""
+        data["yosys_stat_txt"] = ""
+        data["yosys_stat_json"] = ""
+        data["yosys_netlist"] = ""
+        data["yosys_meta"] = ""
+
+    data["gate_ok"] = bool(data["icarus"].get("passed")) and bool(data["yosys"].get("passed"))
+    return data
+
+
+def sanitize_site_component(value: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "").strip())
+    safe = re.sub(r"-+", "-", safe).strip("-.")
+    return safe or "snapshot"
+
+
+def normalize_site_subdir(site_subdir: str) -> str:
+    parts = [sanitize_site_component(part) for part in str(site_subdir or "").split("/") if str(part).strip()]
+    return "/".join(parts)
 
 
 def copy_tree_if_exists(src: Path, dst: Path) -> None:
@@ -453,250 +331,142 @@ def copy_tree_if_exists(src: Path, dst: Path) -> None:
         shutil.copy2(src, dst)
 
 
+def write_summary_csv(path: Path, rows: List[Dict[str, str]]) -> None:
+    base_keys = [
+        "_variant",
+        "_run_dir",
+        "_artifact",
+        "_clock_requested",
+        "_stage_label",
+        "clock_ns",
+        "setup_wns_ns",
+        "setup_tns_ns",
+        "core_area_um2",
+        "power_total_W",
+        "drc_errors",
+        "lvs_errors",
+        "antenna_violations",
+        "status",
+        "selection_reason",
+    ]
+    raw_keys = sorted({key for row in rows for key in row.keys() if key.startswith("_raw__")})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=base_keys + raw_keys)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({k: row.get(k, "") for k in base_keys + raw_keys})
+
+
+def write_summary_md(path: Path, rows: List[Dict[str, str]], precheck: Dict[str, Any]) -> None:
+    lines = [
+        "## Precheck summary",
+        "",
+        f"- Icarus: {precheck.get('icarus', {}).get('status', 'MISSING')}",
+        f"- Yosys: {precheck.get('yosys', {}).get('status', 'MISSING')}",
+        f"- Top module: {precheck.get('top_module', '')}",
+        f"- TB top: {precheck.get('testbench_top', '')}",
+        f"- VCD present: {'yes' if precheck.get('vcd_present') else 'no'}",
+        "",
+        "## Best run selection",
+        "",
+        "1. Clean signoff plus non-negative setup timing wins.",
+        "2. If no full PASS exists, clean signoff wins over signoff violations.",
+        "3. Among comparable runs, lower requested clock period is preferred.",
+        "4. Setup WNS/TNS are used as tie-breakers.",
+        "",
+    ]
+    if not rows:
+        lines += ["No ASIC run metrics were collected for this snapshot.", ""]
+    else:
+        best = sorted(rows, key=best_sort_key)[0]
+        lines += [
+            f"Selected best run: {best.get('_variant', '')} / {best.get('_run_dir', '')}",
+            "",
+            "| Variant | Stage | Clock (ns) | Status | Remarks |",
+            "|---|---:|---:|---|---|",
+        ]
+        for row in sorted(rows, key=best_sort_key):
+            lines.append(
+                f"| {row.get('_variant','')} | {row.get('_stage_label','')} | {row.get('clock_ns','')} | {row.get('status','')} | {row.get('selection_reason','').replace('|','/')} |"
+            )
+        lines.append("")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
 def write_best_json(path: Path, rows: List[Dict[str, str]]) -> Dict[str, Any]:
     best = sorted(rows, key=best_sort_key)[0] if rows else {}
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(best, indent=2), encoding="utf-8")
     return best
 
 
-def package_best_bundle(best_bundle_dir: Path, best: Dict[str, Any]) -> None:
+def package_best_bundle(best_bundle_dir: Path, best: Dict[str, Any], precheck: Dict[str, Any]) -> None:
     best_bundle_dir.mkdir(parents=True, exist_ok=True)
-    if not best:
-        return
-    base_dir = Path(best["_base_dir"])
-    for name in (
-        "metrics.csv",
-        "metrics.md",
-        "metrics_raw.json",
-        "run_meta.json",
-        "attempt_started.txt",
-        "attempt_manifest.json",
-        "viewer.html",
-        "index.html",
-        "README.txt",
-        "failure_summary.md",
-        "failure_summary.json",
-    ):
-        src = base_dir / name
-        if src.exists():
-            shutil.copy2(src, best_bundle_dir / name)
-    copy_tree_if_exists(base_dir / "renders", best_bundle_dir / "renders")
-    copy_tree_if_exists(base_dir / "final" / "gds", best_bundle_dir / "final" / "gds")
-    copy_tree_if_exists(base_dir / "openlane_run", best_bundle_dir / "openlane_run")
-    for name in ("autoflow_history.json", "autoflow_history.csv", "autoflow_summary.md"):
-        src = base_dir.parent / name
-        if src.exists():
-            shutil.copy2(src, best_bundle_dir / name)
+    if best:
+        base_dir = Path(best["_base_dir"])
+        for name in (
+            "metrics.csv",
+            "metrics.md",
+            "metrics_raw.json",
+            "run_meta.json",
+            "attempt_started.txt",
+            "attempt_manifest.json",
+            "viewer.html",
+            "index.html",
+            "README.txt",
+            "failure_summary.md",
+            "failure_summary.json",
+        ):
+            src = base_dir / name
+            if src.exists():
+                shutil.copy2(src, best_bundle_dir / name)
+        copy_tree_if_exists(base_dir / "renders", best_bundle_dir / "renders")
+        copy_tree_if_exists(base_dir / "final" / "gds", best_bundle_dir / "final" / "gds")
+        copy_tree_if_exists(base_dir / "openlane_run", best_bundle_dir / "openlane_run")
+
+    rtl_root = Path(precheck["rtl_root"]) if precheck.get("rtl_root") else None
+    yosys_root = Path(precheck["yosys_root"]) if precheck.get("yosys_root") else None
+    if rtl_root and rtl_root.exists():
+        copy_tree_if_exists(rtl_root, best_bundle_dir / "precheck" / "rtl")
+    if yosys_root and yosys_root.exists():
+        copy_tree_if_exists(yosys_root, best_bundle_dir / "precheck" / "yosys")
 
 
-def build_theme_widget(button_id: str, panel_id: str) -> str:
-    return f"""
-<div class="theme-control">
-  <button class="theme-launch" id="{button_id}" type="button" aria-expanded="false" aria-controls="{panel_id}">Appearance ⚙️</button>
-  <div class="theme-widget" id="{panel_id}" hidden>
-    <div class="theme-widget-body">
-      <h3>Appearance</h3>
-      <div class="theme-row"><label for="{panel_id}_preset">Theme preset</label><select id="{panel_id}_preset"><option value="canvas">Canvas Beige</option><option value="forest">Forest</option><option value="slate">Slate</option></select></div>
-      <div class="theme-inline">
-        <div class="theme-row"><label for="{panel_id}_bg">Base background</label><input type="color" id="{panel_id}_bg" value="#f4ecdf"></div>
-        <div class="theme-row"><label for="{panel_id}_accent">Accent</label><input type="color" id="{panel_id}_accent" value="#8b5e3c"></div>
-      </div>
-      <div class="theme-inline">
-        <div class="theme-row"><label for="{panel_id}_grad1">Gradient 1</label><input type="color" id="{panel_id}_grad1" value="#f8f1e7"></div>
-        <div class="theme-row"><label for="{panel_id}_grad2">Gradient 2</label><input type="color" id="{panel_id}_grad2" value="#efe4d3"></div>
-      </div>
-      <div class="theme-btn-row"><button id="{panel_id}_save" type="button">Save</button><button id="{panel_id}_reset" type="button">Reset</button></div>
-    </div>
-  </div>
-</div>
-"""
-
-
-def build_theme_script(button_id: str, panel_id: str, storage_key: str) -> str:
-    return f"""
-<script>
-(function () {{
-  const root = document.documentElement;
-  const button = document.getElementById("{button_id}");
-  const panel = document.getElementById("{panel_id}");
-  if (!root || !button || !panel) return;
-  document.body.appendChild(panel);
-  const presetTheme = document.getElementById("{panel_id}_preset");
-  const bgColor = document.getElementById("{panel_id}_bg");
-  const accentColor = document.getElementById("{panel_id}_accent");
-  const grad1 = document.getElementById("{panel_id}_grad1");
-  const grad2 = document.getElementById("{panel_id}_grad2");
-  const saveTheme = document.getElementById("{panel_id}_save");
-  const resetTheme = document.getElementById("{panel_id}_reset");
-  const presets = {{
-    canvas: {{"--bg":"#f4ecdf","--bg-grad-1":"#f8f1e7","--bg-grad-2":"#efe4d3","--accent":"#8b5e3c","--accent-2":"#b6845e"}},
-    forest: {{"--bg":"#e9efe7","--bg-grad-1":"#f3f7f1","--bg-grad-2":"#d9e7d5","--accent":"#4f7a5c","--accent-2":"#789d83"}},
-    slate: {{"--bg":"#e7ebf0","--bg-grad-1":"#f3f6fa","--bg-grad-2":"#d7dde6","--accent":"#496a8a","--accent-2":"#7292b0"}}
-  }};
-  function applyVars(vars) {{ Object.entries(vars).forEach(([k,v]) => root.style.setProperty(k, v)); }}
-  function syncInputsFromCurrentTheme() {{
-    const styles = getComputedStyle(root);
-    bgColor.value = styles.getPropertyValue("--bg").trim() || bgColor.value;
-    grad1.value = styles.getPropertyValue("--bg-grad-1").trim() || grad1.value;
-    grad2.value = styles.getPropertyValue("--bg-grad-2").trim() || grad2.value;
-    accentColor.value = styles.getPropertyValue("--accent").trim() || accentColor.value;
-  }}
-  function saveSettings() {{ localStorage.setItem("{storage_key}", JSON.stringify({{preset:presetTheme.value,bg:bgColor.value,grad1:grad1.value,grad2:grad2.value,accent:accentColor.value}})); }}
-  function loadSettings() {{
-    const raw = localStorage.getItem("{storage_key}");
-    if (!raw) {{
-      presetTheme.value = "canvas";
-      applyVars(presets.canvas);
-      syncInputsFromCurrentTheme();
-      return;
-    }}
-    try {{
-      const s = JSON.parse(raw);
-      const preset = (s.preset && presets[s.preset]) ? s.preset : "canvas";
-      presetTheme.value = preset;
-      applyVars(presets[preset]);
-      if (s.bg) bgColor.value = s.bg;
-      if (s.grad1) grad1.value = s.grad1;
-      if (s.grad2) grad2.value = s.grad2;
-      if (s.accent) accentColor.value = s.accent;
-      applyVars({{"--bg":bgColor.value,"--bg-grad-1":grad1.value,"--bg-grad-2":grad2.value,"--accent":accentColor.value,"--accent-2":accentColor.value}});
-    }} catch (e) {{
-      presetTheme.value = "canvas";
-      applyVars(presets.canvas);
-    }}
-    syncInputsFromCurrentTheme();
-  }}
-  function positionPanel() {{
-    if (panel.hidden) return;
-    const rect = button.getBoundingClientRect();
-    const vw = window.innerWidth || document.documentElement.clientWidth || 0;
-    const vh = window.innerHeight || document.documentElement.clientHeight || 0;
-    const margin = 12;
-    const w = Math.min(340, Math.max(260, vw - (margin * 2)));
-    panel.style.width = w + "px";
-    panel.style.maxWidth = w + "px";
-    const h = panel.offsetHeight || 320;
-    let left = rect.right - w;
-    left = Math.max(margin, Math.min(left, vw - w - margin));
-    let top = rect.bottom + 12;
-    if (top + h > vh - margin) top = Math.max(margin, rect.top - h - 12);
-    panel.style.left = left + "px";
-    panel.style.top = top + "px";
-  }}
-  function openPanel() {{ panel.hidden = false; button.setAttribute("aria-expanded", "true"); positionPanel(); }}
-  function closePanel() {{ panel.hidden = true; button.setAttribute("aria-expanded", "false"); }}
-  button.addEventListener("click", function (e) {{ e.stopPropagation(); if (panel.hidden) openPanel(); else closePanel(); }});
-  panel.addEventListener("click", function (e) {{ e.stopPropagation(); }});
-  document.addEventListener("click", function () {{ closePanel(); }});
-  document.addEventListener("keydown", function (e) {{ if (e.key === "Escape") closePanel(); }});
-  window.addEventListener("resize", function () {{ if (!panel.hidden) positionPanel(); }});
-  window.addEventListener("scroll", function () {{ if (!panel.hidden) positionPanel(); }}, true);
-  presetTheme.addEventListener("change", function () {{
-    if (presets[presetTheme.value]) {{
-      applyVars(presets[presetTheme.value]);
-      syncInputsFromCurrentTheme();
-      saveSettings();
-    }}
-  }});
-  [bgColor, grad1, grad2, accentColor].forEach(el => el.addEventListener("input", function () {{
-    applyVars({{"--bg":bgColor.value,"--bg-grad-1":grad1.value,"--bg-grad-2":grad2.value,"--accent":accentColor.value,"--accent-2":accentColor.value}});
-    saveSettings();
-  }}));
-  saveTheme.addEventListener("click", saveSettings);
-  resetTheme.addEventListener("click", function () {{
-    localStorage.removeItem("{storage_key}");
-    presetTheme.value = "canvas";
-    applyVars(presets.canvas);
-    syncInputsFromCurrentTheme();
-    closePanel();
-  }});
-  loadSettings();
-  closePanel();
-}})();
-</script>
-"""
-
-
-def value_or_dash(v: Any) -> str:
-    if isinstance(v, bool):
-        s = "yes" if v else "no"
-    else:
-        s = "" if v is None else str(v)
-    return html.escape(s) if s not in {"", "None"} else "—"
+def rel_href(path: Path, root: Path) -> str:
+    return urllib.parse.quote(str(path.relative_to(root)).replace(os.sep, "/"))
 
 
 def badge_html(status: str) -> str:
-    s = (status or "").upper()
-    cls = "flow"
-    if s == "PASS":
-        cls = "pass"
-    elif s == "TIMING_FAIL":
-        cls = "timing"
-    elif s == "SIGNOFF_FAIL":
-        cls = "signoff"
-    elif s == "SIGNOFF_AND_TIMING_FAIL":
-        cls = "mixed"
-    return f'<span class="badge {cls}">{html.escape(status or "")}</span>'
+    s = str(status or "").upper()
+    cls = {
+        "PASS": "pass",
+        "WARN": "warn",
+        "FAIL": "fail",
+        "SKIP": "skip",
+        "TIMING_FAIL": "fail",
+        "SIGNOFF_FAIL": "fail",
+        "SIGNOFF_AND_TIMING_FAIL": "fail",
+        "FLOW_FAIL": "fail",
+        "MISSING": "skip",
+    }.get(s, "skip")
+    return f'<span class="badge {cls}">{html.escape(s or "UNKNOWN")}</span>'
 
 
-def link_button(href: str, label: str, secondary: bool = False) -> str:
-    cls = "btn secondary" if secondary else "btn"
-    return f'<a class="{cls}" href="{html.escape(href)}">{html.escape(label)}</a>'
-
-
-def external_button(href: str, label: str, secondary: bool = False) -> str:
-    cls = "btn secondary" if secondary else "btn"
-    return (
-        f'<a class="{cls}" href="{html.escape(href)}" target="_blank" '
-        f'rel="noopener noreferrer">{html.escape(label)}</a>'
-    )
-
-
-def kv_rows(items: List[Tuple[str, Any]]) -> str:
-    return "".join(
-        f"<tr><td>{html.escape(k)}</td><td>{value_or_dash(v)}</td></tr>"
-        for k, v in items
-    )
-
-
-def setting_value(explorer_settings: Dict[str, str], key: str, default: str = "—") -> str:
-    value = str(explorer_settings.get(key, "")).strip()
-    return value if value else default
-
-
-def sortable_number_attr(v: Any) -> str:
-    n = to_float(v)
-    if n is None:
-        return ""
-    return str(n)
-
-
-def sortable_text_attr(v: Any) -> str:
-    return str(v or "").strip()
-
-
-def sanitize_site_component(value: str) -> str:
-    return re.sub(r"[^A-Za-z0-9._-]+", "_", str(value or "").strip())
-
-
-def normalize_site_subdir(site_subdir: str) -> str:
-    raw = str(site_subdir or "").strip().replace("\\", "/")
-    parts = [part for part in raw.split("/") if part not in {"", ".", ".."}]
-    return "/".join(parts)
-
-
-def write_redirect_page(path: Path, target_href: str, title: str, description: str) -> None:
-    safe_target = html.escape(target_href, quote=True)
+def write_redirect_page(path: Path, target: str, title: str, description: str) -> None:
     safe_title = html.escape(title)
     safe_description = html.escape(description)
+    safe_target = html.escape(target)
     content = f"""<!doctype html>
 <html lang=\"en\">
 <head>
   <meta charset=\"utf-8\">
   <meta http-equiv=\"refresh\" content=\"0; url={safe_target}\">
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
   <title>{safe_title}</title>
   <style>
-    body{{font:16px/1.6 Inter,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;background:#f4ecdf;color:#2f2418;display:grid;min-height:100vh;place-items:center;padding:24px}}
+    body{{font-family:Inter,Segoe UI,Arial,sans-serif;background:#f4ecdf;margin:0;min-height:100vh;display:grid;place-items:center;color:#2a2116}}
     .card{{max-width:720px;background:rgba(255,248,238,.94);border:1px solid rgba(116,92,62,.22);border-radius:18px;padding:24px;box-shadow:0 18px 45px rgba(110,84,53,.12)}}
     a{{color:#8b5e3c;text-decoration:none;font-weight:700}}
   </style>
@@ -713,9 +483,78 @@ def write_redirect_page(path: Path, target_href: str, title: str, description: s
     path.write_text(content, encoding="utf-8")
 
 
+def pages_base_url(repo_slug: str) -> str:
+    slug = str(repo_slug or "").strip()
+    if "/" not in slug:
+        return ""
+    owner, repo = slug.split("/", 1)
+    return f"https://{owner}.github.io/{repo}"
+
+
+def build_surfer_url(vcd_url: str) -> str:
+    return f"{SURFER_WEB_APP_URL}?load_url={urllib.parse.quote(vcd_url, safe='')}"
+
+
+def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> None:
+    render_href = rel_href(Path(row["_render_path"]), run_dir) if row.get("_render_path") else ""
+    gds_href = rel_href(Path(row["_gds_path"]), run_dir) if row.get("_gds_path") else ""
+    metrics_href = rel_href(Path(row["_base_dir"]) / "metrics.csv", run_dir)
+    details = [
+        ("Variant", row.get("_variant", "")),
+        ("Stage", row.get("_stage_label", "")),
+        ("Requested clock", f"{row.get('_clock_requested','')} ns"),
+        ("Reported clock", f"{row.get('clock_ns','')} ns"),
+        ("Setup WNS", row.get("setup_wns_ns", "")),
+        ("Setup TNS", row.get("setup_tns_ns", "")),
+        ("Core area", row.get("core_area_um2", "")),
+        ("Total power", row.get("power_total_W", "")),
+        ("DRC", row.get("drc_errors", "")),
+        ("LVS", row.get("lvs_errors", "")),
+        ("Antenna", row.get("antenna_violations", "")),
+    ]
+    actions = [f'<a class="btn" href="../index.html">Back to explorer</a>', f'<a class="btn" href="{metrics_href}">Open metrics.csv</a>']
+    if gds_href:
+        actions.append(f'<a class="btn" href="{gds_href}">Download GDS</a>')
+        actions.append(f'<a class="btn" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener">Open GDS viewer</a>')
+    preview = f'<img src="{render_href}" alt="layout preview">' if render_href else '<div class="empty">No rendered layout preview found for this run.</div>'
+    table_rows = "".join(f"<tr><th>{html.escape(k)}</th><td>{html.escape(v)}</td></tr>" for k, v in details)
+    content = f"""<!doctype html>
+<html lang=\"en\">
+<head>
+  <meta charset=\"utf-8\">
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+  <title>{html.escape(row.get('_variant',''))} / {html.escape(row.get('_run_dir',''))}</title>
+  <link rel=\"stylesheet\" href=\"../assets/explorer.css\">
+</head>
+<body>
+  <main class=\"page\">
+    <section class=\"hero\">
+      <div>
+        <p class=\"eyebrow\">Per-run details</p>
+        <h1>{html.escape(row.get('_variant',''))} / {html.escape(row.get('_run_dir',''))}</h1>
+        <p class=\"muted\">{badge_html(row.get('status',''))} &nbsp; Remarks: {html.escape(row.get('selection_reason',''))}</p>
+      </div>
+      <div class=\"actions\">{''.join(actions)}</div>
+    </section>
+    <section class=\"card\">
+      <h2>Metrics by category</h2>
+      <table class=\"kv\">{table_rows}</table>
+    </section>
+    <section class=\"card\">
+      <h2>Layout preview</h2>
+      {preview}
+    </section>
+  </main>
+</body>
+</html>"""
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "index.html").write_text(content, encoding="utf-8")
+
+
 def build_site(
     site_root: Path,
     rows: List[Dict[str, str]],
+    precheck: Dict[str, Any],
     explorer_settings: Optional[Dict[str, str]] = None,
     *,
     repo_slug: str = "",
@@ -723,969 +562,252 @@ def build_site(
     site_subdir: str = "",
 ) -> None:
     site_root.mkdir(parents=True, exist_ok=True)
-    ordered = sorted(rows, key=best_sort_key)
     explorer_settings = explorer_settings or {}
-
     normalized_site_subdir = normalize_site_subdir(site_subdir)
     snapshot_root = site_root / normalized_site_subdir if normalized_site_subdir else site_root
     snapshot_root.mkdir(parents=True, exist_ok=True)
+    if normalized_site_subdir:
+        write_redirect_page(site_root / "index.html", f"{normalized_site_subdir}/index.html", "ASIC Flow Run Explorer", "Static explorer snapshot")
+    (site_root / ".nojekyll").write_text("\n", encoding="utf-8")
+
+    assets_dir = snapshot_root / "assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    css = """
+:root{color-scheme:light dark;--bg:#f4ecdf;--bg-2:#efe4d3;--panel:rgba(255,250,243,.90);--panel-2:rgba(255,255,255,.95);--border:rgba(116,92,62,.20);--text:#2b2218;--muted:#6a5741;--accent:#8b5e3c;--pass:#1f7a45;--warn:#a86e10;--fail:#a12b2b;--skip:#6f7680;--shadow:0 18px 45px rgba(110,84,53,.10)}
+*{box-sizing:border-box} body{margin:0;font-family:Inter,Segoe UI,Arial,sans-serif;background:linear-gradient(180deg,var(--bg),var(--bg-2));color:var(--text)} a{color:var(--accent);text-decoration:none} img{max-width:100%;border-radius:14px;border:1px solid var(--border)} .page{max-width:1280px;margin:0 auto;padding:24px}.hero,.card{background:var(--panel);border:1px solid var(--border);border-radius:22px;box-shadow:var(--shadow)} .hero{padding:26px 28px;display:grid;gap:16px} .eyebrow{margin:0 0 8px 0;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.08em;font-size:.78rem} h1,h2,h3{margin:0 0 12px 0}.muted{color:var(--muted)} .actions{display:flex;flex-wrap:wrap;gap:10px}.btn{display:inline-flex;align-items:center;justify-content:center;padding:10px 14px;border-radius:12px;border:1px solid var(--border);background:var(--panel-2);font-weight:700}.grid{display:grid;gap:16px}.card{padding:20px}.status-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}.pill{padding:12px 14px;border-radius:16px;background:var(--panel-2);border:1px solid var(--border)} .pill .k{display:block;color:var(--muted);font-size:.8rem;margin-bottom:4px}.badge{display:inline-flex;padding:6px 10px;border-radius:999px;color:#fff;font-weight:800;font-size:.8rem;letter-spacing:.03em}.badge.pass{background:var(--pass)}.badge.warn{background:var(--warn)}.badge.fail{background:var(--fail)}.badge.skip{background:var(--skip)} .iframe-wrap{aspect-ratio:16/9;border:1px solid var(--border);border-radius:16px;overflow:hidden;background:#fff}.iframe-wrap iframe{width:100%;height:100%;border:0} .empty{padding:24px;border:1px dashed var(--border);border-radius:16px;color:var(--muted);background:rgba(255,255,255,.55)} .table-wrap{overflow:auto}.table{width:100%;border-collapse:collapse}.table th,.table td{padding:12px 10px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}.table th{font-size:.9rem;color:var(--muted);position:sticky;top:0;background:rgba(255,248,238,.98)} .filters{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px}.filters input,.filters select{padding:10px 12px;border-radius:12px;border:1px solid var(--border);background:var(--panel-2);min-width:180px}.kv{width:100%;border-collapse:collapse}.kv th,.kv td{padding:10px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}.kv th{width:220px;color:var(--muted)} .best{outline:2px solid rgba(139,94,60,.28)} @media (min-width:960px){.hero{grid-template-columns:1.6fr .9fr;align-items:center}} 
+"""
+    (assets_dir / "explorer.css").write_text(css, encoding="utf-8")
+
+    ordered = sorted(rows, key=best_sort_key)
+    best = ordered[0] if ordered else {}
     runs_root = snapshot_root / "runs"
     runs_root.mkdir(parents=True, exist_ok=True)
 
-    run_id_label = str(run_id or "").strip()
-    repo_slug_label = str(repo_slug or "").strip()
-    snapshot_label = run_id_label if run_id_label else "current"
-    snapshot_prefix = f"/{normalized_site_subdir}" if normalized_site_subdir else "/"
-    snapshot_description = (
-        f"Static explorer snapshot for GitHub run {run_id_label}." if run_id_label else "Static explorer snapshot."
-    )
+    for row in ordered:
+        base_dir = Path(row["_base_dir"])
+        row_dir_name = sanitize_site_component(f"{row.get('_variant','variant')}-{row.get('_run_dir','run')}")
+        row_site_dir = runs_root / row_dir_name
+        copy_tree_if_exists(base_dir, row_site_dir / "artifact")
+        if row.get("_render_path"):
+            row["_render_path"] = str((row_site_dir / "artifact" / Path(row["_render_path"]).name))
+        if row.get("_gds_path"):
+            row["_gds_path"] = str((row_site_dir / "artifact" / "final" / "gds" / Path(row["_gds_path"]).name))
+        row["_row_href"] = rel_href(row_site_dir / "index.html", snapshot_root)
+        write_run_page(row_site_dir, row, "/")
 
-    if normalized_site_subdir:
-        write_redirect_page(
-            site_root / "index.html",
-            f"{normalized_site_subdir}/index.html",
-            "ASIC Flow Run Explorer",
-            snapshot_description,
-        )
-    (site_root / ".nojekyll").write_text("\n", encoding="utf-8")
+    if precheck.get("rtl_root"):
+        copy_tree_if_exists(Path(precheck["rtl_root"]), snapshot_root / "precheck" / "rtl")
+    if precheck.get("yosys_root"):
+        copy_tree_if_exists(Path(precheck["yosys_root"]), snapshot_root / "precheck" / "yosys")
 
-    css = """
-:root{
-  color-scheme:light dark;
-  --bg:#f4ecdf;
-  --bg-grad-1:#f8f1e7;
-  --bg-grad-2:#efe4d3;
-  --panel:rgba(255,250,243,.82);
-  --panel-strong:rgba(255,248,238,.94);
-  --panel-soft:rgba(255,255,255,.46);
-  --border:rgba(116,92,62,.16);
-  --border-strong:rgba(116,92,62,.22);
-  --text:#2f2418;
-  --muted:#716250;
-  --accent:#8b5e3c;
-  --accent-2:#b6845e;
-  --shadow:0 18px 45px rgba(110,84,53,.12);
-  --pass-bg:rgba(73,143,96,.14);
-  --pass-fg:#285a38;
-  --timing-bg:rgba(190,143,45,.16);
-  --timing-fg:#7d5b13;
-  --signoff-bg:rgba(180,83,72,.14);
-  --signoff-fg:#7b2f28;
-  --mixed-bg:rgba(135,96,166,.14);
-  --mixed-fg:#5b3f77;
-  --flow-bg:rgba(120,115,108,.14);
-  --flow-fg:#504a44;
-  --radius-xl:28px;
-  --radius-lg:20px;
-  --radius-md:14px
-}
-body{
-  margin:0;
-  background:
-    radial-gradient(circle at top left,var(--bg-grad-1)0%,transparent 36%),
-    radial-gradient(circle at top right,var(--bg-grad-2)0%,transparent 28%),
-    linear-gradient(180deg,var(--bg-grad-1)0%,var(--bg)100%);
-  color:var(--text);
-  font:15px/1.6 Inter,Segoe UI,Roboto,Helvetica,Arial,sans-serif
-}
-a{color:var(--accent);text-decoration:none}
-.wrap{max-width:1520px;margin:0 auto;padding:28px 20px 40px}
-.hero{
-  background:var(--panel-strong);
-  border:1px solid var(--border-strong);
-  border-radius:var(--radius-xl);
-  padding:30px;
-  box-shadow:var(--shadow);
-  margin-bottom:22px
-}
-.hero-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
-.hero-copy{max-width:980px}
-.hero-copy p{margin:0}
-.settings-list{
-  margin:12px 0 0;
-  padding:0;
-  list-style:none;
-  display:grid;
-  gap:6px;
-  color:var(--muted);
-  font-size:14px
-}
-.settings-list strong{color:var(--text)}
-.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:18px}
-.card{
-  background:var(--panel);
-  border:1px solid var(--border);
-  border-radius:var(--radius-lg);
-  padding:22px;
-  box-shadow:var(--shadow)
-}
-.span-12{grid-column:span 12}
-.span-7{grid-column:span 7}
-.span-5{grid-column:span 5}
-.span-4{grid-column:span 4}
-.span-3{grid-column:span 3}
-.kpi-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
-.stat{
-  background:var(--panel-soft);
-  border:1px solid var(--border);
-  border-radius:var(--radius-md);
-  padding:16px
-}
-.stat .label{color:var(--muted);font-size:12px;text-transform:uppercase}
-.stat .value{font-size:28px;font-weight:700}
-.metrics-strip{display:grid;grid-template-columns:1fr;gap:14px}
-.metric-group{
-  background:var(--panel);
-  border:1px solid var(--border);
-  border-radius:var(--radius-lg);
-  padding:0;
-  overflow:hidden
-}
-.metric-group h3{margin:0;font-size:15px}
-.table-card{padding:0;overflow:hidden}
-.table-head{
-  display:flex;
-  justify-content:space-between;
-  align-items:center;
-  padding:18px 20px;
-  border-bottom:1px solid var(--border)
-}
-.table-wrap{overflow:auto}
-.kv-wrap{overflow:hidden}
+    pages_base = pages_base_url(repo_slug)
+    published_vcd = ""
+    surfer_url = ""
+    local_vcd_href = ""
+    compile_log_href = ""
+    run_log_href = ""
+    yosys_log_href = ""
+    yosys_stat_href = ""
+    yosys_netlist_href = ""
+    if precheck.get("vcd_present"):
+        local_vcd_href = "precheck/rtl/" + urllib.parse.quote(Path(precheck.get("vcd_name", "rtl_precheck.vcd")).name)
+        if pages_base and run_id:
+            published_vcd = f"{pages_base}/runs/{urllib.parse.quote(str(run_id))}/{local_vcd_href}"
+            surfer_url = build_surfer_url(published_vcd)
+    if precheck.get("compile_log"):
+        compile_log_href = "precheck/rtl/compile.log"
+    if precheck.get("run_log"):
+        run_log_href = "precheck/rtl/run.log"
+    if precheck.get("yosys_log"):
+        yosys_log_href = "precheck/yosys/yosys.log"
+    if precheck.get("yosys_stat_txt"):
+        yosys_stat_href = "precheck/yosys/stat.txt"
+    if precheck.get("yosys_netlist") and precheck.get("top_module"):
+        yosys_netlist_href = f"precheck/yosys/{urllib.parse.quote(precheck['top_module'])}_synth.v"
 
-.wide-table{
-  width:100%;
-  border-collapse:collapse;
-  min-width:1180px
-}
-.wide-table th,
-.wide-table td{
-  padding:14px 16px;
-  border-bottom:1px solid var(--border)
-}
-.wide-table th{
-  background:rgba(255,248,240,.92);
-  text-align:left;
-  font-size:13px;
-  white-space:nowrap
-}
+    stage_options = sorted({row.get("_stage_label", "") for row in ordered if row.get("_stage_label")})
+    stage_options_html = "".join(f'<option value="{html.escape(x)}">{html.escape(x)}</option>' for x in stage_options)
 
-.kv-table{
-  width:100%;
-  border-collapse:collapse;
-  table-layout:fixed;
-  min-width:0
-}
-.kv-table col.kv-key{width:38%}
-.kv-table col.kv-value{width:62%}
-.kv-table th,
-.kv-table td{
-  padding:12px 16px;
-  border-bottom:1px solid var(--border);
-  vertical-align:top
-}
-.kv-table th{
-  background:rgba(255,248,240,.92);
-  text-align:left;
-  font-size:13px
-}
-.kv-table td:first-child,
-.kv-table th:first-child{
-  white-space:nowrap
-}
-.kv-table td:last-child,
-.kv-table th:last-child{
-  word-break:break-word
-}
+    settings_rows = "".join(
+        f"<tr><th>{html.escape(k.replace('_',' ').title())}</th><td>{html.escape(str(v or ''))}</td></tr>"
+        for k, v in explorer_settings.items()
+    ) or '<tr><th>Settings</th><td>Workflow summary settings were not provided for this snapshot.</td></tr>'
 
-.table-tools{
-  display:flex;
-  gap:12px;
-  flex-wrap:wrap;
-  align-items:end;
-  padding:16px 20px 0
-}
-.table-tools label{
-  display:grid;
-  gap:6px;
-  color:var(--muted);
-  font-size:12px;
-  font-weight:700;
-  text-transform:uppercase
-}
-.table-tools select,
-.table-tools input[type="search"]{
-  min-width:180px;
-  padding:10px 12px;
-  border-radius:10px;
-  border:1px solid var(--border-strong);
-  background:var(--panel-soft);
-  color:var(--text);
-  font:500 13px/1.2 Inter,Segoe UI,Roboto,Helvetica,Arial,sans-serif
-}
-.table-tools .inline-check{
-  display:flex;
-  align-items:center;
-  gap:8px;
-  font-size:13px;
-  font-weight:600;
-  text-transform:none;
-  color:var(--text);
-  padding-bottom:2px
-}
-.table-tools .summary{
-  margin-left:auto;
-  font-size:13px;
-  color:var(--muted);
-  padding-bottom:4px
-}
-.sort-btn{
-  all:unset;
-  cursor:pointer;
-  font-weight:700;
-  color:var(--text);
-  display:inline-flex;
-  align-items:center;
-  gap:6px
-}
-.sort-btn:hover{
-  color:var(--accent)
-}
-.sort-btn.active{
-  color:var(--accent)
-}
-.sort-indicator{
-  font-size:11px;
-  color:var(--muted)
-}
-
-.badge{
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  min-width:112px;
-  padding:6px 10px;
-  border-radius:999px;
-  font-size:12px;
-  font-weight:700
-}
-.badge.pass{background:var(--pass-bg);color:var(--pass-fg)}
-.badge.timing{background:var(--timing-bg);color:var(--timing-fg)}
-.badge.signoff{background:var(--signoff-bg);color:var(--signoff-fg)}
-.badge.mixed{background:var(--mixed-bg);color:var(--mixed-fg)}
-.badge.flow{background:var(--flow-bg);color:var(--flow-fg)}
-.btn{
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  padding:8px 12px;
-  border-radius:10px;
-  border:1px solid rgba(139,94,60,.20);
-  background:rgba(139,94,60,.08);
-  color:var(--text);
-  font-weight:600;
-  font-size:13px
-}
-.btn.secondary{
-  border-color:var(--border-strong);
-  background:rgba(255,255,255,.08)
-}
-.actions{display:flex;gap:8px;flex-wrap:wrap}
-.tag{
-  display:inline-flex;
-  align-items:center;
-  padding:4px 10px;
-  border-radius:999px;
-  font-size:12px;
-  font-weight:700;
-  background:rgba(139,94,60,.12);
-  color:var(--accent)
-}
-
-.theme-control{position:relative;z-index:40}
-.theme-launch{
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  min-width:148px;
-  padding:10px 14px;
-  border-radius:12px;
-  border:1px solid var(--border-strong);
-  background:var(--panel-soft);
-  color:var(--text);
-  font:600 13px/1.2 Inter,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
-  cursor:pointer;
-  box-shadow:none
-}
-.theme-widget{
-  position:fixed;
-  top:72px;
-  right:24px;
-  width:320px;
-  max-width:min(320px,calc(100vw - 24px));
-  z-index:99999;
-  pointer-events:auto
-}
-.theme-widget[hidden]{display:none !important}
-.theme-widget-body{
-  padding:16px;
-  border-radius:16px;
-  border:1px solid var(--border-strong);
-  background:var(--panel-strong);
-  box-shadow:var(--shadow)
-}
-.theme-widget-body h3{margin:0 0 12px;font-size:16px}
-.theme-row{display:grid;gap:6px;margin-bottom:12px}
-.theme-row label{
-  font-size:12px;
-  font-weight:600;
-  color:var(--muted);
-  text-transform:uppercase
-}
-.theme-row select,
-.theme-row input,
-.theme-btn-row button{
-  font:500 13px/1.2 Inter,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
-  color:var(--text)
-}
-.theme-row select{
-  padding:10px 12px;
-  border-radius:10px;
-  border:1px solid var(--border-strong);
-  background:var(--panel-soft)
-}
-.theme-row input[type='color']{
-  width:100%;
-  height:42px;
-  padding:4px;
-  border-radius:10px;
-  border:1px solid var(--border-strong);
-  background:var(--panel-soft)
-}
-.theme-inline{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.theme-btn-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.theme-btn-row button{
-  padding:10px 12px;
-  border-radius:10px;
-  border:1px solid var(--border-strong);
-  background:var(--panel-soft);
-  cursor:pointer
-}
-
-@media(max-width:1080px){
-  .span-7,.span-5,.span-4,.span-3{grid-column:span 12}
-  .kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .metrics-strip{grid-template-columns:1fr}
-  .table-tools .summary{margin-left:0;width:100%}
-}
-@media(max-width:720px){
-  .kpi-grid{grid-template-columns:1fr}
-  .kv-table col.kv-key{width:42%}
-  .kv-table col.kv-value{width:58%}
-}
+    precheck_strip = f"""
+<div class=\"status-strip\">
+  <div class=\"pill\"><span class=\"k\">Icarus</span>{badge_html(precheck.get('icarus', {}).get('status', 'MISSING'))}</div>
+  <div class=\"pill\"><span class=\"k\">Yosys</span>{badge_html(precheck.get('yosys', {}).get('status', 'MISSING'))}</div>
+  <div class=\"pill\"><span class=\"k\">Top module</span>{html.escape(str(precheck.get('top_module','')))}</div>
+  <div class=\"pill\"><span class=\"k\">TB top</span>{html.escape(str(precheck.get('testbench_top','') or '—'))}</div>
+  <div class=\"pill\"><span class=\"k\">VCD present</span>{'Yes' if precheck.get('vcd_present') else 'No'}</div>
+  <div class=\"pill\"><span class=\"k\">ASIC gating</span>{'Proceed' if precheck.get('gate_ok') else 'Stopped before ASIC'}</div>
+</div>
 """
 
-    def setting_line(label: str, value: str) -> str:
-        return f"<li><strong>{html.escape(label)}:</strong> {html.escape(value)}</li>"
-
-    settings_html = "".join(
-        [
-            setting_line(
-                "Synthesis strategy",
-                setting_value(explorer_settings, "synth_strategy", "Default"),
-            ),
-            setting_line(
-                "Antenna repair",
-                setting_value(explorer_settings, "antenna_repair", "—"),
-            ),
-            setting_line(
-                "Heuristic diode insertion",
-                setting_value(explorer_settings, "heuristic_diode_insertion", "—"),
-            ),
-            setting_line(
-                "Post-GRT design repair",
-                setting_value(explorer_settings, "post_grt_design_repair", "—"),
-            ),
-            setting_line(
-                "Post-GRT resizer timing",
-                setting_value(explorer_settings, "post_grt_resizer_timing", "—"),
-            ),
-        ]
+    waveform_actions = []
+    if surfer_url:
+        waveform_actions.append(f'<a class="btn" href="{html.escape(surfer_url)}" target="_blank" rel="noopener">Open VCD waveform viewer on Surfer</a>')
+    if local_vcd_href:
+        waveform_actions.append(f'<a class="btn" href="{local_vcd_href}">Download VCD</a>')
+    if compile_log_href:
+        waveform_actions.append(f'<a class="btn" href="{compile_log_href}">Open compile log</a>')
+    if run_log_href:
+        waveform_actions.append(f'<a class="btn" href="{run_log_href}">Open run log</a>')
+    if yosys_log_href:
+        waveform_actions.append(f'<a class="btn" href="{yosys_log_href}">Open Yosys log</a>')
+    if yosys_stat_href:
+        waveform_actions.append(f'<a class="btn" href="{yosys_stat_href}">Open stat.txt</a>')
+    if yosys_netlist_href:
+        waveform_actions.append(f'<a class="btn" href="{yosys_netlist_href}">Open synthesized netlist</a>')
+    waveform_body = (
+        f'<div class="iframe-wrap"><iframe src="{html.escape(surfer_url)}" title="Surfer waveform viewer" loading="lazy"></iframe></div>'
+        if surfer_url
+        else '<div class="empty">The VCD was not published for this snapshot, so the embedded Surfer view is unavailable.</div>'
     )
 
-    def metric_group_html(title: str, items: List[Tuple[str, Any]]) -> str:
-        return (
-            f'<section class="metric-group table-card">'
-            f'<div class="table-head"><h3>{html.escape(title)}</h3></div>'
-            f'<div class="kv-wrap"><table class="kv-table">'
-            f'<colgroup><col class="kv-key"><col class="kv-value"></colgroup>'
-            f"<tr><th>Field</th><th>Value</th></tr>{kv_rows(items)}</table></div>"
-            f"</section>"
-        )
+    best_block = (
+        f"<div class=\"card best\"><h2>Chosen best run</h2><p><strong>Run:</strong> {html.escape(str(best.get('_variant','')))} / {html.escape(str(best.get('_run_dir','')))}</p><p><strong>Clock:</strong> {html.escape(str(best.get('clock_ns','')))} ns</p><p><strong>Status:</strong> {badge_html(best.get('status',''))}</p><p><strong>Remarks:</strong> {html.escape(str(best.get('selection_reason','')))}</p></div>"
+        if best
+        else '<div class="card"><h2>Chosen best run</h2><p class="muted">No ASIC attempt metrics were collected for this snapshot.</p></div>'
+    )
 
-    for row in ordered:
-        slug = f"{row.get('_variant', 'variant').replace('/', '_')}__{row.get('_run_dir', 'run')}"
-        row["_site_slug"] = slug
-        run_dir = runs_root / slug
-        run_dir.mkdir(parents=True, exist_ok=True)
-        base_dir = Path(row["_base_dir"])
-        gds_src = Path(row["_gds_path"]) if row.get("_gds_path") else None
-        rnd_src = Path(row["_render_path"]) if row.get("_render_path") else None
-        gds_name = ""
-        rnd_name = ""
-
-        if gds_src and gds_src.exists():
-            gds_name = f"{row.get('_run_dir', 'layout')}.gds"
-            shutil.copy2(gds_src, run_dir / gds_name)
-            row["_site_gds"] = gds_name
-
-        if rnd_src and rnd_src.exists():
-            rnd_name = rnd_src.name
-            shutil.copy2(rnd_src, run_dir / rnd_name)
-            row["_site_render"] = rnd_name
-
-        for name in ("metrics.csv", "metrics_raw.json", "viewer.html", "failure_summary.md", "failure_summary.json"):
-            src = base_dir / name
-            if src.exists():
-                shutil.copy2(src, run_dir / name)
-
-        copy_tree_if_exists(base_dir / "renders", run_dir / "renders")
-        copy_tree_if_exists(base_dir / "final" / "gds", run_dir / "final" / "gds")
-
-        title = html.escape(f"{row.get('_variant', '')} — {row.get('_run_dir', '')}")
-
-        actions: List[str] = []
-        if gds_name:
-            actions.append(link_button(gds_name, "Download GDS"))
-            actions.append(external_button(TT_GDS_VIEWER_URL, "Open GDS Viewer", secondary=True))
-        else:
-            actions.append(external_button(TT_GDS_VIEWER_URL, "Open GDS Viewer", secondary=True))
-
-        for name in ("metrics.csv", "metrics_raw.json"):
-            if (run_dir / name).exists():
-                actions.append(link_button(name, f"Open {name}", secondary=True))
-
-        preview = ""
-        if rnd_name:
-            preview = (
-                '<section class="card span-12">'
-                "<h2>Preview render</h2>"
-                f'<img style="width:100%;max-height:520px;object-fit:contain;'
-                f'border-radius:14px;border:1px solid var(--border)" '
-                f'src="{html.escape(rnd_name)}" alt="Layout render preview">'
-                "</section>"
-            )
-
-        consumed_raw: Set[str] = set()
-
-        timing_items: List[Tuple[str, Any]] = [
-            ("Clock requested", f"{row.get('_clock_requested', '')} ns"),
-            ("Clock reported", f"{row.get('clock_ns_reported', '')} ns"),
-            ("Setup WNS", f"{row.get('setup_wns_ns', '')} ns"),
-            ("Setup TNS", f"{row.get('setup_tns_ns', '')} ns"),
-            ("Hold WNS", f"{row.get('hold_wns_ns', '')} ns"),
-            ("Hold TNS", f"{row.get('hold_tns_ns', '')} ns"),
-        ]
-        timing_items.extend(pick_raw_metric_items(row, ("clock__", "timing__"), consumed_raw, limit=10))
-
-        physical_items: List[Tuple[str, Any]] = [
-            ("Core area", row.get("core_area_um2", "")),
-            ("Die area", row.get("die_area_um2", "")),
-            ("Instances", row.get("instance_count", "")),
-            ("Utilization", row.get("utilization_pct", "")),
-            ("Wire length", row.get("wire_length_um", "")),
-            ("Vias", row.get("vias_count", "")),
-        ]
-        physical_items.extend(
-            pick_raw_metric_items(row, ("design__", "floorplan__", "place__", "route__", "cts__"), consumed_raw, limit=12)
-        )
-
-        power_items: List[Tuple[str, Any]] = [
-            ("Total", row.get("power_total_W", "")),
-            ("Internal", row.get("power_internal_W", "")),
-            ("Switching", row.get("power_switching_W", "")),
-            ("Leakage", row.get("power_leakage_W", "")),
-            ("Source", row.get("power_source", "")),
-            ("FAIR STA rpt", row.get("power_fair_sta_rpt", "")),
-        ]
-        power_items.extend(pick_raw_metric_items(row, ("power__",), consumed_raw, limit=10))
-
-        signoff_items: List[Tuple[str, Any]] = [
-            ("DRC", row.get("drc_errors", "")),
-            ("KLayout DRC", row.get("drc_errors_klayout", "")),
-            ("Magic DRC", row.get("drc_errors_magic", "")),
-            ("LVS", row.get("lvs_errors", "")),
-            ("Antenna", row.get("antenna_violations", "")),
-            ("Worst IR drop", row.get("ir_drop_worst_V", "")),
-        ]
-        signoff_items.extend(
-            pick_raw_metric_items(
-                row,
-                ("drc__", "klayout__", "magic__", "lvs__", "antenna__", "ir__"),
-                consumed_raw,
-                limit=12,
-            )
-        )
-
-        additional_raw_items = pick_raw_metric_items(row, tuple(), consumed_raw, limit=24, catch_all=True)
-
-        timing_group = metric_group_html("Timing", timing_items)
-        physical_group = metric_group_html("Physical", physical_items)
-        power_group = metric_group_html("Power (W)", power_items)
-        signoff_group = metric_group_html("Signoff", signoff_items)
-        raw_group = (
-            metric_group_html("Additional raw metrics", additional_raw_items)
-            if additional_raw_items
-            else ""
-        )
-
-        failure_section = ""
-        failure_summary = row.get("_failure_summary", {})
-        if row.get("status") == "FLOW_FAIL" and isinstance(failure_summary, dict) and failure_summary:
-            checks = failure_summary.get("checks", {}) or {}
-            failure_rows: List[Tuple[str, Any]] = [
-                ("Primary reason", failure_summary.get("reason", row.get("_failure_reason", ""))),
-                ("Likely failing phase", failure_summary.get("likely_failure_phase", row.get("_failure_phase", ""))),
-                ("OpenLane return code", failure_summary.get("openlane_rc", row.get("_failure_openlane_rc", ""))),
-                ("Config generation return code", failure_summary.get("config_generation_rc", row.get("_failure_config_rc", ""))),
-                ("Config generated", checks.get("config_generated", "")),
-                ("OpenLane invoked", checks.get("openlane_invoked", "")),
-                ("Run directory found", checks.get("run_dir_found", "")),
-                ("metrics.csv present", checks.get("metrics_csv_present", "")),
-                ("metrics_raw.json present", checks.get("metrics_raw_present", "")),
-                ("Valid timing present", checks.get("timing_present", "")),
-                ("GDS present", checks.get("gds_present", "")),
-                ("Render present", checks.get("render_present", "")),
-                ("OpenLane run copied", checks.get("openlane_run_present", "")),
-                ("Viewer HTML present", checks.get("viewer_present", "")),
-            ]
-            failure_section = (
-                '<section class="card span-12">'
-                '<div class="metrics-strip">'
-                f'{metric_group_html("Failure diagnostic", failure_rows)}'
-                "</div>"
-                "</section>"
-            )
-
-        meta_rows = [
-            ("Variant", row.get("_variant")),
-            ("Snapshot run ID", run_id_label),
-            ("Repository", repo_slug_label),
-            ("Run folder", row.get("_run_dir")),
-            ("Artifact label", row.get("_artifact")),
-            ("Stage label", row.get("_stage_label")),
-            ("Attempt number", row.get("_attempt_number")),
-            ("GitHub run ID", row.get("_github_run_id")),
-            ("Synthesis override", row.get("_synth_strategy_override")),
-            ("OpenLane run copied", row.get("_openlane_run_present")),
-            ("metrics_raw.json present", row.get("_metrics_raw_present")),
-            ("Raw metric count", row.get("_raw_metric_count")),
-            ("Failure summary present", row.get("_failure_summary_present")),
-            ("Likely failure phase", row.get("_failure_phase")),
-            ("Status", row.get("status")),
-            ("Remarks", row.get("selection_reason")),
-        ]
-
-        theme_widget = build_theme_widget("runAppearanceButton", "runThemeWidget")
-        theme_script = build_theme_script(
-            "runAppearanceButton", "runThemeWidget", "asic-flow-theme"
-        )
-
-        run_html = f"""<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>{title}</title>
-  <style>{css}</style>
-</head>
-<body>
-  <div class="wrap">
-    <section class="hero">
-      <div class="hero-head">
-        <div class="hero-copy">
-          <h1>{title}</h1>
-          <p>Enriched per-run detail page with timing, physical, power, signoff, and download links.</p>
-          <p><strong>Snapshot:</strong> {html.escape(snapshot_label)} · <strong>Path:</strong> {html.escape(snapshot_prefix + '/index.html' if snapshot_prefix != '/' else '/index.html')}</p>
-        </div>
-        {theme_widget}
-      </div>
-    </section>
-
-    <div class="grid">
-      <section class="card span-5">
-        <h2>Run status</h2>
-        <p>{badge_html(row.get('status', ''))}</p>
-        <p><strong>Remarks:</strong> {html.escape(row.get('selection_reason', ''))}</p>
-        <p><a class="btn secondary" href="../../index.html">Back to ASIC Flow Run Explorer</a></p>
-      </section>
-
-      <section class="card span-7">
-        <h2>Download &amp; Tools</h2>
-        <div class="actions">{''.join(actions)}</div>
-      </section>
-
-      {failure_section}
-
-      <section class="card span-12">
-        <h2>Metrics by category</h2>
-        <div class="metrics-strip">
-          {timing_group}
-          {physical_group}
-          {power_group}
-          {signoff_group}
-          {raw_group}
-        </div>
-      </section>
-
-      {preview}
-
-      <section class="card span-12 table-card">
-        <div class="table-head"><h2>Metadata</h2></div>
-        <div class="kv-wrap">
-          <table class="kv-table">
-            <colgroup><col class="kv-key"><col class="kv-value"></colgroup>
-            <tr><th>Field</th><th>Value</th></tr>
-            {kv_rows(meta_rows)}
-          </table>
-        </div>
-      </section>
-    </div>
-  </div>
-  {theme_script}
-</body>
-</html>"""
-        (run_dir / "index.html").write_text(run_html, encoding="utf-8")
-
-    best = ordered[0] if ordered else {}
-    rows_html: List[str] = []
-    stage_values = sorted({str(row.get("_stage_label", "")).strip() for row in ordered if str(row.get("_stage_label", "")).strip()})
-
+    rows_html = []
     for idx, row in enumerate(ordered):
-        run_page = f"runs/{html.escape(row['_site_slug'])}/index.html"
-        gds_page = (
-            f"runs/{html.escape(row['_site_slug'])}/{html.escape(row.get('_site_gds', ''))}"
-            if row.get("_site_gds")
-            else ""
-        )
-        selected_marker = '<span class="tag">Selected</span>' if idx == 0 else ""
-        gds_html = link_button(gds_page, "GDS") if gds_page else "<span>No GDS</span>"
-
-        run_text = f"{row.get('_variant', '')} / {row.get('_run_dir', '')}"
-        selected_flag = "1" if idx == 0 else "0"
-
+        gds = '<a href="{}">GDS</a>'.format(rel_href(Path(row["_gds_path"]), snapshot_root)) if row.get("_gds_path") else '—'
+        viewer = f'<a href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener">Viewer</a>' if row.get("_gds_path") else '—'
+        classes = 'best' if idx == 0 else ''
         rows_html.append(
-            f'<tr '
-            f'data-selected="{selected_flag}" '
-            f'data-run="{html.escape(sortable_text_attr(run_text))}" '
-            f'data-clock="{html.escape(sortable_number_attr(row.get("clock_ns")))}" '
-            f'data-setup_wns="{html.escape(sortable_number_attr(row.get("setup_wns_ns")))}" '
-            f'data-setup_tns="{html.escape(sortable_number_attr(row.get("setup_tns_ns")))}" '
-            f'data-core_area="{html.escape(sortable_number_attr(row.get("core_area_um2")))}" '
-            f'data-power_total="{html.escape(sortable_number_attr(row.get("power_total_W")))}" '
-            f'data-drc="{html.escape(sortable_number_attr(row.get("drc_errors")))}" '
-            f'data-lvs="{html.escape(sortable_number_attr(row.get("lvs_errors")))}" '
-            f'data-antenna="{html.escape(sortable_number_attr(row.get("antenna_violations")))}" '
-            f'data-ir_drop="{html.escape(sortable_number_attr(row.get("ir_drop_worst_V")))}" '
-            f'data-status="{html.escape(sortable_text_attr(row.get("status")))}" '
-            f'data-stage="{html.escape(sortable_text_attr(row.get("_stage_label")))}" '
-            f'data-remarks="{html.escape(sortable_text_attr(row.get("selection_reason")))}">'
-            f"<td>{selected_marker}</td>"
-            f'<td><a href="{run_page}"><strong>{html.escape(str(row.get("_variant", "")))} / '
-            f'{html.escape(str(row.get("_run_dir", "")))}</strong></a></td>'
-            f"<td>{value_or_dash(row.get('clock_ns'))}</td>"
-            f"<td>{value_or_dash(row.get('setup_wns_ns'))}</td>"
-            f"<td>{value_or_dash(row.get('setup_tns_ns'))}</td>"
-            f"<td>{value_or_dash(row.get('core_area_um2'))}</td>"
-            f"<td>{value_or_dash(row.get('power_total_W'))}</td>"
-            f"<td>{value_or_dash(row.get('drc_errors'))}</td>"
-            f"<td>{value_or_dash(row.get('lvs_errors'))}</td>"
-            f"<td>{value_or_dash(row.get('antenna_violations'))}</td>"
-            f"<td>{value_or_dash(row.get('ir_drop_worst_V'))}</td>"
-            f"<td>{badge_html(row.get('status', ''))}</td>"
-            f"<td>{html.escape(str(row.get('selection_reason', '')))}</td>"
-            f"<td>{gds_html}</td>"
-            f"<td>{external_button(TT_GDS_VIEWER_URL, 'Viewer', True)}</td>"
-            f"</tr>"
+            f"<tr class=\"{classes}\" data-status=\"{html.escape(row.get('status',''))}\" data-stage=\"{html.escape(row.get('_stage_label',''))}\">"
+            f"<td>{'Selected' if idx == 0 else ''}</td>"
+            f"<td><a href=\"{html.escape(row.get('_row_href',''))}\">{html.escape(row.get('_variant',''))} / {html.escape(row.get('_run_dir',''))}</a></td>"
+            f"<td>{html.escape(row.get('clock_ns',''))}</td>"
+            f"<td>{html.escape(row.get('setup_wns_ns',''))}</td>"
+            f"<td>{html.escape(row.get('setup_tns_ns',''))}</td>"
+            f"<td>{html.escape(row.get('core_area_um2',''))}</td>"
+            f"<td>{html.escape(row.get('power_total_W',''))}</td>"
+            f"<td>{html.escape(row.get('drc_errors',''))}</td>"
+            f"<td>{html.escape(row.get('lvs_errors',''))}</td>"
+            f"<td>{html.escape(row.get('antenna_violations',''))}</td>"
+            f"<td>{html.escape(row.get('ir_drop_worst_V',''))}</td>"
+            f"<td>{badge_html(row.get('status',''))}</td>"
+            f"<td>{html.escape(row.get('selection_reason',''))}</td>"
+            f"<td>{gds}</td>"
+            f"<td>{viewer}</td>"
+            "</tr>"
         )
-
-    stage_options_html = "".join(
-        f'<option value="{html.escape(stage)}">{html.escape(stage)}</option>'
-        for stage in stage_values
-    )
-
-    theme_widget = build_theme_widget("indexAppearanceButton", "indexThemeWidget")
-    theme_script = build_theme_script(
-        "indexAppearanceButton", "indexThemeWidget", "asic-flow-theme"
-    )
 
     sort_filter_script = """
 <script>
-(function () {
-  const table = document.querySelector(".wide-table");
-  if (!table) return;
-
-  const tbody = table.querySelector("tbody");
-  const headerButtons = Array.from(document.querySelectorAll(".sort-btn"));
-  const statusFilter = document.getElementById("statusFilter");
-  const stageFilter = document.getElementById("stageFilter");
-  const searchFilter = document.getElementById("searchFilter");
-  const pinSelected = document.getElementById("pinSelected");
-  const visibleSummary = document.getElementById("visibleRowsSummary");
-
-  const allRows = Array.from(tbody.querySelectorAll("tr"));
-  let currentKey = "";
-  let currentDir = "asc";
-
-  const statusRank = {
-    "PASS": 0,
-    "TIMING_FAIL": 1,
-    "SIGNOFF_FAIL": 2,
-    "SIGNOFF_AND_TIMING_FAIL": 3,
-    "FLOW_FAIL": 4
-  };
-
-  function getRowValue(row, key, type) {
-    const raw = (row.dataset[key] || "").trim();
-    if (type === "number") {
-      if (raw === "") return Number.POSITIVE_INFINITY;
-      const parsed = Number(raw);
-      return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+(() => {
+  const q = document.getElementById('searchBox');
+  const s = document.getElementById('statusFilter');
+  const g = document.getElementById('stageFilter');
+  const rows = Array.from(document.querySelectorAll('tbody tr'));
+  function apply(){
+    const needle = (q.value || '').toLowerCase();
+    const status = s.value;
+    const stage = g.value;
+    for(const row of rows){
+      const txt = row.innerText.toLowerCase();
+      const okText = !needle || txt.includes(needle);
+      const okStatus = !status || row.dataset.status === status;
+      const okStage = !stage || row.dataset.stage === stage;
+      row.style.display = (okText && okStatus && okStage) ? '' : 'none';
     }
-    if (type === "status") {
-      return Object.prototype.hasOwnProperty.call(statusRank, raw) ? statusRank[raw] : 999;
-    }
-    return raw.toLowerCase();
   }
-
-  function updateHeaderState() {
-    headerButtons.forEach((btn) => {
-      const indicator = btn.querySelector(".sort-indicator");
-      const isActive = btn.dataset.key === currentKey;
-      btn.classList.toggle("active", isActive);
-      btn.setAttribute("aria-sort", isActive ? (currentDir === "asc" ? "ascending" : "descending") : "none");
-      if (indicator) {
-        indicator.textContent = isActive ? (currentDir === "asc" ? "▲" : "▼") : "↕";
-      }
-    });
-  }
-
-  function applyFilters(rows) {
-    const wantedStatus = (statusFilter && statusFilter.value) ? statusFilter.value : "";
-    const wantedStage = (stageFilter && stageFilter.value) ? stageFilter.value : "";
-    const term = (searchFilter && searchFilter.value) ? searchFilter.value.trim().toLowerCase() : "";
-
-    return rows.filter((row) => {
-      const statusOk = !wantedStatus || (row.dataset.status || "") === wantedStatus;
-      const stageOk = !wantedStage || (row.dataset.stage || "") === wantedStage;
-      const haystack = [
-        row.dataset.run || "",
-        row.dataset.status || "",
-        row.dataset.stage || "",
-        row.dataset.remarks || ""
-      ].join(" ").toLowerCase();
-      const searchOk = !term || haystack.includes(term);
-      return statusOk && stageOk && searchOk;
-    });
-  }
-
-  function render() {
-    let rows = applyFilters(allRows.slice());
-
-    if (currentKey) {
-      const activeBtn = headerButtons.find((btn) => btn.dataset.key === currentKey);
-      const type = activeBtn ? (activeBtn.dataset.type || "text") : "text";
-
-      rows.sort((a, b) => {
-        const av = getRowValue(a, currentKey, type);
-        const bv = getRowValue(b, currentKey, type);
-        if (av < bv) return currentDir === "asc" ? -1 : 1;
-        if (av > bv) return currentDir === "asc" ? 1 : -1;
-        return 0;
-      });
-    }
-
-    if (pinSelected && pinSelected.checked) {
-      rows.sort((a, b) => Number(b.dataset.selected || "0") - Number(a.dataset.selected || "0"));
-    }
-
-    tbody.innerHTML = "";
-    rows.forEach((row) => tbody.appendChild(row));
-
-    if (visibleSummary) {
-      visibleSummary.textContent = "Showing " + rows.length + " of " + allRows.length + " runs";
-    }
-
-    updateHeaderState();
-  }
-
-  headerButtons.forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const key = btn.dataset.key || "";
-      if (!key) return;
-      if (currentKey === key) {
-        currentDir = currentDir === "asc" ? "desc" : "asc";
-      } else {
-        currentKey = key;
-        currentDir = "asc";
-      }
-      render();
-    });
-  });
-
-  [statusFilter, stageFilter, searchFilter, pinSelected].forEach((el) => {
-    if (!el) return;
-    el.addEventListener("input", render);
-    el.addEventListener("change", render);
-  });
-
-  render();
+  [q,s,g].forEach(el => el && el.addEventListener('input', apply));
+  apply();
 })();
 </script>
 """
 
-    best_text = ""
-    if best:
-        best_text = (
-            '<section class="card span-7">'
-            "<h2>Chosen best run</h2>"
-            f"<p><strong>Run:</strong> {html.escape(str(best.get('_variant', '')))} / "
-            f"{html.escape(str(best.get('_run_dir', '')))}</p>"
-            f"<p><strong>Clock:</strong> {html.escape(str(best.get('clock_ns', '')))} ns</p>"
-            f"<p><strong>Status:</strong> {badge_html(best.get('status', ''))}</p>"
-            f"<p><strong>Remarks:</strong> {html.escape(str(best.get('selection_reason', '')))}</p>"
-            "</section>"
-        )
-
-    index_html = f"""<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>ASIC Flow Run Explorer</title>
-  <style>{css}</style>
-</head>
-<body>
-  <div class="wrap">
-    <section class="hero">
-      <div class="hero-head">
-        <div class="hero-copy">
-          <h1>ASIC Flow Run Explorer</h1>
-          <p>Published summary of all collected runs, richer per-run metrics, and direct access to downloadable layout data.</p>
-          <p><strong>Snapshot run ID:</strong> {html.escape(snapshot_label)} · <strong>Repository:</strong> {html.escape(repo_slug_label or '—')}</p>
-          <ul class="settings-list">{settings_html}</ul>
-        </div>
-        {theme_widget}
-      </div>
-    </section>
-
-    <div class="grid">
-      <section class="card span-5">
-        <h2>Selection order</h2>
-        <ol>
-          <li>Clean signoff plus non-negative setup timing wins.</li>
-          <li>If no full PASS exists, clean signoff wins over signoff violations.</li>
-          <li>Among comparable runs, lower requested clock period is preferred.</li>
-          <li>Setup WNS/TNS are used as tie-breakers.</li>
-        </ol>
-      </section>
-
-      {best_text}
-
-      <section class="card span-12">
-        <h2>Run overview</h2>
-        <div class="kpi-grid">
-          <div class="stat">
-            <div class="label">Total runs</div>
-            <div class="value">{len(ordered)}</div>
-          </div>
-          <div class="stat">
-            <div class="label">PASS runs</div>
-            <div class="value">{sum(1 for r in ordered if r.get("status") == "PASS")}</div>
-          </div>
-          <div class="stat">
-            <div class="label">Non-pass runs</div>
-            <div class="value">{sum(1 for r in ordered if r.get("status") != "PASS")}</div>
-          </div>
-          <div class="stat">
-            <div class="label">Best clock</div>
-            <div class="value">{html.escape(str(best.get("clock_ns", "")))}</div>
-          </div>
-        </div>
-      </section>
-    </div>
-
-    <section class="card table-card">
-      <div class="table-head"><h2>All runs</h2><span>Top row is the selected best run</span></div>
-      <div class="table-tools">
-        <label>Status
-          <select id="statusFilter">
-            <option value="">All</option>
-            <option value="PASS">PASS</option>
-            <option value="TIMING_FAIL">TIMING_FAIL</option>
-            <option value="SIGNOFF_FAIL">SIGNOFF_FAIL</option>
-            <option value="SIGNOFF_AND_TIMING_FAIL">SIGNOFF_AND_TIMING_FAIL</option>
-            <option value="FLOW_FAIL">FLOW_FAIL</option>
-          </select>
-        </label>
-
-        <label>Stage
-          <select id="stageFilter">
-            <option value="">All</option>
-            {stage_options_html}
-          </select>
-        </label>
-
-        <label>Search
-          <input id="searchFilter" type="search" placeholder="Run, remarks, status...">
-        </label>
-
-        <label class="inline-check">
-          <input type="checkbox" id="pinSelected" checked>
-          Keep selected run on top
-        </label>
-
-        <div class="summary" id="visibleRowsSummary"></div>
-      </div>
-      <div class="table-wrap">
-        <table class="wide-table">
-          <thead>
-            <tr>
-              <th><button class="sort-btn" data-key="selected" data-type="number" aria-sort="none">Selected <span class="sort-indicator">↕</span></button></th>
-              <th><button class="sort-btn" data-key="run" data-type="text" aria-sort="none">Run <span class="sort-indicator">↕</span></button></th>
-              <th><button class="sort-btn" data-key="clock" data-type="number" aria-sort="none">Clock (ns) <span class="sort-indicator">↕</span></button></th>
-              <th><button class="sort-btn" data-key="setup_wns" data-type="number" aria-sort="none">Setup WNS <span class="sort-indicator">↕</span></button></th>
-              <th><button class="sort-btn" data-key="setup_tns" data-type="number" aria-sort="none">Setup TNS <span class="sort-indicator">↕</span></button></th>
-              <th><button class="sort-btn" data-key="core_area" data-type="number" aria-sort="none">Core area <span class="sort-indicator">↕</span></button></th>
-              <th><button class="sort-btn" data-key="power_total" data-type="number" aria-sort="none">Total power <span class="sort-indicator">↕</span></button></th>
-              <th><button class="sort-btn" data-key="drc" data-type="number" aria-sort="none">DRC <span class="sort-indicator">↕</span></button></th>
-              <th><button class="sort-btn" data-key="lvs" data-type="number" aria-sort="none">LVS <span class="sort-indicator">↕</span></button></th>
-              <th><button class="sort-btn" data-key="antenna" data-type="number" aria-sort="none">Antenna <span class="sort-indicator">↕</span></button></th>
-              <th><button class="sort-btn" data-key="ir_drop" data-type="number" aria-sort="none">IR drop <span class="sort-indicator">↕</span></button></th>
-              <th><button class="sort-btn" data-key="status" data-type="status" aria-sort="none">Status <span class="sort-indicator">↕</span></button></th>
-              <th><button class="sort-btn" data-key="remarks" data-type="text" aria-sort="none">Remarks <span class="sort-indicator">↕</span></button></th>
-              <th>GDS</th>
-              <th>GDS Viewer</th>
-            </tr>
-          </thead>
-          <tbody>{''.join(rows_html)}</tbody>
-        </table>
-      </div>
-    </section>
-  </div>
-
-  {theme_script}
-  {sort_filter_script}
-</body>
-</html>"""
-    (snapshot_root / "index.html").write_text(index_html, encoding="utf-8")
-
     site_manifest = {
-        "repo_slug": repo_slug_label,
-        "run_id": run_id_label,
+        "repo_slug": repo_slug,
+        "run_id": run_id,
         "site_subdir": normalized_site_subdir,
         "entrypoint": f"{normalized_site_subdir + '/' if normalized_site_subdir else ''}index.html",
         "snapshot_root": str(snapshot_root.relative_to(site_root)) if snapshot_root != site_root else ".",
     }
     (site_root / "site_manifest.json").write_text(json.dumps(site_manifest, indent=2), encoding="utf-8")
+
+    title_run = f"GitHub run {run_id}" if str(run_id).strip() else "current snapshot"
+    best_text = (
+        f"<p><strong>Selected best run:</strong> {html.escape(str(best.get('_variant','')))} / {html.escape(str(best.get('_run_dir','')))}</p>"
+        if best else "<p class=\"muted\">No ASIC best run is available because no metrics.csv files were collected.</p>"
+    )
+
+    index_html = f"""<!doctype html>
+<html lang=\"en\">
+<head>
+  <meta charset=\"utf-8\">
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+  <title>ASIC Flow Run Explorer</title>
+  <link rel=\"stylesheet\" href=\"assets/explorer.css\">
+</head>
+<body>
+  <main class=\"page grid\">
+    <section class=\"hero\">
+      <div>
+        <p class=\"eyebrow\">Variant-driven Sky130 + OpenLane2 / LibreLane explorer</p>
+        <h1>ASIC Flow Run Explorer</h1>
+        <p class=\"muted\">Snapshot: {html.escape(title_run)}. This page now shows the front-end precheck sequence first: Icarus RTL simulation → VCD waveform viewer on Surfer → Yosys structural pre-check → existing ASIC comparison.</p>
+      </div>
+      <div class=\"actions\">{''.join(waveform_actions[:1]) if waveform_actions else ''}</div>
+    </section>
+
+    <section class=\"card\">
+      <h2>Precheck status</h2>
+      {precheck_strip}
+    </section>
+
+    <section class=\"card\">
+      <h2>Embedded waveform</h2>
+      <p class=\"muted\">The summary surface links the first stage directly to the VCD waveform on Surfer before the structural Yosys check and the ASIC matrix results.</p>
+      <div class=\"actions\">{''.join(waveform_actions)}</div>
+      {waveform_body}
+    </section>
+
+    {best_block}
+
+    <section class=\"card\">
+      <h2>Explorer settings</h2>
+      <table class=\"kv\">{settings_rows}</table>
+    </section>
+
+    <section class=\"card\">
+      <h2>Selection order</h2>
+      <ol>
+        <li>Clean signoff plus non-negative setup timing wins.</li>
+        <li>If no full PASS exists, clean signoff wins over signoff violations.</li>
+        <li>Among comparable runs, lower requested clock period is preferred.</li>
+        <li>Setup WNS/TNS are used as tie-breakers.</li>
+      </ol>
+      {best_text}
+    </section>
+
+    <section class=\"card\">
+      <h2>All runs</h2>
+      <div class=\"filters\">
+        <select id=\"statusFilter\"><option value=\"\">Status: All</option><option>PASS</option><option>TIMING_FAIL</option><option>SIGNOFF_FAIL</option><option>SIGNOFF_AND_TIMING_FAIL</option><option>FLOW_FAIL</option></select>
+        <select id=\"stageFilter\"><option value=\"\">Stage: All</option>{stage_options_html}</select>
+        <input id=\"searchBox\" placeholder=\"Search runs, remarks, metrics\">
+      </div>
+      <div class=\"table-wrap\">
+        <table class=\"table\">
+          <thead>
+            <tr>
+              <th>Selected</th><th>Run</th><th>Clock (ns)</th><th>Setup WNS</th><th>Setup TNS</th><th>Core area</th><th>Total power</th><th>DRC</th><th>LVS</th><th>Antenna</th><th>IR drop</th><th>Status</th><th>Remarks</th><th>GDS</th><th>GDS Viewer</th>
+            </tr>
+          </thead>
+          <tbody>{''.join(rows_html) if rows_html else '<tr><td colspan="15" class="muted">No ASIC run rows were collected for this snapshot.</td></tr>'}</tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  {sort_filter_script}
+</body>
+</html>"""
+    (snapshot_root / "index.html").write_text(index_html, encoding="utf-8")
 
 
 def main() -> None:
@@ -1707,17 +829,15 @@ def main() -> None:
     args = ap.parse_args()
 
     rows = collect_rows(args.artifacts_root)
+    precheck = collect_precheck(args.artifacts_root)
     write_summary_csv(args.summary_csv, rows)
-    write_summary_md(args.summary_md, rows)
+    write_summary_md(args.summary_md, rows, precheck)
     best = write_best_json(args.best_json, rows)
-    package_best_bundle(args.best_bundle_dir, best)
-    requested_site_subdir = normalize_site_subdir(args.site_subdir)
-    if not requested_site_subdir and str(args.run_id or "").strip():
-        requested_site_subdir = normalize_site_subdir(f"runs/{sanitize_site_component(args.run_id)}")
-
+    package_best_bundle(args.best_bundle_dir, best, precheck)
     build_site(
         args.site_dir,
         rows,
+        precheck,
         explorer_settings={
             "synth_strategy": args.summary_synth_strategy,
             "antenna_repair": args.summary_antenna_repair,
@@ -1727,7 +847,7 @@ def main() -> None:
         },
         repo_slug=args.repo_slug,
         run_id=args.run_id,
-        site_subdir=requested_site_subdir,
+        site_subdir=args.site_subdir,
     )
 
 
