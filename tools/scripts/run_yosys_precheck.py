@@ -175,6 +175,7 @@ def format_closure_report(closure: Dict[str, Any], top: str, rtl_sources: List[s
 
 
 def yosys_path(path: Path) -> str:
+    """Prefer repo-relative output paths for Yosys; fall back to absolute."""
     try:
         rel = path.resolve().relative_to(ROOT)
         return rel.as_posix()
@@ -319,12 +320,15 @@ def main() -> None:
         return
 
     def ys_quote(path: str) -> str:
-        return '"' + path.replace("\\", "\\\\").replace('"', '\\"') + '"'
+        return '"' + path.replace('\\', '\\\\').replace('"', '\\"') + '"'
 
     read_files = " ".join(ys_quote(str((ROOT / rel).resolve())) for rel in rtl_sources_closure)
-    stat_txt_ys = yosys_path(stat_txt)
-    stat_json_ys = yosys_path(stat_json)
-    netlist_ys = yosys_path(netlist_path)
+    # Yosys resolves relative output paths against the script file location.
+    # Since run.ys lives in out_dir, use plain filenames so outputs land in out_dir
+    # instead of trying to create a nested precheck/yosys/precheck/yosys tree.
+    stat_txt_ys = stat_txt.name
+    stat_json_ys = stat_json.name
+    netlist_ys = netlist_path.name
 
     script = f"""
 read_verilog -sv -defer {read_files}
