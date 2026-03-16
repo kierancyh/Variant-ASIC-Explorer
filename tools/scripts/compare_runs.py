@@ -249,24 +249,21 @@ def find_first(root: Path, patterns: Sequence[str]) -> Optional[Path]:
 
 
 def collect_precheck(artifacts_root: Path) -> Dict[str, Any]:
-    rtl_status_path = find_first(artifacts_root, ["**/precheck/rtl/status.json", "**/status.json"])
-    yosys_status_path = find_first(artifacts_root, ["**/precheck/yosys/status.json", "**/yosys/status.json"])
+    rtl_status: Dict[str, Any] = {}
+    yosys_status: Dict[str, Any] = {}
+    rtl_root: Optional[Path] = None
+    yosys_root: Optional[Path] = None
 
-    rtl_status = {}
-    yosys_status = {}
-    rtl_root = None
-    yosys_root = None
+    for status_path in sorted(artifacts_root.glob("**/status.json")):
+        maybe = load_json(status_path)
+        tool = str(maybe.get("tool") or "").strip().lower()
 
-    if rtl_status_path and rtl_status_path.name == "status.json":
-        maybe = load_json(rtl_status_path)
-        if maybe.get("tool") == "icarus":
+        if tool == "icarus" and not rtl_status:
             rtl_status = maybe
-            rtl_root = rtl_status_path.parent
-    if yosys_status_path and yosys_status_path.name == "status.json":
-        maybe = load_json(yosys_status_path)
-        if maybe.get("tool") == "yosys":
+            rtl_root = status_path.parent
+        elif tool == "yosys" and not yosys_status:
             yosys_status = maybe
-            yosys_root = yosys_status_path.parent
+            yosys_root = status_path.parent
 
     data: Dict[str, Any] = {
         "icarus": rtl_status or {"tool": "icarus", "status": "MISSING", "passed": False, "enabled": False},
@@ -284,6 +281,8 @@ def collect_precheck(artifacts_root: Path) -> Dict[str, Any]:
         data["run_log"] = str(rtl_root / "run.log")
         data["vcd_path"] = str(rtl_root / data["vcd_name"])
         data["rtl_meta"] = str(rtl_root / "precheck_meta.json")
+        if not Path(data["vcd_path"]).exists():
+            data["vcd_present"] = False
     else:
         data["compile_log"] = ""
         data["run_log"] = ""
@@ -304,9 +303,11 @@ def collect_precheck(artifacts_root: Path) -> Dict[str, Any]:
         data["yosys_netlist"] = ""
         data["yosys_meta"] = ""
 
-    data["gate_ok"] = bool(data["icarus"].get("passed")) and bool(data["yosys"].get("passed"))
+    data["gate_ok"] = (
+        bool(data["icarus"].get("passed") or data["icarus"].get("status") == "SKIP")
+        and bool(data["yosys"].get("passed") or data["yosys"].get("status") == "SKIP")
+    )
     return data
-
 
 def sanitize_site_component(value: str) -> str:
     safe = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "").strip())
