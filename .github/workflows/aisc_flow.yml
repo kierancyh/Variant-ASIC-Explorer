@@ -213,6 +213,11 @@ jobs:
           name: precheck-yosys-${{ needs.plan.outputs.safe_variant }}
           path: precheck/yosys/
           if-no-files-found: error
+      - name: Print Yosys failure tail
+        if: ${{ steps.export.outputs.gate_ok != 'true' }}
+        run: |
+          echo "Yosys precheck failed. Tail of yosys.log:"
+          tail -n 200 precheck/yosys/yosys.log || true
       - name: Workflow summary
         run: |
           python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
@@ -224,6 +229,8 @@ jobs:
             '',
             f"- Status: {s.get('status')}",
             f"- Top: {s.get('top_module')}",
+            f"- Reason: {s.get('reason')}",
+            f"- Used sources: {s.get('used_source_count', 0)} / {s.get('all_source_count', 0)}",
             f"- Warning count: {s.get('warning_count', 0)}",
           ]))
           PY
@@ -652,6 +659,5 @@ jobs:
           {
             echo "## Published Run Explorer"
             echo ""
-            echo "- [Open Explorer for this Run](https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/runs/${{ github.run_id }}/)"
-            echo "- [Open Latest Explorer](https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/latest/)"
+            echo "- [Open Explorer](https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/runs/${{ github.run_id }}/)"
           } >> "$GITHUB_STEP_SUMMARY"
