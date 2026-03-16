@@ -174,6 +174,14 @@ def format_closure_report(closure: Dict[str, Any], top: str, rtl_sources: List[s
     return "\n".join(lines).rstrip() + "\n"
 
 
+def yosys_path(path: Path) -> str:
+    try:
+        rel = path.resolve().relative_to(ROOT)
+        return rel.as_posix()
+    except ValueError:
+        return str(path.resolve())
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Run the Yosys structural precheck and emit status metadata.")
     ap.add_argument("--meta-json", required=True)
@@ -182,7 +190,10 @@ def main() -> None:
 
     meta = json.loads(Path(args.meta_json).read_text(encoding="utf-8"))
     cfg = meta.get("precheck", {}).get("yosys", {}) or {}
-    out_dir = Path(args.out_dir)
+
+    out_dir_arg = Path(args.out_dir)
+    out_dir = out_dir_arg if out_dir_arg.is_absolute() else (ROOT / out_dir_arg)
+    out_dir = out_dir.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
     log_path = out_dir / "yosys.log"
@@ -310,7 +321,11 @@ def main() -> None:
     def ys_quote(path: str) -> str:
         return '"' + path.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
-    read_files = " ".join(ys_quote(str(ROOT / rel)) for rel in rtl_sources_closure)
+    read_files = " ".join(ys_quote(str((ROOT / rel).resolve())) for rel in rtl_sources_closure)
+    stat_txt_ys = yosys_path(stat_txt)
+    stat_json_ys = yosys_path(stat_json)
+    netlist_ys = yosys_path(netlist_path)
+
     script = f"""
 read_verilog -sv -defer {read_files}
 hierarchy -check -top {top}
@@ -323,9 +338,9 @@ memory
 techmap
 opt
 check
-tee -o {ys_quote(str(stat_txt.resolve()))} stat
-tee -o {ys_quote(str(stat_json.resolve()))} stat -json
-write_verilog -noattr -noexpr {ys_quote(str(netlist_path.resolve()))}
+tee -o {ys_quote(stat_txt_ys)} stat
+tee -o {ys_quote(stat_json_ys)} stat -json
+write_verilog -noattr -noexpr {ys_quote(netlist_ys)}
 """.strip() + "\n"
     script_path.write_text(script, encoding="utf-8")
 
