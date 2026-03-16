@@ -247,7 +247,6 @@ def find_first(root: Path, patterns: Sequence[str]) -> Optional[Path]:
             return matches[0]
     return None
 
-
 def collect_precheck(artifacts_root: Path) -> Dict[str, Any]:
     rtl_status: Dict[str, Any] = {}
     yosys_status: Dict[str, Any] = {}
@@ -610,10 +609,20 @@ def build_site(
     yosys_log_href = ""
     yosys_stat_href = ""
     yosys_netlist_href = ""
+    published_snapshot_prefix = pages_base.rstrip("/") if pages_base else ""
+    if normalized_site_subdir and published_snapshot_prefix:
+        published_snapshot_prefix = (
+                published_snapshot_prefix
+                + "/"
+                + urllib.parse.quote(normalized_site_subdir, safe="/")
+        )
+
     if precheck.get("vcd_present"):
-        local_vcd_href = "precheck/rtl/" + urllib.parse.quote(Path(precheck.get("vcd_name", "rtl_precheck.vcd")).name)
-        if pages_base and run_id:
-            published_vcd = f"{pages_base}/runs/{urllib.parse.quote(str(run_id))}/{local_vcd_href}"
+        local_vcd_href = "precheck/rtl/" + urllib.parse.quote(
+            Path(precheck.get("vcd_name", "rtl_precheck.vcd")).name
+        )
+        if published_snapshot_prefix:
+            published_vcd = f"{published_snapshot_prefix}/{local_vcd_href}"
             surfer_url = build_surfer_url(published_vcd)
     if precheck.get("compile_log"):
         compile_log_href = "precheck/rtl/compile.log"
