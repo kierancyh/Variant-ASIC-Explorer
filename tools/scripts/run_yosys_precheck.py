@@ -349,8 +349,8 @@ write_verilog -noattr -noexpr {ys_quote(netlist_ys)}
     script_path.write_text(script, encoding="utf-8")
 
     result = subprocess.run(
-        ["yosys", "-s", str(script_path)],
-        cwd=str(ROOT),
+        ["yosys", "-s", "run.ys"],
+        cwd=str(out_dir),
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
