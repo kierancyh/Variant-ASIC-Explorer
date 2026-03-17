@@ -435,7 +435,13 @@ def package_best_bundle(best_bundle_dir: Path, best: Dict[str, Any], precheck: D
 
 
 def rel_href(path: Path, root: Path) -> str:
-    return urllib.parse.quote(str(path.relative_to(root)).replace(os.sep, "/"))
+    path = Path(path)
+    root = Path(root)
+    try:
+        rel = path.relative_to(root)
+    except ValueError:
+        rel = Path(os.path.relpath(path, root))
+    return urllib.parse.quote(str(rel).replace(os.sep, "/"))
 
 
 def badge_html(status: str) -> str:
@@ -498,7 +504,8 @@ def build_surfer_url(vcd_url: str) -> str:
 def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> None:
     render_href = rel_href(Path(row["_render_path"]), run_dir) if row.get("_render_path") else ""
     gds_href = rel_href(Path(row["_gds_path"]), run_dir) if row.get("_gds_path") else ""
-    metrics_href = rel_href(Path(row["_base_dir"]) / "metrics.csv", run_dir)
+    metrics_path = Path(row.get("_site_metrics_path") or (Path(row["_base_dir"]) / "metrics.csv"))
+    metrics_href = rel_href(metrics_path, run_dir)
     details = [
         ("Variant", row.get("_variant", "")),
         ("Stage", row.get("_stage_label", "")),
@@ -587,11 +594,14 @@ def build_site(
         base_dir = Path(row["_base_dir"])
         row_dir_name = sanitize_site_component(f"{row.get('_variant','variant')}-{row.get('_run_dir','run')}")
         row_site_dir = runs_root / row_dir_name
-        copy_tree_if_exists(base_dir, row_site_dir / "artifact")
+        site_artifact_dir = row_site_dir / "artifact"
+        copy_tree_if_exists(base_dir, site_artifact_dir)
+        row["_site_artifact_dir"] = str(site_artifact_dir)
+        row["_site_metrics_path"] = str(site_artifact_dir / "metrics.csv")
         if row.get("_render_path"):
-            row["_render_path"] = str((row_site_dir / "artifact" / Path(row["_render_path"]).name))
+            row["_render_path"] = str((site_artifact_dir / "renders" / Path(row["_render_path"]).name))
         if row.get("_gds_path"):
-            row["_gds_path"] = str((row_site_dir / "artifact" / "final" / "gds" / Path(row["_gds_path"]).name))
+            row["_gds_path"] = str((site_artifact_dir / "final" / "gds" / Path(row["_gds_path"]).name))
         row["_row_href"] = rel_href(row_site_dir / "index.html", snapshot_root)
         write_run_page(row_site_dir, row, "/")
 
