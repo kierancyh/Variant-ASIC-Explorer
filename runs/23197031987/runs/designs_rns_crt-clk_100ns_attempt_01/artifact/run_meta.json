@@ -1,0 +1,10 @@
+{
+  "variant": "designs_rns_crt",
+  "clock_ns_requested": 100.0,
+  "github_run_id": "23197031987",
+  "github_run_number": "20",
+  "commit_sha": "5160f041497c0e9655e7a66b892ab233874bfcb2",
+  "synth_strategy_override": "",
+  "stage_label": "coarse",
+  "artifact_name": "coarse-designs_rns_crt"
+}

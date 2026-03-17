@@ -1,0 +1,14 @@
+
+===========================================================================
+Violator List
+============================================================================
+[setup reg-reg] _3302_/Q -> _3238_/D : -0.420143
+[setup reg-reg] _3302_/Q -> _3237_/D : -0.410323
+[setup reg-reg] _3302_/Q -> _3236_/D : -0.210147
+[setup reg-reg] _3302_/Q -> _3239_/D : -0.019360
+Writing metric timing__hold_vio__count__corner:nom_tt_025C_1v80: 0
+Writing metric timing__hold_r2r__ws__corner:nom_tt_025C_1v80: 0.253217
+Writing metric timing__hold_r2r_vio__count__corner:nom_tt_025C_1v80: 0
+Writing metric timing__setup_vio__count__corner:nom_tt_025C_1v80: 4
+Writing metric timing__setup_r2r__ws__corner:nom_tt_025C_1v80: -0.420143
+Writing metric timing__setup_r2r_vio__count__corner:nom_tt_025C_1v80: 4

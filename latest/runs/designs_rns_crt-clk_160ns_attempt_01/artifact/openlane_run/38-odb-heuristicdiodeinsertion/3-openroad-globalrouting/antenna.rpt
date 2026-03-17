@@ -1,0 +1,39 @@
+[INFO GRT-0043] No OR_DEFAULT vias defined.
+Net: net13
+  Pin:   _2840_/A0 (sky130_fd_sc_hd__mux2_1)
+    Layer: mcon
+      Partial area ratio:    0.23
+      Required ratio:    3.00 (Gate area) 
+      Cumulative area ratio:    0.23
+      Required ratio:    0.00 (Cumulative area) 
+
+    Layer: met1
+      Partial area ratio:   81.37
+      Required ratio:    0.00 (Gate area) 
+      Cumulative area ratio:   81.37
+      Required ratio:    0.00 (Cumulative area) 
+      Partial area ratio:  405.37
+      Required ratio:  400.00 (Side area) (VIOLATED)
+      Cumulative area ratio:  405.37
+      Required ratio:    0.00 (Cumulative side area) 
+
+    Layer: via
+      Partial area ratio:    0.36
+      Required ratio:    6.00 (Gate area) 
+      Cumulative area ratio:    0.59
+      Required ratio:    0.00 (Cumulative area) 
+
+    Layer: met2
+      Partial area ratio:    9.95
+      Required ratio:    0.00 (Gate area) 
+      Cumulative area ratio:   91.32
+      Required ratio:    0.00 (Cumulative area) 
+      Partial area ratio:   48.67
+      Required ratio: 2736.24 (Side area) 
+      Cumulative area ratio:  454.04
+      Required ratio:    0.00 (Cumulative side area) 
+
+
+
+[INFO ANT-0002] Found 1 net violations.
+[INFO ANT-0001] Found 1 pin violations.

@@ -1,0 +1,52 @@
+
+===========================================================================
+Violator List
+============================================================================
+[setup reg-reg] _3302_/Q -> _3238_/D : -7.264831
+[setup reg-reg] _3302_/Q -> _3237_/D : -7.259545
+[setup reg-reg] _3302_/Q -> _3236_/D : -7.084004
+[setup reg-reg] _3302_/Q -> _3239_/D : -6.855501
+[setup reg-reg] _3286_/Q -> _3234_/D : -5.472574
+[setup reg-reg] _3286_/Q -> _3232_/D : -5.395873
+[setup reg-reg] _3286_/Q -> _3233_/D : -5.358211
+[setup reg-reg] _3254_/Q -> _3311_/D : -5.195054
+[setup reg-reg] _3254_/Q -> _3312_/D : -5.176098
+[setup reg-reg] _3286_/Q -> _3235_/D : -5.075868
+[setup reg-reg] _3254_/Q -> _3310_/D : -5.068069
+[setup reg-reg] _3254_/Q -> _3315_/D : -4.956200
+[setup reg-reg] _3254_/Q -> _3308_/D : -4.935608
+[setup reg-reg] _3254_/Q -> _3309_/D : -4.884721
+[setup reg-reg] _3254_/Q -> _3307_/D : -4.784002
+[setup reg-reg] _3254_/Q -> _3313_/D : -4.745355
+[setup reg-reg] _3254_/Q -> _3314_/D : -4.733873
+[setup reg-reg] _3254_/Q -> _3306_/D : -4.516541
+[setup reg-reg] _3304_/Q -> _3228_/D : -4.354815
+[setup reg-reg] _3254_/Q -> _3316_/D : -4.258362
+[setup reg-reg] _3304_/Q -> _3227_/D : -4.105591
+[setup reg-reg] _3287_/Q -> _3216_/D : -3.980821
+[setup reg-reg] _3304_/Q -> _3229_/D : -3.903691
+[setup reg-reg] _3287_/Q -> _3215_/D : -3.840709
+[setup reg-reg] _3286_/Q -> _3214_/D : -3.760846
+[setup reg-reg] _3287_/Q -> _3217_/D : -3.718331
+[setup reg-reg] _3286_/Q -> _3213_/D : -3.686541
+[setup reg-reg] _3286_/Q -> _3212_/D : -3.435642
+[setup reg-reg] _3232_/Q -> _3257_/D : -2.919757
+[setup reg-reg] _3302_/Q -> _3225_/D : -2.772569
+[setup reg-reg] _3302_/Q -> _3224_/D : -2.758560
+[setup reg-reg] _3302_/Q -> _3226_/D : -2.658052
+[setup reg-reg] _3232_/Q -> _3255_/D : -2.617657
+[setup reg-reg] _3232_/Q -> _3256_/D : -2.578820
+[setup reg-reg] _3232_/Q -> _3254_/D : -2.383974
+[setup reg-reg] _3289_/Q -> _3218_/D : -1.468274
+[setup reg-reg] _3289_/Q -> _3219_/D : -1.388219
+[setup reg-reg] _3304_/Q -> _3230_/D : -1.161067
+[setup reg-reg] _3304_/Q -> _3231_/D : -1.150624
+[setup reg-reg] _3228_/Q -> _3246_/D : -0.214981
+[setup reg-reg] _3228_/Q -> _3244_/D : -0.078306
+[setup reg-reg] _3228_/Q -> _3245_/D : -0.005408
+Writing metric timing__hold_vio__count__corner:nom_tt_025C_1v80: 0
+Writing metric timing__hold_r2r__ws__corner:nom_tt_025C_1v80: 0.255658
+Writing metric timing__hold_r2r_vio__count__corner:nom_tt_025C_1v80: 0
+Writing metric timing__setup_vio__count__corner:nom_tt_025C_1v80: 42
+Writing metric timing__setup_r2r__ws__corner:nom_tt_025C_1v80: -7.264831
+Writing metric timing__setup_r2r_vio__count__corner:nom_tt_025C_1v80: 42

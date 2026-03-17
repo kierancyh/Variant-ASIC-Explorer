@@ -1,0 +1,22 @@
+{
+    "nl": null,
+    "pnl": null,
+    "pnl-sdf-friendly": null,
+    "pnl-npc": null,
+    "def": null,
+    "lef": null,
+    "openroad-lef": null,
+    "odb": null,
+    "sdc": null,
+    "sdf": null,
+    "spef": null,
+    "lib": null,
+    "spice": null,
+    "mag": null,
+    "gds": null,
+    "mag_gds": null,
+    "klayout_gds": null,
+    "json_h": "/work/runs/RUN_2026-03-17_13-43-38/01-yosys-jsonheader/rns_top_crt.h.json",
+    "vh": null,
+    "metrics": {}
+}

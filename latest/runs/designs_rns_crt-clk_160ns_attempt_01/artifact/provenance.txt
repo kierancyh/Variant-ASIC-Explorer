@@ -1,0 +1,5 @@
+run=/home/runner/work/Variant-ASIC-Explorer/Variant-ASIC-Explorer/runs/RUN_2026-03-17_13-43-38
+metrics=/home/runner/work/Variant-ASIC-Explorer/Variant-ASIC-Explorer/runs/RUN_2026-03-17_13-43-38/final/metrics.json
+power_rpt=(missing)
+fair_sta=(none)
+clock_ns_requested=160.0
