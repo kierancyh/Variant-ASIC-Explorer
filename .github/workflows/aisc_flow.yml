@@ -38,7 +38,7 @@ permissions:
   contents: write
 
 env:
-  OPENLANE_IMAGE: ${{ github.event.inputs.openlane_image || vars.OPENLANE_IMAGE || "" }}
+  OPENLANE_IMAGE: ${{ github.event.inputs.openlane_image || vars.OPENLANE_IMAGE || '' }}
 
 jobs:
   plan:
