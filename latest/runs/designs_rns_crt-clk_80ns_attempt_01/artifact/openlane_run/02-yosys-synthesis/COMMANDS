@@ -1,1 +1,0 @@
-yosys -y /nix/store/7l0f3byalx17dsl5m0bpzrsl6lkcyv3g-python3-3.11.9-env/lib/python3.11/site-packages/openlane/scripts/pyosys/synthesize.py -- --config-in /work/runs/RUN_2026-03-17_13-43-38/02-yosys-synthesis/config.json --extra-in /work/runs/RUN_2026-03-17_13-43-38/02-yosys-synthesis/extra.json --output /work/runs/RUN_2026-03-17_13-43-38/02-yosys-synthesis/rns_top_crt.nl.v
