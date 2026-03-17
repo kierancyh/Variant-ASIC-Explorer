@@ -39,6 +39,8 @@ permissions:
 
 env:
   OPENLANE_IMAGE: ${{ github.event.inputs.openlane_image || vars.OPENLANE_IMAGE || '' }}
+  OPEN_PDKS_REV: ${{ vars.OPEN_PDKS_REV || 'cd1748bb197f9b7af62a54507de6624e30363943' }}
+  PYTHONUNBUFFERED: '1'
 
 jobs:
   plan:
@@ -106,6 +108,7 @@ jobs:
             echo "- Top module: ${{ steps.meta.outputs.top_module }}"
             echo "- Testbench top: ${{ steps.meta.outputs.tb_top }}"
             echo "- OpenLane image: ${OPENLANE_IMAGE}"
+            echo "- open_pdks revision: ${OPEN_PDKS_REV}"
             echo "- Icarus enabled: ${{ steps.meta.outputs.icarus_enabled }}"
             echo "- Yosys enabled: ${{ steps.meta.outputs.yosys_enabled }}"
             echo "- Coarse matrix: ${{ steps.coarse.outputs.matrix_json }}"
@@ -246,6 +249,7 @@ jobs:
 
   coarse-sweep:
     runs-on: ubuntu-latest
+    timeout-minutes: 240
     needs: [plan, rtl-precheck, yosys-precheck]
     if: ${{ needs.rtl-precheck.outputs.gate_ok == 'true' && needs.yosys-precheck.outputs.gate_ok == 'true' }}
     strategy:
@@ -261,19 +265,40 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
+          python -m pip install volare pyyaml
+      - name: Restore PDK cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.volare
+          key: ${{ runner.os }}-sky130-volare-${{ env.OPEN_PDKS_REV }}
+          restore-keys: |
+            ${{ runner.os }}-sky130-volare-
+      - name: Install Sky130 PDK with Volare
+        env:
+          PDK_ROOT: ${{ github.workspace }}/.volare
+        run: |
+          mkdir -p "${PDK_ROOT}"
+          volare enable --pdk sky130 "${OPEN_PDKS_REV}"
+      - name: Pull OpenLane image
+        run: |
+          docker pull "${OPENLANE_IMAGE}"
       - name: Run coarse ASIC attempt
+        env:
+          PDK_ROOT: ${{ github.workspace }}/.volare
         run: |
           python tools/scripts/run_autoflow_compat.py \
             --variant "${{ needs.plan.outputs.safe_variant }}" \
             --clock-ns "${{ matrix.clock_ns }}" \
+            --pdk-root "${PDK_ROOT}" \
             --openlane-image "${OPENLANE_IMAGE}" \
             --stage-label coarse \
             --artifact-name "coarse-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns"
       - name: Upload coarse attempt artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: coarse-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns
-          path: ci_out/
+          path: ci_out/${{ needs.plan.outputs.safe_variant }}/
           if-no-files-found: warn
 
   select-coarse-bracket:
@@ -314,6 +339,7 @@ jobs:
 
   mid-refine-sweep:
     runs-on: ubuntu-latest
+    timeout-minutes: 240
     needs: [plan, rtl-precheck, yosys-precheck, select-coarse-bracket]
     if: ${{ needs.rtl-precheck.outputs.gate_ok == 'true' && needs.yosys-precheck.outputs.gate_ok == 'true' && needs.select-coarse-bracket.outputs.matrix_json != '[]' }}
     strategy:
@@ -329,18 +355,39 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
+          python -m pip install volare pyyaml
+      - name: Restore PDK cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.volare
+          key: ${{ runner.os }}-sky130-volare-${{ env.OPEN_PDKS_REV }}
+          restore-keys: |
+            ${{ runner.os }}-sky130-volare-
+      - name: Install Sky130 PDK with Volare
+        env:
+          PDK_ROOT: ${{ github.workspace }}/.volare
+        run: |
+          mkdir -p "${PDK_ROOT}"
+          volare enable --pdk sky130 "${OPEN_PDKS_REV}"
+      - name: Pull OpenLane image
+        run: |
+          docker pull "${OPENLANE_IMAGE}"
       - name: Run mid refine ASIC attempt
+        env:
+          PDK_ROOT: ${{ github.workspace }}/.volare
         run: |
           python tools/scripts/run_autoflow_compat.py \
             --variant "${{ needs.plan.outputs.safe_variant }}" \
             --clock-ns "${{ matrix.clock_ns }}" \
+            --pdk-root "${PDK_ROOT}" \
             --openlane-image "${OPENLANE_IMAGE}" \
             --stage-label mid \
             --artifact-name "mid-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: mid-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns
-          path: ci_out/
+          path: ci_out/${{ needs.plan.outputs.safe_variant }}/
           if-no-files-found: warn
 
   select-mid-bracket:
@@ -379,6 +426,7 @@ jobs:
 
   refine-sweep-1:
     runs-on: ubuntu-latest
+    timeout-minutes: 240
     needs: [plan, rtl-precheck, yosys-precheck, select-mid-bracket]
     if: ${{ needs.rtl-precheck.outputs.gate_ok == 'true' && needs.yosys-precheck.outputs.gate_ok == 'true' && needs.select-mid-bracket.outputs.matrix_json != '[]' }}
     strategy:
@@ -394,18 +442,39 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
+          python -m pip install volare pyyaml
+      - name: Restore PDK cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.volare
+          key: ${{ runner.os }}-sky130-volare-${{ env.OPEN_PDKS_REV }}
+          restore-keys: |
+            ${{ runner.os }}-sky130-volare-
+      - name: Install Sky130 PDK with Volare
+        env:
+          PDK_ROOT: ${{ github.workspace }}/.volare
+        run: |
+          mkdir -p "${PDK_ROOT}"
+          volare enable --pdk sky130 "${OPEN_PDKS_REV}"
+      - name: Pull OpenLane image
+        run: |
+          docker pull "${OPENLANE_IMAGE}"
       - name: Run refine-1 ASIC attempt
+        env:
+          PDK_ROOT: ${{ github.workspace }}/.volare
         run: |
           python tools/scripts/run_autoflow_compat.py \
             --variant "${{ needs.plan.outputs.safe_variant }}" \
             --clock-ns "${{ matrix.clock_ns }}" \
+            --pdk-root "${PDK_ROOT}" \
             --openlane-image "${OPENLANE_IMAGE}" \
             --stage-label refine-1 \
             --artifact-name "refine1-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: refine1-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns
-          path: ci_out/
+          path: ci_out/${{ needs.plan.outputs.safe_variant }}/
           if-no-files-found: warn
 
   select-refine-1:
@@ -438,6 +507,7 @@ jobs:
 
   refine-sweep-2:
     runs-on: ubuntu-latest
+    timeout-minutes: 240
     needs: [plan, rtl-precheck, yosys-precheck, select-refine-1]
     if: ${{ needs.rtl-precheck.outputs.gate_ok == 'true' && needs.yosys-precheck.outputs.gate_ok == 'true' && needs.select-refine-1.outputs.matrix_json != '[]' }}
     strategy:
@@ -453,18 +523,39 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
+          python -m pip install volare pyyaml
+      - name: Restore PDK cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.volare
+          key: ${{ runner.os }}-sky130-volare-${{ env.OPEN_PDKS_REV }}
+          restore-keys: |
+            ${{ runner.os }}-sky130-volare-
+      - name: Install Sky130 PDK with Volare
+        env:
+          PDK_ROOT: ${{ github.workspace }}/.volare
+        run: |
+          mkdir -p "${PDK_ROOT}"
+          volare enable --pdk sky130 "${OPEN_PDKS_REV}"
+      - name: Pull OpenLane image
+        run: |
+          docker pull "${OPENLANE_IMAGE}"
       - name: Run refine-2 ASIC attempt
+        env:
+          PDK_ROOT: ${{ github.workspace }}/.volare
         run: |
           python tools/scripts/run_autoflow_compat.py \
             --variant "${{ needs.plan.outputs.safe_variant }}" \
             --clock-ns "${{ matrix.clock_ns }}" \
+            --pdk-root "${PDK_ROOT}" \
             --openlane-image "${OPENLANE_IMAGE}" \
             --stage-label refine-2 \
             --artifact-name "refine2-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: refine2-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns
-          path: ci_out/
+          path: ci_out/${{ needs.plan.outputs.safe_variant }}/
           if-no-files-found: warn
 
   select-refine-2:
@@ -497,6 +588,7 @@ jobs:
 
   refine-sweep-3:
     runs-on: ubuntu-latest
+    timeout-minutes: 240
     needs: [plan, rtl-precheck, yosys-precheck, select-refine-2]
     if: ${{ needs.rtl-precheck.outputs.gate_ok == 'true' && needs.yosys-precheck.outputs.gate_ok == 'true' && needs.select-refine-2.outputs.matrix_json != '[]' }}
     strategy:
@@ -512,18 +604,39 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
+          python -m pip install volare pyyaml
+      - name: Restore PDK cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.volare
+          key: ${{ runner.os }}-sky130-volare-${{ env.OPEN_PDKS_REV }}
+          restore-keys: |
+            ${{ runner.os }}-sky130-volare-
+      - name: Install Sky130 PDK with Volare
+        env:
+          PDK_ROOT: ${{ github.workspace }}/.volare
+        run: |
+          mkdir -p "${PDK_ROOT}"
+          volare enable --pdk sky130 "${OPEN_PDKS_REV}"
+      - name: Pull OpenLane image
+        run: |
+          docker pull "${OPENLANE_IMAGE}"
       - name: Run refine-3 ASIC attempt
+        env:
+          PDK_ROOT: ${{ github.workspace }}/.volare
         run: |
           python tools/scripts/run_autoflow_compat.py \
             --variant "${{ needs.plan.outputs.safe_variant }}" \
             --clock-ns "${{ matrix.clock_ns }}" \
+            --pdk-root "${PDK_ROOT}" \
             --openlane-image "${OPENLANE_IMAGE}" \
             --stage-label refine-3 \
             --artifact-name "refine3-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: refine3-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns
-          path: ci_out/
+          path: ci_out/${{ needs.plan.outputs.safe_variant }}/
           if-no-files-found: warn
 
   compare-runs:
