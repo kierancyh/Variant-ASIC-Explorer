@@ -38,7 +38,7 @@ permissions:
   contents: write
 
 env:
-  OPENLANE_IMAGE: ${{ github.event.inputs.openlane_image || vars.OPENLANE_IMAGE || '' }}
+  OPENLANE_IMAGE: ${{ github.event.inputs.openlane_image || vars.OPENLANE_IMAGE || 'ghcr.io/efabless/openlane2:2.4.0.dev1' }}
   OPEN_PDKS_REV: ${{ vars.OPEN_PDKS_REV || 'cd1748bb197f9b7af62a54507de6624e30363943' }}
   PYTHONUNBUFFERED: '1'
 
