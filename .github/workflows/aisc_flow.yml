@@ -44,6 +44,7 @@ env:
 
 jobs:
   plan:
+    name: Plan
     runs-on: ubuntu-latest
     outputs:
       safe_variant: ${{ steps.meta.outputs.safe_variant }}
@@ -115,6 +116,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   rtl-precheck:
+    name: RTL Precheck
     runs-on: ubuntu-latest
     needs: plan
     outputs:
@@ -183,6 +185,7 @@ jobs:
           PY
 
   yosys-precheck:
+    name: Yosys Precheck
     runs-on: ubuntu-latest
     needs: [plan, rtl-precheck]
     outputs:
@@ -248,6 +251,7 @@ jobs:
           PY
 
   coarse-sweep:
+    name: Coarse Sweep (${{ matrix.clock_ns }} ns)
     runs-on: ubuntu-latest
     timeout-minutes: 240
     needs: [plan, rtl-precheck, yosys-precheck]
@@ -302,6 +306,7 @@ jobs:
           if-no-files-found: warn
 
   select-coarse-bracket:
+    name: Select Coarse Bracket
     runs-on: ubuntu-latest
     needs: [coarse-sweep]
     outputs:
@@ -338,6 +343,7 @@ jobs:
             bracket_coarse.json
 
   mid-refine-sweep:
+    name: Mid Refine Sweep (${{ matrix.clock_ns }} ns)
     runs-on: ubuntu-latest
     timeout-minutes: 240
     needs: [plan, rtl-precheck, yosys-precheck, select-coarse-bracket]
@@ -391,6 +397,7 @@ jobs:
           if-no-files-found: warn
 
   select-mid-bracket:
+    name: Select Mid Bracket
     runs-on: ubuntu-latest
     needs: [coarse-sweep, mid-refine-sweep]
     outputs:
@@ -425,6 +432,7 @@ jobs:
             bracket_mid.json
 
   refine-sweep-1:
+    name: Refine Sweep 1 (${{ matrix.clock_ns }} ns)
     runs-on: ubuntu-latest
     timeout-minutes: 240
     needs: [plan, rtl-precheck, yosys-precheck, select-mid-bracket]
@@ -478,6 +486,7 @@ jobs:
           if-no-files-found: warn
 
   select-refine-1:
+    name: Select Refine 1
     runs-on: ubuntu-latest
     needs: [coarse-sweep, mid-refine-sweep, refine-sweep-1, plan]
     outputs:
@@ -506,6 +515,7 @@ jobs:
             --github-output "$GITHUB_OUTPUT"
 
   refine-sweep-2:
+    name: Refine Sweep 2 (${{ matrix.clock_ns }} ns)
     runs-on: ubuntu-latest
     timeout-minutes: 240
     needs: [plan, rtl-precheck, yosys-precheck, select-refine-1]
@@ -559,6 +569,7 @@ jobs:
           if-no-files-found: warn
 
   select-refine-2:
+    name: Select Refine 2
     runs-on: ubuntu-latest
     needs: [coarse-sweep, mid-refine-sweep, refine-sweep-1, refine-sweep-2, plan]
     outputs:
@@ -587,6 +598,7 @@ jobs:
             --github-output "$GITHUB_OUTPUT"
 
   refine-sweep-3:
+    name: Refine Sweep 3 (${{ matrix.clock_ns }} ns)
     runs-on: ubuntu-latest
     timeout-minutes: 240
     needs: [plan, rtl-precheck, yosys-precheck, select-refine-2]
@@ -640,6 +652,7 @@ jobs:
           if-no-files-found: warn
 
   compare-runs:
+    name: Compare Runs
     runs-on: ubuntu-latest
     if: always()
     needs:
@@ -702,6 +715,7 @@ jobs:
           if-no-files-found: error
 
   deploy-run-explorer:
+    name: Deploy Run Explorer
     runs-on: ubuntu-latest
     needs: [compare-runs]
     steps:
@@ -774,17 +788,3 @@ jobs:
           cd gh-pages
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          if git diff --cached --quiet; then
-            echo "No gh-pages changes to publish."
-          else
-            git commit -m "Publish explorer for run ${GITHUB_RUN_ID}"
-            git push origin HEAD:gh-pages
-          fi
-      - name: Workflow Summary
-        run: |
-          {
-            echo "## Published Run Explorer"
-            echo ""
-            echo "- [Open Explorer](https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/runs/${{ github.run_id }}/)"
-          } >> "$GITHUB_STEP_SUMMARY"
