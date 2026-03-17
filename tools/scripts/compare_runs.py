@@ -331,6 +331,98 @@ def copy_tree_if_exists(src: Path, dst: Path) -> None:
         shutil.copy2(src, dst)
 
 
+def copy_file_if_exists(src: Path, dst: Path) -> None:
+    if not src.exists() or not src.is_file():
+        return
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+
+
+def publish_run_site_artifact(base_dir: Path, row: Dict[str, str], site_artifact_dir: Path) -> Dict[str, str]:
+    published: Dict[str, str] = {}
+    site_artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    small_files = (
+        "metrics.csv",
+        "metrics.md",
+        "metrics_raw.json",
+        "run_meta.json",
+        "attempt_started.txt",
+        "attempt_manifest.json",
+        "failure_summary.md",
+        "failure_summary.json",
+        "README.txt",
+        "viewer.html",
+        "index.html",
+    )
+    for name in small_files:
+        src = base_dir / name
+        if src.exists():
+            copy_file_if_exists(src, site_artifact_dir / name)
+            published[name] = str(site_artifact_dir / name)
+
+    render_path = Path(row["_render_path"]) if row.get("_render_path") else None
+    if render_path and render_path.exists():
+        dst = site_artifact_dir / "renders" / render_path.name
+        copy_file_if_exists(render_path, dst)
+        published["render_path"] = str(dst)
+
+    gds_path = Path(row["_gds_path"]) if row.get("_gds_path") else None
+    published["gds_exists"] = "yes" if gds_path and gds_path.exists() else "no"
+    published["gds_published"] = "no"
+
+    return published
+
+
+def publish_precheck_site_artifacts(precheck: Dict[str, Any], snapshot_root: Path) -> Dict[str, str]:
+    published: Dict[str, str] = {}
+
+    rtl_root = Path(precheck["rtl_root"]) if precheck.get("rtl_root") else None
+    if rtl_root and rtl_root.exists():
+        rtl_site = snapshot_root / "precheck" / "rtl"
+        for name in (
+            "status.json",
+            "precheck_meta.json",
+            "compile.log",
+            "run.log",
+        ):
+            copy_file_if_exists(rtl_root / name, rtl_site / name)
+        vcd_name = Path(str(precheck.get("vcd_name") or "rtl_precheck.vcd")).name
+        if precheck.get("vcd_present"):
+            copy_file_if_exists(rtl_root / vcd_name, rtl_site / vcd_name)
+            if (rtl_site / vcd_name).exists():
+                published["vcd_path"] = str(rtl_site / vcd_name)
+        if (rtl_site / "compile.log").exists():
+            published["compile_log"] = str(rtl_site / "compile.log")
+        if (rtl_site / "run.log").exists():
+            published["run_log"] = str(rtl_site / "run.log")
+
+    yosys_root = Path(precheck["yosys_root"]) if precheck.get("yosys_root") else None
+    if yosys_root and yosys_root.exists():
+        yosys_site = snapshot_root / "precheck" / "yosys"
+        for name in (
+            "status.json",
+            "precheck_meta.json",
+            "yosys.log",
+            "stat.txt",
+            "stat.json",
+        ):
+            copy_file_if_exists(yosys_root / name, yosys_site / name)
+        if precheck.get("top_module"):
+            synth_name = f"{precheck['top_module']}_synth.v"
+            copy_file_if_exists(yosys_root / synth_name, yosys_site / synth_name)
+            if (yosys_site / synth_name).exists():
+                published["yosys_netlist"] = str(yosys_site / synth_name)
+        if (yosys_site / "yosys.log").exists():
+            published["yosys_log"] = str(yosys_site / "yosys.log")
+        if (yosys_site / "stat.txt").exists():
+            published["yosys_stat_txt"] = str(yosys_site / "stat.txt")
+        if (yosys_site / "stat.json").exists():
+            published["yosys_stat_json"] = str(yosys_site / "stat.json")
+
+    return published
+
+
 def write_summary_csv(path: Path, rows: List[Dict[str, str]]) -> None:
     base_keys = [
         "_variant",
@@ -435,13 +527,7 @@ def package_best_bundle(best_bundle_dir: Path, best: Dict[str, Any], precheck: D
 
 
 def rel_href(path: Path, root: Path) -> str:
-    path = Path(path)
-    root = Path(root)
-    try:
-        rel = path.relative_to(root)
-    except ValueError:
-        rel = Path(os.path.relpath(path, root))
-    return urllib.parse.quote(str(rel).replace(os.sep, "/"))
+    return urllib.parse.quote(str(path.relative_to(root)).replace(os.sep, "/"))
 
 
 def badge_html(status: str) -> str:
@@ -506,6 +592,9 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
     gds_href = rel_href(Path(row["_gds_path"]), run_dir) if row.get("_gds_path") else ""
     metrics_path = Path(row.get("_site_metrics_path") or (Path(row["_base_dir"]) / "metrics.csv"))
     metrics_href = rel_href(metrics_path, run_dir)
+    failure_summary_href = rel_href(Path(row["_site_failure_summary_path"]), run_dir) if row.get("_site_failure_summary_path") else ""
+    raw_metrics_href = rel_href(Path(row["_site_metrics_raw_path"]), run_dir) if row.get("_site_metrics_raw_path") else ""
+    meta_href = rel_href(Path(row["_site_run_meta_path"]), run_dir) if row.get("_site_run_meta_path") else ""
     details = [
         ("Variant", row.get("_variant", "")),
         ("Stage", row.get("_stage_label", "")),
@@ -518,12 +607,30 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
         ("DRC", row.get("drc_errors", "")),
         ("LVS", row.get("lvs_errors", "")),
         ("Antenna", row.get("antenna_violations", "")),
+        ("Published on Pages", "Lightweight explorer assets only"),
+        ("Heavy backend outputs", "Kept in GitHub Actions artifacts, not GitHub Pages"),
     ]
-    actions = [f'<a class="btn" href="../index.html">Back to explorer</a>', f'<a class="btn" href="{metrics_href}">Open metrics.csv</a>']
+    actions = [
+        f'<a class="btn" href="../index.html">Back to explorer</a>',
+        f'<a class="btn" href="{metrics_href}">Open metrics.csv</a>',
+    ]
+    if raw_metrics_href:
+        actions.append(f'<a class="btn" href="{raw_metrics_href}">Open metrics_raw.json</a>')
+    if meta_href:
+        actions.append(f'<a class="btn" href="{meta_href}">Open run_meta.json</a>')
+    if failure_summary_href:
+        actions.append(f'<a class="btn" href="{failure_summary_href}">Open failure summary</a>')
     if gds_href:
         actions.append(f'<a class="btn" href="{gds_href}">Download GDS</a>')
         actions.append(f'<a class="btn" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener">Open GDS viewer</a>')
+    elif row.get("_gds_exists") == "yes":
+        actions.append(f'<a class="btn" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener">Open GDS viewer homepage</a>')
     preview = f'<img src="{render_href}" alt="layout preview">' if render_href else '<div class="empty">No rendered layout preview found for this run.</div>'
+    gds_note = (
+        '<p class="muted">Heavy ASIC outputs, including most GDS assets, are intentionally kept out of GitHub Pages so the explorer stays below the Pages size limit. Use the workflow artifacts for full backend outputs.</p>'
+        if row.get("_gds_exists") == "yes" and not gds_href
+        else ''
+    )
     table_rows = "".join(f"<tr><th>{html.escape(k)}</th><td>{html.escape(v)}</td></tr>" for k, v in details)
     content = f"""<!doctype html>
 <html lang=\"en\">
@@ -550,6 +657,7 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
     <section class=\"card\">
       <h2>Layout preview</h2>
       {preview}
+      {gds_note}
     </section>
   </main>
 </body>
@@ -559,6 +667,7 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
 
 
 def build_site(
+
     site_root: Path,
     rows: List[Dict[str, str]],
     precheck: Dict[str, Any],
@@ -595,20 +704,23 @@ def build_site(
         row_dir_name = sanitize_site_component(f"{row.get('_variant','variant')}-{row.get('_run_dir','run')}")
         row_site_dir = runs_root / row_dir_name
         site_artifact_dir = row_site_dir / "artifact"
-        copy_tree_if_exists(base_dir, site_artifact_dir)
+        published = publish_run_site_artifact(base_dir, row, site_artifact_dir)
         row["_site_artifact_dir"] = str(site_artifact_dir)
-        row["_site_metrics_path"] = str(site_artifact_dir / "metrics.csv")
-        if row.get("_render_path"):
-            row["_render_path"] = str((site_artifact_dir / "renders" / Path(row["_render_path"]).name))
-        if row.get("_gds_path"):
-            row["_gds_path"] = str((site_artifact_dir / "final" / "gds" / Path(row["_gds_path"]).name))
+        row["_site_metrics_path"] = published.get("metrics.csv", str(site_artifact_dir / "metrics.csv"))
+        row["_site_metrics_raw_path"] = published.get("metrics_raw.json", "")
+        row["_site_run_meta_path"] = published.get("run_meta.json", "")
+        row["_site_failure_summary_path"] = published.get("failure_summary.json", "") or published.get("failure_summary.md", "")
+        row["_gds_exists"] = published.get("gds_exists", "no")
+        row["_gds_published"] = published.get("gds_published", "no")
+        if published.get("render_path"):
+            row["_render_path"] = published["render_path"]
+        else:
+            row["_render_path"] = ""
+        row["_gds_path"] = ""
         row["_row_href"] = rel_href(row_site_dir / "index.html", snapshot_root)
         write_run_page(row_site_dir, row, "/")
 
-    if precheck.get("rtl_root"):
-        copy_tree_if_exists(Path(precheck["rtl_root"]), snapshot_root / "precheck" / "rtl")
-    if precheck.get("yosys_root"):
-        copy_tree_if_exists(Path(precheck["yosys_root"]), snapshot_root / "precheck" / "yosys")
+    published_precheck = publish_precheck_site_artifacts(precheck, snapshot_root)
 
     pages_base = pages_base_url(repo_slug)
     published_vcd = ""
@@ -627,23 +739,21 @@ def build_site(
                 + urllib.parse.quote(normalized_site_subdir, safe="/")
         )
 
-    if precheck.get("vcd_present"):
-        local_vcd_href = "precheck/rtl/" + urllib.parse.quote(
-            Path(precheck.get("vcd_name", "rtl_precheck.vcd")).name
-        )
+    if published_precheck.get("vcd_path"):
+        local_vcd_href = rel_href(Path(published_precheck["vcd_path"]), snapshot_root)
         if published_snapshot_prefix:
             published_vcd = f"{published_snapshot_prefix}/{local_vcd_href}"
             surfer_url = build_surfer_url(published_vcd)
-    if precheck.get("compile_log"):
-        compile_log_href = "precheck/rtl/compile.log"
-    if precheck.get("run_log"):
-        run_log_href = "precheck/rtl/run.log"
-    if precheck.get("yosys_log"):
-        yosys_log_href = "precheck/yosys/yosys.log"
-    if precheck.get("yosys_stat_txt"):
-        yosys_stat_href = "precheck/yosys/stat.txt"
-    if precheck.get("yosys_netlist") and precheck.get("top_module"):
-        yosys_netlist_href = f"precheck/yosys/{urllib.parse.quote(precheck['top_module'])}_synth.v"
+    if published_precheck.get("compile_log"):
+        compile_log_href = rel_href(Path(published_precheck["compile_log"]), snapshot_root)
+    if published_precheck.get("run_log"):
+        run_log_href = rel_href(Path(published_precheck["run_log"]), snapshot_root)
+    if published_precheck.get("yosys_log"):
+        yosys_log_href = rel_href(Path(published_precheck["yosys_log"]), snapshot_root)
+    if published_precheck.get("yosys_stat_txt"):
+        yosys_stat_href = rel_href(Path(published_precheck["yosys_stat_txt"]), snapshot_root)
+    if published_precheck.get("yosys_netlist"):
+        yosys_netlist_href = rel_href(Path(published_precheck["yosys_netlist"]), snapshot_root)
 
     stage_options = sorted({row.get("_stage_label", "") for row in ordered if row.get("_stage_label")})
     stage_options_html = "".join(f'<option value="{html.escape(x)}">{html.escape(x)}</option>' for x in stage_options)
@@ -693,8 +803,15 @@ def build_site(
 
     rows_html = []
     for idx, row in enumerate(ordered):
-        gds = '<a href="{}">GDS</a>'.format(rel_href(Path(row["_gds_path"]), snapshot_root)) if row.get("_gds_path") else '—'
-        viewer = f'<a href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener">Viewer</a>' if row.get("_gds_path") else '—'
+        if row.get("_gds_path"):
+            gds = '<a href="{}">GDS</a>'.format(rel_href(Path(row["_gds_path"]), snapshot_root))
+            viewer = f'<a href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener">Viewer</a>'
+        elif row.get("_gds_exists") == "yes":
+            gds = 'Artifact only'
+            viewer = f'<a href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener">Homepage</a>'
+        else:
+            gds = '—'
+            viewer = '—'
         classes = 'best' if idx == 0 else ''
         rows_html.append(
             f"<tr class=\"{classes}\" data-status=\"{html.escape(row.get('status',''))}\" data-stage=\"{html.escape(row.get('_stage_label',''))}\">"
