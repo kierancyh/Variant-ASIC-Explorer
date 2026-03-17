@@ -7,14 +7,14 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, Sequence
+from typing import List, Sequence
 
 ROOT = Path(__file__).resolve().parents[2]
 AUTOFLOW = ROOT / "tools" / "scripts" / "autoflow.py"
 
 
 def q(parts: Sequence[str]) -> str:
-    return " ".join(shlex.quote(p) for p in parts)
+    return " ".join(shlex.quote(str(p)) for p in parts)
 
 
 def run(cmd: List[str]) -> subprocess.CompletedProcess[str]:
@@ -28,6 +28,7 @@ def build_profiles(args: argparse.Namespace) -> List[List[str]]:
         "AUTOFLOW_STAGE_LABEL": args.stage_label,
         "AUTOFLOW_ARTIFACT_NAME": args.artifact_name,
         "AUTOFLOW_PDK_ROOT": args.pdk_root,
+        "AUTOFLOW_OPENLANE_IMAGE": args.openlane_image,
     }
     os.environ.update(base_env)
 
@@ -55,25 +56,25 @@ def build_profiles(args: argparse.Namespace) -> List[List[str]]:
         "--variant", args.variant,
         "--clock-ns", str(args.clock_ns),
         "--pdk-root", args.pdk_root,
+        "--openlane-image", args.openlane_image,
         "--stage-label", args.stage_label,
         "--artifact-name", args.artifact_name,
         *extras("dash"),
     ]
-    dash_no_pdk = [p for p in dash if p not in {"--pdk-root", args.pdk_root}]
     snake = [
         sys.executable,
         str(AUTOFLOW),
         "--variant", args.variant,
         "--clock_ns", str(args.clock_ns),
         "--pdk_root", args.pdk_root,
+        "--openlane_image", args.openlane_image,
         "--stage_label", args.stage_label,
         "--artifact_name", args.artifact_name,
         *extras("snake"),
     ]
+    dash_no_pdk = [p for p in dash if p not in {"--pdk-root", args.pdk_root}]
     snake_no_pdk = [p for p in snake if p not in {"--pdk_root", args.pdk_root}]
-    minimal = [sys.executable, str(AUTOFLOW), "--variant", args.variant, "--clock-ns", str(args.clock_ns)]
-
-    profiles.extend([dash, dash_no_pdk, snake, snake_no_pdk, minimal])
+    profiles.extend([dash, snake, dash_no_pdk, snake_no_pdk])
     return profiles
 
 
@@ -82,6 +83,7 @@ def main() -> None:
     ap.add_argument("--variant", required=True)
     ap.add_argument("--clock-ns", required=True, dest="clock_ns")
     ap.add_argument("--pdk-root", default=os.environ.get("PDK_ROOT", os.environ.get("VOLARE_DIR", "/home/runner/.volare")))
+    ap.add_argument("--openlane-image", default=os.environ.get("OPENLANE_IMAGE", ""))
     ap.add_argument("--stage-label", default="coarse")
     ap.add_argument("--artifact-name", default="")
     ap.add_argument("--synth-strategy", default="")
@@ -93,12 +95,16 @@ def main() -> None:
 
     if not AUTOFLOW.exists():
         raise SystemExit(f"Missing {AUTOFLOW}")
+    if not str(args.openlane_image).strip():
+        raise SystemExit("Missing --openlane-image (or OPENLANE_IMAGE environment variable).")
 
     attempts = build_profiles(args)
     last = None
     for idx, cmd in enumerate(attempts, start=1):
         result = run(cmd)
-        sys.stdout.write(f"\n[run_autoflow_compat] Attempt {idx}: {q(cmd)}\n")
+        sys.stdout.write(f"
+[run_autoflow_compat] Attempt {idx}: {q(cmd)}
+")
         sys.stdout.write(result.stdout or "")
         if result.returncode == 0:
             return

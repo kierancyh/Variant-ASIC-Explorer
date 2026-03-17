@@ -9,6 +9,10 @@ on:
         description: "Optional safe variant name (for example designs_rns_crt)"
         required: false
         default: ""
+      openlane_image:
+        description: "Optional OpenLane / LibreLane image override"
+        required: false
+        default: ""
       summary_synth_strategy:
         description: "Optional synthesis strategy summary label"
         required: false
@@ -32,6 +36,9 @@ on:
 
 permissions:
   contents: write
+
+env:
+  OPENLANE_IMAGE: ${{ github.event.inputs.openlane_image || vars.OPENLANE_IMAGE || "" }}
 
 jobs:
   plan:
@@ -60,6 +67,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install pyyaml
+      - name: Validate ASIC backend image configuration
+        run: |
+          if [ -z "${OPENLANE_IMAGE}" ]; then
+            echo "OPENLANE_IMAGE is not set." >&2
+            echo "Set repository variable OPENLANE_IMAGE or provide workflow_dispatch input openlane_image." >&2
+            exit 1
+          fi
+          echo "Using OPENLANE_IMAGE=${OPENLANE_IMAGE}"
       - name: Resolve active variant metadata
         id: meta
         run: |
@@ -90,6 +105,7 @@ jobs:
             echo "- Variant: ${{ steps.meta.outputs.safe_variant }}"
             echo "- Top module: ${{ steps.meta.outputs.top_module }}"
             echo "- Testbench top: ${{ steps.meta.outputs.tb_top }}"
+            echo "- OpenLane image: ${OPENLANE_IMAGE}"
             echo "- Icarus enabled: ${{ steps.meta.outputs.icarus_enabled }}"
             echo "- Yosys enabled: ${{ steps.meta.outputs.yosys_enabled }}"
             echo "- Coarse matrix: ${{ steps.coarse.outputs.matrix_json }}"
@@ -213,11 +229,6 @@ jobs:
           name: precheck-yosys-${{ needs.plan.outputs.safe_variant }}
           path: precheck/yosys/
           if-no-files-found: error
-      - name: Print Yosys failure tail
-        if: ${{ steps.export.outputs.gate_ok != 'true' }}
-        run: |
-          echo "Yosys precheck failed. Tail of yosys.log:"
-          tail -n 200 precheck/yosys/yosys.log || true
       - name: Workflow summary
         run: |
           python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
@@ -229,8 +240,6 @@ jobs:
             '',
             f"- Status: {s.get('status')}",
             f"- Top: {s.get('top_module')}",
-            f"- Reason: {s.get('reason')}",
-            f"- Used sources: {s.get('used_source_count', 0)} / {s.get('all_source_count', 0)}",
             f"- Warning count: {s.get('warning_count', 0)}",
           ]))
           PY
@@ -257,6 +266,7 @@ jobs:
           python tools/scripts/run_autoflow_compat.py \
             --variant "${{ needs.plan.outputs.safe_variant }}" \
             --clock-ns "${{ matrix.clock_ns }}" \
+            --openlane-image "${OPENLANE_IMAGE}" \
             --stage-label coarse \
             --artifact-name "coarse-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns"
       - name: Upload coarse attempt artifacts
@@ -324,6 +334,7 @@ jobs:
           python tools/scripts/run_autoflow_compat.py \
             --variant "${{ needs.plan.outputs.safe_variant }}" \
             --clock-ns "${{ matrix.clock_ns }}" \
+            --openlane-image "${OPENLANE_IMAGE}" \
             --stage-label mid \
             --artifact-name "mid-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns"
       - uses: actions/upload-artifact@v4
@@ -388,6 +399,7 @@ jobs:
           python tools/scripts/run_autoflow_compat.py \
             --variant "${{ needs.plan.outputs.safe_variant }}" \
             --clock-ns "${{ matrix.clock_ns }}" \
+            --openlane-image "${OPENLANE_IMAGE}" \
             --stage-label refine-1 \
             --artifact-name "refine1-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns"
       - uses: actions/upload-artifact@v4
@@ -446,6 +458,7 @@ jobs:
           python tools/scripts/run_autoflow_compat.py \
             --variant "${{ needs.plan.outputs.safe_variant }}" \
             --clock-ns "${{ matrix.clock_ns }}" \
+            --openlane-image "${OPENLANE_IMAGE}" \
             --stage-label refine-2 \
             --artifact-name "refine2-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns"
       - uses: actions/upload-artifact@v4
@@ -504,6 +517,7 @@ jobs:
           python tools/scripts/run_autoflow_compat.py \
             --variant "${{ needs.plan.outputs.safe_variant }}" \
             --clock-ns "${{ matrix.clock_ns }}" \
+            --openlane-image "${OPENLANE_IMAGE}" \
             --stage-label refine-3 \
             --artifact-name "refine3-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns"
       - uses: actions/upload-artifact@v4
