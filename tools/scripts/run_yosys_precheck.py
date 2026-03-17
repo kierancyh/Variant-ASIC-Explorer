@@ -122,7 +122,9 @@ def build_reachable_closure(top: str, rtl_sources: List[str]) -> Dict[str, Any]:
         if len(module_to_files.get(module_name, [])) > 1
     }
 
-    closure_sources = sorted({rel for module_name in reachable_modules for rel in module_to_files.get(module_name, [])})
+    closure_sources = sorted(
+        {rel for module_name in reachable_modules for rel in module_to_files.get(module_name, [])}
+    )
     return {
         "ok": len(duplicate_reachable_modules) == 0,
         "reason": "ok" if len(duplicate_reachable_modules) == 0 else "duplicate_reachable_modules",
@@ -174,13 +176,8 @@ def format_closure_report(closure: Dict[str, Any], top: str, rtl_sources: List[s
     return "\n".join(lines).rstrip() + "\n"
 
 
-def yosys_path(path: Path) -> str:
-    """Prefer repo-relative output paths for Yosys; fall back to absolute."""
-    try:
-        rel = path.resolve().relative_to(ROOT)
-        return rel.as_posix()
-    except ValueError:
-        return str(path.resolve())
+def ys_quote(path: str) -> str:
+    return '"' + path.replace('\\', '\\\\').replace('"', '\\"') + '"'
 
 
 def main() -> None:
@@ -319,17 +316,8 @@ def main() -> None:
         })
         return
 
-    def ys_quote(path: str) -> str:
-        return '"' + path.replace('\\', '\\\\').replace('"', '\\"') + '"'
-
     read_files = " ".join(ys_quote(str((ROOT / rel).resolve())) for rel in rtl_sources_closure)
-    # Yosys resolves relative output paths against the script file location.
-    # Since run.ys lives in out_dir, use plain filenames so outputs land in out_dir
-    # instead of trying to create a nested precheck/yosys/precheck/yosys tree.
-    stat_txt_ys = stat_txt.name
-    stat_json_ys = stat_json.name
-    netlist_ys = netlist_path.name
-
+    # run.ys is executed from out_dir, so use plain output filenames here.
     script = f"""
 read_verilog -sv -defer {read_files}
 hierarchy -check -top {top}
@@ -342,9 +330,9 @@ memory
 techmap
 opt
 check
-tee -o {ys_quote(stat_txt_ys)} stat
-tee -o {ys_quote(stat_json_ys)} stat -json
-write_verilog -noattr -noexpr {ys_quote(netlist_ys)}
+tee -o stat.txt stat
+tee -o stat.json stat -json
+write_verilog -noattr -noexpr {top}_synth.v
 """.strip() + "\n"
     script_path.write_text(script, encoding="utf-8")
 
