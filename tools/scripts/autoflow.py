@@ -676,6 +676,10 @@ def main() -> None:
         "github_run_number": os.environ.get("GITHUB_RUN_NUMBER", ""),
         "commit_sha": os.environ.get("GITHUB_SHA", ""),
         "synth_strategy_override": args.synth_strategy or "",
+        "run_antenna_repair": args.run_antenna_repair,
+        "run_heuristic_diode_insertion": args.run_heuristic_diode_insertion,
+        "run_post_grt_design_repair": args.run_post_grt_design_repair,
+        "run_post_grt_resizer_timing": args.run_post_grt_resizer_timing,
     }
     (out_root / "_autoflow_session.json").write_text(json.dumps(session_meta, indent=2), encoding="utf-8")
 

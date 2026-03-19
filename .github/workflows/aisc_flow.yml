@@ -90,15 +90,15 @@ jobs:
         run: |
           matrix_json=$(python tools/scripts/make_clock_matrix.py --min-clock-ns 0 --max-clock-ns "${{ steps.meta.outputs.clock_max_ns_cap }}" --step-ns 20)
           echo "matrix_json=${matrix_json}" >> "$GITHUB_OUTPUT"
-      - name: Capture workflow summary labels
+      - name: Capture Workflow Summary Labels
         id: summary
         run: |
           {
-            echo "summary_synth_strategy=${{ github.event.inputs.summary_synth_strategy || '' }}"
-            echo "summary_antenna_repair=${{ github.event.inputs.summary_antenna_repair || '' }}"
-            echo "summary_heuristic_diode_insertion=${{ github.event.inputs.summary_heuristic_diode_insertion || '' }}"
-            echo "summary_post_grt_design_repair=${{ github.event.inputs.summary_post_grt_design_repair || '' }}"
-            echo "summary_post_grt_resizer_timing=${{ github.event.inputs.summary_post_grt_resizer_timing || '' }}"
+            echo "summary_synth_strategy=${{ github.event.inputs.summary_synth_strategy || 'Default' }}"
+            echo "summary_antenna_repair=${{ github.event.inputs.summary_antenna_repair || 'Enabled' }}"
+            echo "summary_heuristic_diode_insertion=${{ github.event.inputs.summary_heuristic_diode_insertion || 'Enabled' }}"
+            echo "summary_post_grt_design_repair=${{ github.event.inputs.summary_post_grt_design_repair || 'Enabled' }}"
+            echo "summary_post_grt_resizer_timing=${{ github.event.inputs.summary_post_grt_resizer_timing || 'Disabled' }}"
           } >> "$GITHUB_OUTPUT"
       - name: Flow Plan Summary
         run: |
@@ -806,12 +806,10 @@ jobs:
             git commit -m "Publish explorer for run ${GITHUB_RUN_ID}"
             git push origin HEAD:gh-pages
           fi
-      - name: Published Run Explorer Summary
+      - name: Workflow Summary
         run: |
           {
             echo "## Published Run Explorer"
-            echo ""
-            echo "Please allow up to 10 minutes for the page to deploy before clicking:"
             echo ""
             echo "- [Open Explorer](https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/runs/${{ github.run_id }}/)"
           } >> "$GITHUB_STEP_SUMMARY"

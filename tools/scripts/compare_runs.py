@@ -187,73 +187,6 @@ def first_render_path(base_dir: Path) -> Optional[Path]:
 def raw_row_key(raw_key: str) -> str:
     return f"_raw__{raw_key}"
 
-def raw_metric_value(row: Dict[str, Any], raw_key: str) -> Any:
-    return row.get(raw_row_key(raw_key), "")
-
-
-def pretty_raw_metric_label(raw_key: str) -> str:
-    pieces = [piece.replace("_", " ").strip() for piece in raw_key.split("__") if piece.strip()]
-    return " / ".join(piece.title() for piece in pieces)
-
-
-def raw_metric_sort_priority(raw_key: str) -> Tuple[int, str]:
-    priorities = [
-        ("clock__", 0),
-        ("timing__", 0),
-        ("power__", 1),
-        ("design__", 2),
-        ("floorplan__", 2),
-        ("place__", 3),
-        ("route__", 4),
-        ("cts__", 5),
-        ("drc__", 6),
-        ("klayout__", 6),
-        ("magic__", 6),
-        ("lvs__", 6),
-        ("antenna__", 6),
-        ("ir__", 6),
-    ]
-    for prefix, rank in priorities:
-        if raw_key.startswith(prefix):
-            return (rank, raw_key)
-    return (99, raw_key)
-
-
-def iter_raw_metrics(row: Dict[str, Any]) -> List[Tuple[str, Any]]:
-    items: List[Tuple[str, Any]] = []
-    for key, value in row.items():
-        if not key.startswith("_raw__"):
-            continue
-        if value in ("", None, "None"):
-            continue
-        raw_key = key[len("_raw__") :]
-        items.append((raw_key, value))
-    items.sort(key=lambda item: raw_metric_sort_priority(item[0]))
-    return items
-
-
-def pick_raw_metric_items(
-    row: Dict[str, Any],
-    prefixes: Tuple[str, ...],
-    consumed: Set[str],
-    *,
-    limit: int = 8,
-    catch_all: bool = False,
-) -> List[Tuple[str, Any]]:
-    selected: List[Tuple[str, Any]] = []
-    for raw_key, value in iter_raw_metrics(row):
-        if raw_key in consumed:
-            continue
-        matches = True if catch_all else any(raw_key.startswith(prefix) for prefix in prefixes)
-        if not matches:
-            continue
-        consumed.add(raw_key)
-        selected.append((pretty_raw_metric_label(raw_key), value))
-        if len(selected) >= limit:
-            break
-    return selected
-
-
 
 def collect_rows(artifacts_root: Path) -> List[Dict[str, str]]:
     rows: List[Dict[str, str]] = []
@@ -269,6 +202,7 @@ def collect_rows(artifacts_root: Path) -> List[Dict[str, str]]:
             base_dir = csv_path.parent
             meta_path = base_dir / "run_meta.json"
             meta = load_json(meta_path)
+            session_meta = load_json(base_dir.parent / "_autoflow_session.json")
             started = parse_attempt_started(base_dir / "attempt_started.txt")
             raw_metrics = load_json(base_dir / "metrics_raw.json")
             raw_flat = flatten_scalar_metrics(raw_metrics)
@@ -281,6 +215,11 @@ def collect_rows(artifacts_root: Path) -> List[Dict[str, str]]:
             row["_clock_requested"] = str(meta.get("clock_ns_requested", row.get("clock_ns", "")))
             row["_github_run_id"] = str(meta.get("github_run_id", ""))
             row["_synth_strategy_override"] = str(meta.get("synth_strategy_override", ""))
+            row["_session_synth_strategy"] = str(session_meta.get("synth_strategy_override", ""))
+            row["_session_antenna_repair"] = str(session_meta.get("run_antenna_repair", ""))
+            row["_session_heuristic_diode_insertion"] = str(session_meta.get("run_heuristic_diode_insertion", ""))
+            row["_session_post_grt_design_repair"] = str(session_meta.get("run_post_grt_design_repair", ""))
+            row["_session_post_grt_resizer_timing"] = str(session_meta.get("run_post_grt_resizer_timing", ""))
             row["_attempt_number"] = started.get("attempt", "")
             row["_attempt_started_at"] = started.get("started_at", "")
             row["_metrics_raw_present"] = "yes" if raw_metrics else "no"
@@ -428,15 +367,17 @@ def publish_run_site_artifact(base_dir: Path, row: Dict[str, str], site_artifact
             copy_file_if_exists(src, site_artifact_dir / name)
             published[name] = str(site_artifact_dir / name)
 
-    render_path = Path(row["_render_path"]) if row.get("_render_path") else None
-    if render_path and render_path.exists():
-        dst = site_artifact_dir / "renders" / render_path.name
-        copy_file_if_exists(render_path, dst)
-        published["render_path"] = str(dst)
-
     gds_path = Path(row["_gds_path"]) if row.get("_gds_path") else None
-    published["gds_exists"] = "yes" if gds_path and gds_path.exists() else "no"
-    published["gds_published"] = "no"
+    if gds_path and gds_path.exists():
+        dst = site_artifact_dir / gds_path.name
+        copy_file_if_exists(gds_path, dst)
+        published["gds_exists"] = "yes"
+        published["gds_published"] = "yes" if dst.exists() else "no"
+        if dst.exists():
+            published["gds_path"] = str(dst)
+    else:
+        published["gds_exists"] = "no"
+        published["gds_published"] = "no"
 
     return published
 
@@ -616,31 +557,38 @@ def badge_html(status: str) -> str:
     }.get(s, "skip")
     return f'<span class="badge {cls}">{html.escape(s or "UNKNOWN")}</span>'
 
-def value_or_dash(v: Any) -> str:
-    if isinstance(v, bool):
-        s = "yes" if v else "no"
-    else:
-        s = "" if v is None else str(v)
-    return html.escape(s) if s not in {"", "None"} else "—"
+
+def display_value(value: Any) -> str:
+    text = str(value or "").strip()
+    return text if text else "—"
 
 
-def kv_rows(items: List[Tuple[str, Any]]) -> str:
+def pretty_metric_label(name: str) -> str:
+    text = str(name or "").replace("_raw__", "")
+    text = text.replace("__", " / ")
+    text = text.replace("_", " ").strip()
+    if not text:
+        return "Metric"
+    return text[:1].upper() + text[1:]
+
+
+def kv_rows(items: Sequence[Tuple[str, Any]]) -> str:
     return "".join(
-        f"<tr><td>{html.escape(k)}</td><td>{value_or_dash(v)}</td></tr>"
-        for k, v in items
+        f"<tr><th>{html.escape(str(label))}</th><td>{html.escape(display_value(value))}</td></tr>"
+        for label, value in items
     )
 
 
-def metric_group_html(title: str, items: List[Tuple[str, Any]]) -> str:
+def metric_group_html(title: str, items: Sequence[Tuple[str, Any]]) -> str:
+    filtered = [(label, value) for label, value in items if str(value or "").strip()]
+    if not filtered:
+        return ""
     return (
-        f'<section class="metric-group table-card">'
-        f'<div class="table-head"><h3>{html.escape(title)}</h3></div>'
-        f'<div class="kv-wrap"><table class="kv-table">'
-        f'<colgroup><col class="kv-key"><col class="kv-value"></colgroup>'
-        f"<tr><th>Field</th><th>Value</th></tr>{kv_rows(items)}</table></div>"
-        f"</section>"
+        '<section class="card">'
+        f'<h2>{html.escape(title)}</h2>'
+        f'<table class="kv">{kv_rows(filtered)}</table>'
+        '</section>'
     )
-
 
 
 def write_redirect_page(path: Path, target: str, title: str, description: str) -> None:
@@ -685,6 +633,7 @@ def build_surfer_url(vcd_url: str) -> str:
 
 
 def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> None:
+    gds_href = rel_href(Path(row["_gds_path"]), run_dir) if row.get("_gds_path") else ""
     metrics_path = Path(row.get("_site_metrics_path") or (Path(row["_base_dir"]) / "metrics.csv"))
     metrics_href = rel_href(metrics_path, run_dir)
     failure_summary_href = rel_href(Path(row["_site_failure_summary_path"]), run_dir) if row.get("_site_failure_summary_path") else ""
@@ -703,110 +652,64 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
     if meta_href:
         actions.append(f'<a class="btn secondary" href="{meta_href}">Open run_meta.json</a>')
     if failure_summary_href:
-        actions.append(f'<a class="btn secondary" href="{failure_summary_href}">Open Failure Summary</a>')
-    if row.get("_gds_exists") == "yes":
+        actions.append(f'<a class="btn secondary" href="{failure_summary_href}">Open failure summary</a>')
+    if gds_href:
+        actions.append(f'<a class="btn" href="{gds_href}">Download GDS</a>')
         actions.append(f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener">Open GDS Viewer</a>')
+    elif row.get("_gds_exists") == "yes":
+        actions.append(f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener">Open GDS Viewer Homepage</a>')
 
-    consumed_raw: Set[str] = set()
-
-    timing_items: List[Tuple[str, Any]] = [
-        ("Clock requested", f"{row.get('_clock_requested', '')} ns"),
-        ("Clock reported", f"{row.get('clock_ns_reported', row.get('clock_ns', ''))} ns"),
-        ("Setup WNS", f"{row.get('setup_wns_ns', '')} ns"),
-        ("Setup TNS", f"{row.get('setup_tns_ns', '')} ns"),
-        ("Hold WNS", f"{row.get('hold_wns_ns', '')} ns"),
-        ("Hold TNS", f"{row.get('hold_tns_ns', '')} ns"),
-    ]
-    timing_items.extend(pick_raw_metric_items(row, ("clock__", "timing__"), consumed_raw, limit=10))
-
-    physical_items: List[Tuple[str, Any]] = [
-        ("Core area", row.get("core_area_um2", "")),
-        ("Die area", row.get("die_area_um2", "")),
-        ("Instances", row.get("instance_count", "")),
-        ("Utilization", row.get("utilization_pct", "")),
-        ("Wire length", row.get("wire_length_um", "")),
-        ("Vias", row.get("vias_count", "")),
-    ]
-    physical_items.extend(
-        pick_raw_metric_items(row, ("design__", "floorplan__", "place__", "route__", "cts__"), consumed_raw, limit=12)
-    )
-
-    power_items: List[Tuple[str, Any]] = [
-        ("Total", row.get("power_total_W", "")),
-        ("Internal", row.get("power_internal_W", "")),
-        ("Switching", row.get("power_switching_W", "")),
-        ("Leakage", row.get("power_leakage_W", "")),
-        ("Source", row.get("power_source", "")),
-        ("FAIR STA rpt", row.get("power_fair_sta_rpt", "")),
-    ]
-    power_items.extend(pick_raw_metric_items(row, ("power__",), consumed_raw, limit=10))
-
-    signoff_items: List[Tuple[str, Any]] = [
-        ("DRC", row.get("drc_errors", "")),
-        ("KLayout DRC", row.get("drc_errors_klayout", "")),
-        ("Magic DRC", row.get("drc_errors_magic", "")),
-        ("LVS", row.get("lvs_errors", "")),
-        ("Antenna", row.get("antenna_violations", "")),
-        ("Worst IR drop", row.get("ir_drop_worst_V", "")),
-    ]
-    signoff_items.extend(
-        pick_raw_metric_items(
-            row,
-            ("drc__", "klayout__", "magic__", "lvs__", "antenna__", "ir__"),
-            consumed_raw,
-            limit=12,
-        )
-    )
-
-    additional_raw_items = pick_raw_metric_items(row, tuple(), consumed_raw, limit=24, catch_all=True)
-
-    failure_section = ""
-    failure_summary = row.get("_failure_summary", {})
-    if row.get("status") == "FLOW_FAIL" and isinstance(failure_summary, dict) and failure_summary:
-        checks = failure_summary.get("checks", {}) or {}
-        failure_rows: List[Tuple[str, Any]] = [
-            ("Primary reason", failure_summary.get("reason", row.get("_failure_reason", ""))),
-            ("Likely failing phase", failure_summary.get("likely_failure_phase", row.get("_failure_phase", ""))),
-            ("OpenLane return code", failure_summary.get("openlane_rc", row.get("_failure_openlane_rc", ""))),
-            ("Config generation return code", failure_summary.get("config_generation_rc", row.get("_failure_config_rc", ""))),
-            ("Config generated", checks.get("config_generated", "")),
-            ("OpenLane invoked", checks.get("openlane_invoked", "")),
-            ("Run directory found", checks.get("run_dir_found", "")),
-            ("metrics.csv present", checks.get("metrics_csv_present", "")),
-            ("metrics_raw.json present", checks.get("metrics_raw_present", "")),
-            ("Valid timing present", checks.get("timing_present", "")),
-            ("GDS present", checks.get("gds_present", "")),
-            ("OpenLane run copied", checks.get("openlane_run_present", "")),
-            ("Viewer HTML present", checks.get("viewer_present", "")),
-        ]
-        failure_section = (
-            '<section class="card span-12">'
-            '<div class="metrics-strip">'
-            f'{metric_group_html("Failure Diagnostic", failure_rows)}'
-            "</div>"
-            "</section>"
-        )
-
-    meta_rows = [
-        ("Variant", row.get("_variant")),
-        ("Run folder", row.get("_run_dir")),
-        ("Artifact label", row.get("_artifact")),
-        ("Stage label", row.get("_stage_label")),
-        ("Attempt number", row.get("_attempt_number")),
-        ("GitHub run ID", row.get("_github_run_id")),
-        ("Synthesis override", row.get("_synth_strategy_override")),
-        ("OpenLane run copied", row.get("_openlane_run_present")),
-        ("metrics_raw.json present", row.get("_metrics_raw_present")),
-        ("Raw metric count", row.get("_raw_metric_count")),
-        ("Failure summary present", row.get("_failure_summary_present")),
-        ("Likely failure phase", row.get("_failure_phase")),
-        ("Status", row.get("status")),
-        ("Remarks", row.get("selection_reason")),
-        ("Published on Pages", "Lightweight explorer assets only"),
-        ("Heavy backend outputs", "Kept in GitHub Actions artifacts, not GitHub Pages"),
+    summary_items: List[Tuple[str, Any]] = [
+        ("Variant", row.get("_variant", "")),
+        ("Run directory", row.get("_run_dir", "")),
+        ("Stage", row.get("_stage_label", "")),
+        ("Requested clock", f"{row.get('_clock_requested','')} ns"),
+        ("Reported clock", f"{row.get('clock_ns','')} ns"),
+        ("Status", row.get("status", "")),
+        ("Selection remarks", row.get("selection_reason", "")),
     ]
 
-    raw_group = metric_group_html("Additional Raw Metrics", additional_raw_items) if additional_raw_items else ""
+    timing_keys = ["setup_wns_ns", "setup_tns_ns", "hold_wns_ns", "hold_tns_ns", "clock_ns_reported"]
+    signoff_keys = ["drc_errors", "lvs_errors", "antenna_violations", "ir_drop_worst_V"]
+    physical_keys = ["core_area_um2", "die_area_um2", "instance_count", "utilization_pct", "wire_length_um", "vias_count"]
+    power_keys = ["power_total_W", "power_internal_W", "power_switching_W", "power_leakage_W"]
+
+    handled_non_private = {"status", "selection_reason", "clock_ns"} | set(timing_keys) | set(signoff_keys) | set(physical_keys) | set(power_keys)
+
+    def take(keys: Sequence[str]) -> List[Tuple[str, Any]]:
+        out: List[Tuple[str, Any]] = []
+        for key in keys:
+            value = row.get(key, "")
+            if str(value or "").strip():
+                out.append((pretty_metric_label(key), value))
+        return out
+
+    timing_items = take(timing_keys)
+    signoff_items = take(signoff_keys)
+    physical_items = take(physical_keys)
+    power_items = take(power_keys)
+
+    additional_items: List[Tuple[str, Any]] = []
+    for key in sorted(k for k in row.keys() if k and not k.startswith("_") and k not in handled_non_private):
+        value = row.get(key, "")
+        if str(value or "").strip():
+            additional_items.append((pretty_metric_label(key), value))
+
+    raw_metric_items: List[Tuple[str, Any]] = []
+    for key in sorted(k for k in row.keys() if k.startswith("_raw__")):
+        value = row.get(key, "")
+        if str(value or "").strip():
+            raw_metric_items.append((pretty_metric_label(key), value))
+
+    sections_html = "".join([
+        metric_group_html("Run Summary", summary_items),
+        metric_group_html("Timing", timing_items),
+        metric_group_html("Signoff and Reliability", signoff_items),
+        metric_group_html("Physical", physical_items),
+        metric_group_html("Power", power_items),
+        metric_group_html("Additional Extracted Metrics", additional_items),
+        metric_group_html("Raw Metrics", raw_metric_items),
+    ])
 
     content = f"""<!doctype html>
 <html lang="en">
@@ -817,44 +720,17 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
   <link rel="stylesheet" href="{css_href}">
 </head>
 <body>
-  <div class="wrap">
+  <main class="page">
     <section class="hero">
-      <div class="hero-head">
-        <div class="hero-copy">
-          <p class="eyebrow">Per-run details</p>
-          <h1>{html.escape(row.get('_variant',''))} / {html.escape(row.get('_run_dir',''))}</h1>
-          <p class="muted">{badge_html(row.get('status',''))} &nbsp; Remarks: {html.escape(row.get('selection_reason',''))}</p>
-        </div>
-        <div class="actions">{''.join(actions)}</div>
+      <div>
+        <p class="eyebrow">Per-run details</p>
+        <h1>{html.escape(row.get('_variant',''))} / {html.escape(row.get('_run_dir',''))}</h1>
+        <p class="muted">{badge_html(row.get('status',''))} &nbsp; Remarks: {html.escape(row.get('selection_reason',''))}</p>
       </div>
+      <div class="actions">{''.join(actions)}</div>
     </section>
-
-    <div class="grid">
-      {failure_section}
-
-      <section class="card span-12">
-        <h2>Metrics by Category</h2>
-        <div class="metrics-strip">
-          {metric_group_html("Timing", timing_items)}
-          {metric_group_html("Physical", physical_items)}
-          {metric_group_html("Power (W)", power_items)}
-          {metric_group_html("Signoff", signoff_items)}
-          {raw_group}
-        </div>
-      </section>
-
-      <section class="card span-12 table-card">
-        <div class="table-head"><h2>Metadata</h2></div>
-        <div class="kv-wrap">
-          <table class="kv-table">
-            <colgroup><col class="kv-key"><col class="kv-value"></colgroup>
-            <tr><th>Field</th><th>Value</th></tr>
-            {kv_rows(meta_rows)}
-          </table>
-        </div>
-      </section>
-    </div>
-  </div>
+    {sections_html}
+  </main>
 </body>
 </html>"""
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -924,7 +800,7 @@ body{
 }
 a{color:var(--accent);text-decoration:none}
 img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
-.wrap{max-width:1520px;margin:0 auto;padding:28px 20px 40px}
+.wrap{max-width:1680px;margin:0 auto;padding:24px 12px 40px}
 .hero{
   background:var(--panel-strong);
   border:1px solid var(--border-strong);
@@ -989,30 +865,17 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
 .sort-btn{all:unset;cursor:pointer;font-weight:700;color:var(--text);display:inline-flex;align-items:center;gap:6px}
 .sort-btn:hover,.sort-btn.active{color:var(--accent)}
 .sort-indicator{font-size:11px;color:var(--muted)}
-.wide-table{width:100%;border-collapse:collapse;min-width:1180px}
-.wide-table th,.wide-table td{padding:14px 16px;border-bottom:1px solid var(--border);vertical-align:top}
-.wide-table th{background:rgba(255,248,240,.92);text-align:left;font-size:13px;white-space:nowrap}
+.wide-table{width:100%;border-collapse:collapse;table-layout:fixed}
+.wide-table th,.wide-table td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:top;font-size:13px;overflow-wrap:anywhere;word-break:break-word}
+.wide-table th{background:rgba(255,248,240,.92);text-align:left;font-size:12px;white-space:normal}
 .best-row{background:rgba(139,94,60,.06)}
-.page{max-width:1520px;margin:0 auto;padding:28px 20px 40px}
-.eyebrow{margin:0 0 8px 0;color:var(--muted);font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
-.metrics-strip{display:grid;grid-template-columns:1fr;gap:14px}
-.metric-group{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-lg);padding:0;overflow:hidden}
-.metric-group h3{margin:0;font-size:15px}
-.kv-wrap{overflow:hidden}
-.kv-table{width:100%;border-collapse:collapse;table-layout:fixed;min-width:0}
-.kv-table col.kv-key{width:38%}
-.kv-table col.kv-value{width:62%}
-.kv-table th,.kv-table td{padding:12px 16px;border-bottom:1px solid var(--border);vertical-align:top}
-.kv-table th{background:rgba(255,248,240,.92);text-align:left;font-size:13px}
-.kv-table td:first-child,.kv-table th:first-child{white-space:nowrap}
-.kv-table td:last-child,.kv-table th:last-child{word-break:break-word}
 .kv{width:100%;border-collapse:collapse}
 .kv th,.kv td{padding:10px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}
 .kv th{width:220px;color:var(--muted)}
-.empty{padding:18px;border:1px dashed var(--border);border-radius:16px;color:var(--muted);background:rgba(255,255,255,.55)}
-.waveform-embed iframe{width:100%;min-height:760px;border:1px solid rgba(116,92,62,.22);border-radius:16px;background:#fff}
+.layout-actions{display:flex;gap:6px;flex-wrap:wrap;align-items:center}.layout-actions .btn{padding:6px 10px;font-size:12px}.empty{padding:18px;border:1px dashed var(--border);border-radius:16px;color:var(--muted);background:rgba(255,255,255,.55)}
+@media(max-width:1280px){.wide-table th,.wide-table td{padding:8px 10px;font-size:12px}.btn{padding:7px 10px;font-size:12px}}
 @media(max-width:1080px){.span-7,.span-5{grid-column:span 12}.kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.table-tools .summary{margin-left:0;width:100%}}
-@media(max-width:720px){.kpi-grid{grid-template-columns:1fr}.kv-table col.kv-key{width:42%}.kv-table col.kv-value{width:58%}}
+@media(max-width:720px){.kpi-grid{grid-template-columns:1fr}}
 """
     (assets_dir / "explorer.css").write_text(css, encoding="utf-8")
 
@@ -1035,7 +898,7 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
         row["_gds_exists"] = published.get("gds_exists", "no")
         row["_gds_published"] = published.get("gds_published", "no")
         row["_render_path"] = published.get("render_path", "")
-        row["_gds_path"] = ""
+        row["_gds_path"] = published.get("gds_path", "")
         row["_row_href"] = rel_href(row_site_dir / "index.html", snapshot_root)
         write_run_page(row_site_dir, row, "/")
 
@@ -1044,10 +907,7 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
     pages_base = pages_base_url(repo_slug)
     published_snapshot_prefix = pages_base.rstrip("/") if pages_base else ""
     if published_snapshot_prefix and run_id:
-        published_snapshot_prefix = (
-            f"{published_snapshot_prefix}/runs/"
-            f"{urllib.parse.quote(str(run_id), safe='')}"
-        )
+        published_snapshot_prefix = f"{published_snapshot_prefix}/runs/{urllib.parse.quote(str(run_id), safe='')}"
     elif normalized_site_subdir and published_snapshot_prefix:
         published_snapshot_prefix = published_snapshot_prefix + "/" + urllib.parse.quote(normalized_site_subdir, safe="/")
 
@@ -1088,15 +948,25 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
             return "Default"
         return text
 
+    def resolved_setting(explicit_key: str, row_key: str, default: str) -> str:
+        explicit_value = str(explorer_settings.get(explicit_key) or "").strip()
+        if explicit_value:
+            return pretty_setting(explicit_value, default)
+        for item in ordered:
+            candidate = str(item.get(row_key) or "").strip()
+            if candidate:
+                return pretty_setting(candidate, default)
+        return default
+
     run_id_label = str(run_id or "").strip() or "—"
     repo_slug_label = str(repo_slug or "").strip() or "—"
 
     settings_html = "".join([
-        f"<li><strong>Synthesis strategy:</strong> {html.escape(pretty_setting(explorer_settings.get('synth_strategy'), 'Default'))}</li>",
-        f"<li><strong>Antenna repair:</strong> {html.escape(pretty_setting(explorer_settings.get('antenna_repair')))}</li>",
-        f"<li><strong>Heuristic diode insertion:</strong> {html.escape(pretty_setting(explorer_settings.get('heuristic_diode_insertion')))}</li>",
-        f"<li><strong>Post-GRT design repair:</strong> {html.escape(pretty_setting(explorer_settings.get('post_grt_design_repair')))}</li>",
-        f"<li><strong>Post-GRT resizer timing:</strong> {html.escape(pretty_setting(explorer_settings.get('post_grt_resizer_timing')))}</li>",
+        f"<li><strong>Synthesis strategy:</strong> {html.escape(resolved_setting('synth_strategy', '_session_synth_strategy', 'Default'))}</li>",
+        f"<li><strong>Antenna repair:</strong> {html.escape(resolved_setting('antenna_repair', '_session_antenna_repair', 'Enabled'))}</li>",
+        f"<li><strong>Heuristic diode insertion:</strong> {html.escape(resolved_setting('heuristic_diode_insertion', '_session_heuristic_diode_insertion', 'Enabled'))}</li>",
+        f"<li><strong>Post-GRT design repair:</strong> {html.escape(resolved_setting('post_grt_design_repair', '_session_post_grt_design_repair', 'Enabled'))}</li>",
+        f"<li><strong>Post-GRT resizer timing:</strong> {html.escape(resolved_setting('post_grt_resizer_timing', '_session_post_grt_resizer_timing', 'Disabled'))}</li>",
     ])
 
     stage_values = sorted({str(row.get("_stage_label", "")).strip() for row in ordered if str(row.get("_stage_label", "")).strip()})
@@ -1135,15 +1005,16 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
 
     rows_html: List[str] = []
     for idx, row in enumerate(ordered):
+        layout_actions: List[str] = []
         if row.get("_gds_published") == "yes" and row.get("_gds_path"):
-            gds_html = f'<a class="btn secondary" href="{rel_href(Path(row["_gds_path"]), snapshot_root)}">GDS</a>'
-            viewer_html = f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener noreferrer">Viewer</a>'
+            layout_actions.append(f'<a class="btn secondary" href="{rel_href(Path(row["_gds_path"]), snapshot_root)}">GDS</a>')
+            layout_actions.append(f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener noreferrer">Viewer</a>')
         elif row.get("_gds_exists") == "yes":
-            gds_html = "Artifact only"
-            viewer_html = f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener noreferrer">Viewer</a>'
+            layout_actions.append('<span class="muted">Artifact only</span>')
+            layout_actions.append(f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener noreferrer">Viewer</a>')
         else:
-            gds_html = "—"
-            viewer_html = "—"
+            layout_actions.append('—')
+        layout_html = f'<div class="layout-actions">{"".join(layout_actions)}</div>'
         row_classes = "best-row" if idx == 0 else ""
         run_text = f"{row.get('_variant', '')} / {row.get('_run_dir', '')}"
         rows_html.append(
@@ -1160,11 +1031,9 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
             f'<td>{html.escape(str(row.get("ir_drop_worst_V", "")))}</td>'
             f'<td>{badge_html(row.get("status", ""))}</td>'
             f'<td>{html.escape(str(row.get("selection_reason", "")))}</td>'
-            f'<td>{gds_html}</td>'
-            f'<td>{viewer_html}</td>'
+            f'<td>{layout_html}</td>'
             '</tr>'
         )
-
     sort_filter_script = """
 <script>
 (function () {
@@ -1306,7 +1175,8 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
       <section class="card span-12">
         <h2>Waveform Viewer</h2>
         <div class="actions">{''.join(waveform_actions)}</div>
-        {waveform_embed_html if waveform_embed_html else ('' if local_vcd_href else '<div class="empty">No published VCD was found for this snapshot.</div>')}
+        {waveform_embed_html}
+        {'' if local_vcd_href else '<div class="empty">No published VCD was found for this snapshot.</div>'}
       </section>
 
       <section class="card span-12">
@@ -1364,11 +1234,10 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
               <th><button class="sort-btn" data-key="ir_drop" data-type="number" aria-sort="none">IR drop <span class="sort-indicator">↕</span></button></th>
               <th><button class="sort-btn" data-key="status" data-type="status" aria-sort="none">Status <span class="sort-indicator">↕</span></button></th>
               <th><button class="sort-btn" data-key="remarks" data-type="text" aria-sort="none">Remarks <span class="sort-indicator">↕</span></button></th>
-              <th>GDS</th>
-              <th>GDS Viewer</th>
+              <th>Layout</th>
             </tr>
           </thead>
-          <tbody>{''.join(rows_html) if rows_html else '<tr><td colspan="14" class="muted">No ASIC run rows were collected for this snapshot.</td></tr>'}</tbody>
+          <tbody>{''.join(rows_html) if rows_html else '<tr><td colspan="13" class="muted">No ASIC run rows were collected for this snapshot.</td></tr>'}</tbody>
         </table>
       </div>
     </section>
