@@ -527,7 +527,11 @@ def package_best_bundle(best_bundle_dir: Path, best: Dict[str, Any], precheck: D
 
 
 def rel_href(path: Path, root: Path) -> str:
-    return urllib.parse.quote(str(path.relative_to(root)).replace(os.sep, "/"))
+    try:
+        rel = path.relative_to(root)
+    except ValueError:
+        rel = Path(os.path.relpath(path, root))
+    return urllib.parse.quote(str(rel).replace(os.sep, "/"))
 
 
 def badge_html(status: str) -> str:
@@ -595,6 +599,9 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
     failure_summary_href = rel_href(Path(row["_site_failure_summary_path"]), run_dir) if row.get("_site_failure_summary_path") else ""
     raw_metrics_href = rel_href(Path(row["_site_metrics_raw_path"]), run_dir) if row.get("_site_metrics_raw_path") else ""
     meta_href = rel_href(Path(row["_site_run_meta_path"]), run_dir) if row.get("_site_run_meta_path") else ""
+    snapshot_root = run_dir.parents[1]
+    back_href = rel_href(snapshot_root / "index.html", run_dir)
+    css_href = rel_href(snapshot_root / "assets" / "explorer.css", run_dir)
     details = [
         ("Variant", row.get("_variant", "")),
         ("Stage", row.get("_stage_label", "")),
@@ -611,20 +618,20 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
         ("Heavy backend outputs", "Kept in GitHub Actions artifacts, not GitHub Pages"),
     ]
     actions = [
-        f'<a class="btn" href="../index.html">Back to explorer</a>',
+        f'<a class="btn secondary" href="{back_href}">Back to explorer</a>',
         f'<a class="btn" href="{metrics_href}">Open metrics.csv</a>',
     ]
     if raw_metrics_href:
-        actions.append(f'<a class="btn" href="{raw_metrics_href}">Open metrics_raw.json</a>')
+        actions.append(f'<a class="btn secondary" href="{raw_metrics_href}">Open metrics_raw.json</a>')
     if meta_href:
-        actions.append(f'<a class="btn" href="{meta_href}">Open run_meta.json</a>')
+        actions.append(f'<a class="btn secondary" href="{meta_href}">Open run_meta.json</a>')
     if failure_summary_href:
-        actions.append(f'<a class="btn" href="{failure_summary_href}">Open failure summary</a>')
+        actions.append(f'<a class="btn secondary" href="{failure_summary_href}">Open failure summary</a>')
     if gds_href:
         actions.append(f'<a class="btn" href="{gds_href}">Download GDS</a>')
-        actions.append(f'<a class="btn" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener">Open GDS viewer</a>')
+        actions.append(f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener">Open GDS viewer</a>')
     elif row.get("_gds_exists") == "yes":
-        actions.append(f'<a class="btn" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener">Open GDS viewer homepage</a>')
+        actions.append(f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener">Open GDS viewer homepage</a>')
     preview = f'<img src="{render_href}" alt="layout preview">' if render_href else '<div class="empty">No rendered layout preview found for this run.</div>'
     gds_note = (
         '<p class="muted">Heavy ASIC outputs, including most GDS assets, are intentionally kept out of GitHub Pages so the explorer stays below the Pages size limit. Use the workflow artifacts for full backend outputs.</p>'
@@ -633,28 +640,28 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
     )
     table_rows = "".join(f"<tr><th>{html.escape(k)}</th><td>{html.escape(v)}</td></tr>" for k, v in details)
     content = f"""<!doctype html>
-<html lang=\"en\">
+<html lang="en">
 <head>
-  <meta charset=\"utf-8\">
-  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{html.escape(row.get('_variant',''))} / {html.escape(row.get('_run_dir',''))}</title>
-  <link rel=\"stylesheet\" href=\"../assets/explorer.css\">
+  <link rel="stylesheet" href="{css_href}">
 </head>
 <body>
-  <main class=\"page\">
-    <section class=\"hero\">
+  <main class="page">
+    <section class="hero">
       <div>
-        <p class=\"eyebrow\">Per-run details</p>
+        <p class="eyebrow">Per-run details</p>
         <h1>{html.escape(row.get('_variant',''))} / {html.escape(row.get('_run_dir',''))}</h1>
-        <p class=\"muted\">{badge_html(row.get('status',''))} &nbsp; Remarks: {html.escape(row.get('selection_reason',''))}</p>
+        <p class="muted">{badge_html(row.get('status',''))} &nbsp; Remarks: {html.escape(row.get('selection_reason',''))}</p>
       </div>
-      <div class=\"actions\">{''.join(actions)}</div>
+      <div class="actions">{''.join(actions)}</div>
     </section>
-    <section class=\"card\">
+    <section class="card">
       <h2>Metrics by category</h2>
-      <table class=\"kv\">{table_rows}</table>
+      <table class="kv">{table_rows}</table>
     </section>
-    <section class=\"card\">
+    <section class="card">
       <h2>Layout preview</h2>
       {preview}
       {gds_note}
@@ -667,7 +674,6 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
 
 
 def build_site(
-
     site_root: Path,
     rows: List[Dict[str, str]],
     precheck: Dict[str, Any],
@@ -689,8 +695,122 @@ def build_site(
     assets_dir = snapshot_root / "assets"
     assets_dir.mkdir(parents=True, exist_ok=True)
     css = """
-:root{color-scheme:light dark;--bg:#f4ecdf;--bg-2:#efe4d3;--panel:rgba(255,250,243,.90);--panel-2:rgba(255,255,255,.95);--border:rgba(116,92,62,.20);--text:#2b2218;--muted:#6a5741;--accent:#8b5e3c;--pass:#1f7a45;--warn:#a86e10;--fail:#a12b2b;--skip:#6f7680;--shadow:0 18px 45px rgba(110,84,53,.10)}
-*{box-sizing:border-box} body{margin:0;font-family:Inter,Segoe UI,Arial,sans-serif;background:linear-gradient(180deg,var(--bg),var(--bg-2));color:var(--text)} a{color:var(--accent);text-decoration:none} img{max-width:100%;border-radius:14px;border:1px solid var(--border)} .page{max-width:1280px;margin:0 auto;padding:24px}.hero,.card{background:var(--panel);border:1px solid var(--border);border-radius:22px;box-shadow:var(--shadow)} .hero{padding:26px 28px;display:grid;gap:16px} .eyebrow{margin:0 0 8px 0;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.08em;font-size:.78rem} h1,h2,h3{margin:0 0 12px 0}.muted{color:var(--muted)} .actions{display:flex;flex-wrap:wrap;gap:10px}.btn{display:inline-flex;align-items:center;justify-content:center;padding:10px 14px;border-radius:12px;border:1px solid var(--border);background:var(--panel-2);font-weight:700}.grid{display:grid;gap:16px}.card{padding:20px}.status-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}.pill{padding:12px 14px;border-radius:16px;background:var(--panel-2);border:1px solid var(--border)} .pill .k{display:block;color:var(--muted);font-size:.8rem;margin-bottom:4px}.badge{display:inline-flex;padding:6px 10px;border-radius:999px;color:#fff;font-weight:800;font-size:.8rem;letter-spacing:.03em}.badge.pass{background:var(--pass)}.badge.warn{background:var(--warn)}.badge.fail{background:var(--fail)}.badge.skip{background:var(--skip)} .iframe-wrap{aspect-ratio:16/9;border:1px solid var(--border);border-radius:16px;overflow:hidden;background:#fff}.iframe-wrap iframe{width:100%;height:100%;border:0} .empty{padding:24px;border:1px dashed var(--border);border-radius:16px;color:var(--muted);background:rgba(255,255,255,.55)} .table-wrap{overflow:auto}.table{width:100%;border-collapse:collapse}.table th,.table td{padding:12px 10px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}.table th{font-size:.9rem;color:var(--muted);position:sticky;top:0;background:rgba(255,248,238,.98)} .filters{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px}.filters input,.filters select{padding:10px 12px;border-radius:12px;border:1px solid var(--border);background:var(--panel-2);min-width:180px}.kv{width:100%;border-collapse:collapse}.kv th,.kv td{padding:10px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}.kv th{width:220px;color:var(--muted)} .best{outline:2px solid rgba(139,94,60,.28)} @media (min-width:960px){.hero{grid-template-columns:1.6fr .9fr;align-items:center}} 
+:root{
+  color-scheme:light dark;
+  --bg:#f4ecdf;
+  --bg-grad-1:#f8f1e7;
+  --bg-grad-2:#efe4d3;
+  --panel:rgba(255,250,243,.82);
+  --panel-strong:rgba(255,248,238,.94);
+  --panel-soft:rgba(255,255,255,.46);
+  --border:rgba(116,92,62,.16);
+  --border-strong:rgba(116,92,62,.22);
+  --text:#2f2418;
+  --muted:#716250;
+  --accent:#8b5e3c;
+  --accent-2:#b6845e;
+  --shadow:0 18px 45px rgba(110,84,53,.12);
+  --pass-bg:rgba(73,143,96,.14);
+  --pass-fg:#285a38;
+  --timing-bg:rgba(190,143,45,.16);
+  --timing-fg:#7d5b13;
+  --signoff-bg:rgba(180,83,72,.14);
+  --signoff-fg:#7b2f28;
+  --mixed-bg:rgba(135,96,166,.14);
+  --mixed-fg:#5b3f77;
+  --flow-bg:rgba(120,115,108,.14);
+  --flow-fg:#504a44;
+  --radius-xl:28px;
+  --radius-lg:20px;
+  --radius-md:14px
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:
+    radial-gradient(circle at top left,var(--bg-grad-1)0%,transparent 36%),
+    radial-gradient(circle at top right,var(--bg-grad-2)0%,transparent 28%),
+    linear-gradient(180deg,var(--bg-grad-1)0%,var(--bg)100%);
+  color:var(--text);
+  font:15px/1.6 Inter,Segoe UI,Roboto,Helvetica,Arial,sans-serif
+}
+a{color:var(--accent);text-decoration:none}
+img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
+.wrap{max-width:1520px;margin:0 auto;padding:28px 20px 40px}
+.hero{
+  background:var(--panel-strong);
+  border:1px solid var(--border-strong);
+  border-radius:var(--radius-xl);
+  padding:30px;
+  box-shadow:var(--shadow);
+  margin-bottom:22px
+}
+.hero-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+.hero-copy{max-width:1100px}
+.hero-copy p{margin:0 0 8px 0}
+.settings-list{
+  margin:10px 0 0;
+  padding:0;
+  list-style:none;
+  display:grid;
+  gap:6px;
+  color:var(--muted);
+  font-size:14px
+}
+.settings-list strong{color:var(--text)}
+.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:18px}
+.card{
+  background:var(--panel);
+  border:1px solid var(--border);
+  border-radius:var(--radius-lg);
+  padding:22px;
+  box-shadow:var(--shadow)
+}
+.span-12{grid-column:span 12}
+.span-7{grid-column:span 7}
+.span-5{grid-column:span 5}
+.kpi-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.stat{
+  background:var(--panel-soft);
+  border:1px solid var(--border);
+  border-radius:var(--radius-md);
+  padding:16px
+}
+.stat .label{color:var(--muted);font-size:12px;text-transform:uppercase}
+.stat .value{font-size:28px;font-weight:700}
+.card h2{margin:0 0 12px 0}
+.badge{display:inline-flex;align-items:center;justify-content:center;min-width:112px;padding:6px 10px;border-radius:999px;font-size:12px;font-weight:700}
+.badge.pass{background:var(--pass-bg);color:var(--pass-fg)}
+.badge.timing{background:var(--timing-bg);color:var(--timing-fg)}
+.badge.signoff{background:var(--signoff-bg);color:var(--signoff-fg)}
+.badge.mixed{background:var(--mixed-bg);color:var(--mixed-fg)}
+.badge.flow{background:var(--flow-bg);color:var(--flow-fg)}
+.btn{display:inline-flex;align-items:center;justify-content:center;padding:8px 12px;border-radius:10px;border:1px solid rgba(139,94,60,.20);background:rgba(139,94,60,.08);color:var(--text);font-weight:600;font-size:13px}
+.btn.secondary{border-color:var(--border-strong);background:rgba(255,255,255,.08)}
+.actions{display:flex;gap:8px;flex-wrap:wrap}
+.muted{color:var(--muted)}
+.tag{display:inline-flex;align-items:center;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:700;background:rgba(139,94,60,.12);color:var(--accent)}
+.table-card{padding:0;overflow:hidden}
+.table-head{display:flex;justify-content:space-between;align-items:center;padding:18px 20px;border-bottom:1px solid var(--border)}
+.table-wrap{overflow:auto}
+.table-tools{display:flex;gap:12px;flex-wrap:wrap;align-items:end;padding:16px 20px 0}
+.table-tools label{display:grid;gap:6px;color:var(--muted);font-size:12px;font-weight:700;text-transform:uppercase}
+.table-tools select,.table-tools input[type="search"]{min-width:180px;padding:10px 12px;border-radius:10px;border:1px solid var(--border-strong);background:var(--panel-soft);color:var(--text);font:500 13px/1.2 Inter,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+.table-tools .inline-check{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;text-transform:none;color:var(--text);padding-bottom:2px}
+.table-tools .summary{margin-left:auto;font-size:13px;color:var(--muted);padding-bottom:4px}
+.sort-btn{all:unset;cursor:pointer;font-weight:700;color:var(--text);display:inline-flex;align-items:center;gap:6px}
+.sort-btn:hover,.sort-btn.active{color:var(--accent)}
+.sort-indicator{font-size:11px;color:var(--muted)}
+.wide-table{width:100%;border-collapse:collapse;min-width:1180px}
+.wide-table th,.wide-table td{padding:14px 16px;border-bottom:1px solid var(--border);vertical-align:top}
+.wide-table th{background:rgba(255,248,240,.92);text-align:left;font-size:13px;white-space:nowrap}
+.best-row{background:rgba(139,94,60,.06)}
+.kv{width:100%;border-collapse:collapse}
+.kv th,.kv td{padding:10px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}
+.kv th{width:220px;color:var(--muted)}
+.empty{padding:18px;border:1px dashed var(--border);border-radius:16px;color:var(--muted);background:rgba(255,255,255,.55)}
+@media(max-width:1080px){.span-7,.span-5{grid-column:span 12}.kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.table-tools .summary{margin-left:0;width:100%}}
+@media(max-width:720px){.kpi-grid{grid-template-columns:1fr}}
 """
     (assets_dir / "explorer.css").write_text(css, encoding="utf-8")
 
@@ -712,10 +832,7 @@ def build_site(
         row["_site_failure_summary_path"] = published.get("failure_summary.json", "") or published.get("failure_summary.md", "")
         row["_gds_exists"] = published.get("gds_exists", "no")
         row["_gds_published"] = published.get("gds_published", "no")
-        if published.get("render_path"):
-            row["_render_path"] = published["render_path"]
-        else:
-            row["_render_path"] = ""
+        row["_render_path"] = published.get("render_path", "")
         row["_gds_path"] = ""
         row["_row_href"] = rel_href(row_site_dir / "index.html", snapshot_root)
         write_run_page(row_site_dir, row, "/")
@@ -723,137 +840,198 @@ def build_site(
     published_precheck = publish_precheck_site_artifacts(precheck, snapshot_root)
 
     pages_base = pages_base_url(repo_slug)
-    published_vcd = ""
-    surfer_url = ""
+    published_snapshot_prefix = pages_base.rstrip("/") if pages_base else ""
+    if normalized_site_subdir and published_snapshot_prefix:
+        published_snapshot_prefix = published_snapshot_prefix + "/" + urllib.parse.quote(normalized_site_subdir, safe="/")
+
     local_vcd_href = ""
-    compile_log_href = ""
+    published_vcd = ""
+    surfer_url = SURFER_WEB_APP_URL
     run_log_href = ""
     yosys_log_href = ""
     yosys_stat_href = ""
     yosys_netlist_href = ""
-    published_snapshot_prefix = pages_base.rstrip("/") if pages_base else ""
-    if normalized_site_subdir and published_snapshot_prefix:
-        published_snapshot_prefix = (
-                published_snapshot_prefix
-                + "/"
-                + urllib.parse.quote(normalized_site_subdir, safe="/")
-        )
 
     if published_precheck.get("vcd_path"):
         local_vcd_href = rel_href(Path(published_precheck["vcd_path"]), snapshot_root)
         if published_snapshot_prefix:
             published_vcd = f"{published_snapshot_prefix}/{local_vcd_href}"
             surfer_url = build_surfer_url(published_vcd)
-    if published_precheck.get("compile_log"):
-        compile_log_href = rel_href(Path(published_precheck["compile_log"]), snapshot_root)
     if published_precheck.get("run_log"):
         run_log_href = rel_href(Path(published_precheck["run_log"]), snapshot_root)
     if published_precheck.get("yosys_log"):
         yosys_log_href = rel_href(Path(published_precheck["yosys_log"]), snapshot_root)
     if published_precheck.get("yosys_stat_txt"):
         yosys_stat_href = rel_href(Path(published_precheck["yosys_stat_txt"]), snapshot_root)
+    elif published_precheck.get("yosys_stat_json"):
+        yosys_stat_href = rel_href(Path(published_precheck["yosys_stat_json"]), snapshot_root)
     if published_precheck.get("yosys_netlist"):
         yosys_netlist_href = rel_href(Path(published_precheck["yosys_netlist"]), snapshot_root)
 
-    stage_options = sorted({row.get("_stage_label", "") for row in ordered if row.get("_stage_label")})
-    stage_options_html = "".join(f'<option value="{html.escape(x)}">{html.escape(x)}</option>' for x in stage_options)
+    def pretty_setting(value: Any, default: str = "—") -> str:
+        text = str(value or "").strip()
+        if not text:
+            return default
+        low = text.lower()
+        if low in {"true", "1", "yes", "enabled", "enable"}:
+            return "Enabled"
+        if low in {"false", "0", "no", "disabled", "disable"}:
+            return "Disabled"
+        if low == "default (not overriden)":
+            return "Default"
+        return text
 
-    settings_rows = "".join(
-        f"<tr><th>{html.escape(k.replace('_',' ').title())}</th><td>{html.escape(str(v or ''))}</td></tr>"
-        for k, v in explorer_settings.items()
-    ) or '<tr><th>Settings</th><td>Workflow summary settings were not provided for this snapshot.</td></tr>'
+    run_id_label = str(run_id or "").strip() or "—"
+    repo_slug_label = str(repo_slug or "").strip() or "—"
 
-    precheck_strip = f"""
-<div class=\"status-strip\">
-  <div class=\"pill\"><span class=\"k\">Icarus</span>{badge_html(precheck.get('icarus', {}).get('status', 'MISSING'))}</div>
-  <div class=\"pill\"><span class=\"k\">Yosys</span>{badge_html(precheck.get('yosys', {}).get('status', 'MISSING'))}</div>
-  <div class=\"pill\"><span class=\"k\">Top module</span>{html.escape(str(precheck.get('top_module','')))}</div>
-  <div class=\"pill\"><span class=\"k\">TB top</span>{html.escape(str(precheck.get('testbench_top','') or '—'))}</div>
-  <div class=\"pill\"><span class=\"k\">VCD present</span>{'Yes' if precheck.get('vcd_present') else 'No'}</div>
-  <div class=\"pill\"><span class=\"k\">ASIC gating</span>{'Proceed' if precheck.get('gate_ok') else 'Stopped before ASIC'}</div>
-</div>
-"""
+    settings_html = "".join([
+        f"<li><strong>Synthesis strategy:</strong> {html.escape(pretty_setting(explorer_settings.get('synth_strategy'), 'Default'))}</li>",
+        f"<li><strong>Antenna repair:</strong> {html.escape(pretty_setting(explorer_settings.get('antenna_repair')))}</li>",
+        f"<li><strong>Heuristic diode insertion:</strong> {html.escape(pretty_setting(explorer_settings.get('heuristic_diode_insertion')))}</li>",
+        f"<li><strong>Post-GRT design repair:</strong> {html.escape(pretty_setting(explorer_settings.get('post_grt_design_repair')))}</li>",
+        f"<li><strong>Post-GRT resizer timing:</strong> {html.escape(pretty_setting(explorer_settings.get('post_grt_resizer_timing')))}</li>",
+    ])
 
-    waveform_actions = []
-    if surfer_url:
-        waveform_actions.append(f'<a class="btn" href="{html.escape(surfer_url)}" target="_blank" rel="noopener">Open VCD waveform viewer on Surfer</a>')
+    stage_values = sorted({str(row.get("_stage_label", "")).strip() for row in ordered if str(row.get("_stage_label", "")).strip()})
+    stage_options_html = "".join(
+        f'<option value="{html.escape(stage)}">{html.escape(stage)}</option>'
+        for stage in stage_values
+    )
+
+    waveform_actions: List[str] = []
+    waveform_actions.append(f'<a class="btn" href="{html.escape(surfer_url)}" target="_blank" rel="noopener noreferrer">Surfer Waveform Viewer</a>')
     if local_vcd_href:
-        waveform_actions.append(f'<a class="btn" href="{local_vcd_href}">Download VCD</a>')
-    if compile_log_href:
-        waveform_actions.append(f'<a class="btn" href="{compile_log_href}">Open compile log</a>')
+        waveform_actions.append(f'<a class="btn secondary" href="{local_vcd_href}">Download VCD</a>')
     if run_log_href:
-        waveform_actions.append(f'<a class="btn" href="{run_log_href}">Open run log</a>')
+        waveform_actions.append(f'<a class="btn secondary" href="{run_log_href}">Open Run Log</a>')
     if yosys_log_href:
-        waveform_actions.append(f'<a class="btn" href="{yosys_log_href}">Open Yosys log</a>')
+        waveform_actions.append(f'<a class="btn secondary" href="{yosys_log_href}">Yosys Log</a>')
     if yosys_stat_href:
-        waveform_actions.append(f'<a class="btn" href="{yosys_stat_href}">Open stat.txt</a>')
+        waveform_actions.append(f'<a class="btn secondary" href="{yosys_stat_href}">Yosys Statistics</a>')
     if yosys_netlist_href:
-        waveform_actions.append(f'<a class="btn" href="{yosys_netlist_href}">Open synthesized netlist</a>')
-    waveform_body = (
-        f'<div class="iframe-wrap"><iframe src="{html.escape(surfer_url)}" title="Surfer waveform viewer" loading="lazy"></iframe></div>'
-        if surfer_url
-        else '<div class="empty">The VCD was not published for this snapshot, so the embedded Surfer view is unavailable.</div>'
-    )
+        waveform_actions.append(f'<a class="btn secondary" href="{yosys_netlist_href}">Download Synthesized Netlist</a>')
 
-    best_block = (
-        f"<div class=\"card best\"><h2>Chosen best run</h2><p><strong>Run:</strong> {html.escape(str(best.get('_variant','')))} / {html.escape(str(best.get('_run_dir','')))}</p><p><strong>Clock:</strong> {html.escape(str(best.get('clock_ns','')))} ns</p><p><strong>Status:</strong> {badge_html(best.get('status',''))}</p><p><strong>Remarks:</strong> {html.escape(str(best.get('selection_reason','')))}</p></div>"
-        if best
-        else '<div class="card"><h2>Chosen best run</h2><p class="muted">No ASIC attempt metrics were collected for this snapshot.</p></div>'
-    )
+    def sort_num_value(value: Any) -> str:
+        n = to_float(value)
+        return "" if n is None else str(n)
 
-    rows_html = []
+    rows_html: List[str] = []
     for idx, row in enumerate(ordered):
-        if row.get("_gds_path"):
-            gds = '<a href="{}">GDS</a>'.format(rel_href(Path(row["_gds_path"]), snapshot_root))
-            viewer = f'<a href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener">Viewer</a>'
+        if row.get("_gds_published") == "yes" and row.get("_gds_path"):
+            gds_html = f'<a class="btn secondary" href="{rel_href(Path(row["_gds_path"]), snapshot_root)}">GDS</a>'
+            viewer_html = f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener noreferrer">Viewer</a>'
         elif row.get("_gds_exists") == "yes":
-            gds = 'Artifact only'
-            viewer = f'<a href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener">Homepage</a>'
+            gds_html = "Artifact only"
+            viewer_html = f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener noreferrer">Viewer</a>'
         else:
-            gds = '—'
-            viewer = '—'
-        classes = 'best' if idx == 0 else ''
+            gds_html = "—"
+            viewer_html = "—"
+        row_classes = "best-row" if idx == 0 else ""
+        run_text = f"{row.get('_variant', '')} / {row.get('_run_dir', '')}"
         rows_html.append(
-            f"<tr class=\"{classes}\" data-status=\"{html.escape(row.get('status',''))}\" data-stage=\"{html.escape(row.get('_stage_label',''))}\">"
-            f"<td>{'Selected' if idx == 0 else ''}</td>"
-            f"<td><a href=\"{html.escape(row.get('_row_href',''))}\">{html.escape(row.get('_variant',''))} / {html.escape(row.get('_run_dir',''))}</a></td>"
-            f"<td>{html.escape(row.get('clock_ns',''))}</td>"
-            f"<td>{html.escape(row.get('setup_wns_ns',''))}</td>"
-            f"<td>{html.escape(row.get('setup_tns_ns',''))}</td>"
-            f"<td>{html.escape(row.get('core_area_um2',''))}</td>"
-            f"<td>{html.escape(row.get('power_total_W',''))}</td>"
-            f"<td>{html.escape(row.get('drc_errors',''))}</td>"
-            f"<td>{html.escape(row.get('lvs_errors',''))}</td>"
-            f"<td>{html.escape(row.get('antenna_violations',''))}</td>"
-            f"<td>{html.escape(row.get('ir_drop_worst_V',''))}</td>"
-            f"<td>{badge_html(row.get('status',''))}</td>"
-            f"<td>{html.escape(row.get('selection_reason',''))}</td>"
-            f"<td>{gds}</td>"
-            f"<td>{viewer}</td>"
-            "</tr>"
+            f'<tr class="{row_classes}" data-selected="{1 if idx == 0 else 0}" data-run="{html.escape(run_text)}" data-clock="{html.escape(sort_num_value(row.get("clock_ns")))}" data-setup_wns="{html.escape(sort_num_value(row.get("setup_wns_ns")))}" data-setup_tns="{html.escape(sort_num_value(row.get("setup_tns_ns")))}" data-core_area="{html.escape(sort_num_value(row.get("core_area_um2")))}" data-power_total="{html.escape(sort_num_value(row.get("power_total_W")))}" data-drc="{html.escape(sort_num_value(row.get("drc_errors")))}" data-lvs="{html.escape(sort_num_value(row.get("lvs_errors")))}" data-antenna="{html.escape(sort_num_value(row.get("antenna_violations")))}" data-ir_drop="{html.escape(sort_num_value(row.get("ir_drop_worst_V")))}" data-status="{html.escape(str(row.get("status", "")))}" data-stage="{html.escape(str(row.get("_stage_label", "")))}" data-remarks="{html.escape(str(row.get("selection_reason", "")))}">'
+            f'<td><a href="{html.escape(row.get("_row_href", ""))}"><strong>{html.escape(str(row.get("_variant", "")))} / {html.escape(str(row.get("_run_dir", "")))}</strong></a></td>'
+            f'<td>{html.escape(str(row.get("clock_ns", "")))}</td>'
+            f'<td>{html.escape(str(row.get("setup_wns_ns", "")))}</td>'
+            f'<td>{html.escape(str(row.get("setup_tns_ns", "")))}</td>'
+            f'<td>{html.escape(str(row.get("core_area_um2", "")))}</td>'
+            f'<td>{html.escape(str(row.get("power_total_W", "")))}</td>'
+            f'<td>{html.escape(str(row.get("drc_errors", "")))}</td>'
+            f'<td>{html.escape(str(row.get("lvs_errors", "")))}</td>'
+            f'<td>{html.escape(str(row.get("antenna_violations", "")))}</td>'
+            f'<td>{html.escape(str(row.get("ir_drop_worst_V", "")))}</td>'
+            f'<td>{badge_html(row.get("status", ""))}</td>'
+            f'<td>{html.escape(str(row.get("selection_reason", "")))}</td>'
+            f'<td>{gds_html}</td>'
+            f'<td>{viewer_html}</td>'
+            '</tr>'
         )
 
     sort_filter_script = """
 <script>
-(() => {
-  const q = document.getElementById('searchBox');
-  const s = document.getElementById('statusFilter');
-  const g = document.getElementById('stageFilter');
-  const rows = Array.from(document.querySelectorAll('tbody tr'));
-  function apply(){
-    const needle = (q.value || '').toLowerCase();
-    const status = s.value;
-    const stage = g.value;
-    for(const row of rows){
-      const txt = row.innerText.toLowerCase();
-      const okText = !needle || txt.includes(needle);
-      const okStatus = !status || row.dataset.status === status;
-      const okStage = !stage || row.dataset.stage === stage;
-      row.style.display = (okText && okStatus && okStage) ? '' : 'none';
+(function () {
+  const table = document.querySelector(".wide-table");
+  if (!table) return;
+  const tbody = table.querySelector("tbody");
+  const headerButtons = Array.from(document.querySelectorAll(".sort-btn"));
+  const statusFilter = document.getElementById("statusFilter");
+  const stageFilter = document.getElementById("stageFilter");
+  const searchFilter = document.getElementById("searchFilter");
+  const pinSelected = document.getElementById("pinSelected");
+  const visibleSummary = document.getElementById("visibleRowsSummary");
+  const allRows = Array.from(tbody.querySelectorAll("tr"));
+  let currentKey = "";
+  let currentDir = "asc";
+  const statusRank = {"PASS": 0, "TIMING_FAIL": 1, "SIGNOFF_FAIL": 2, "SIGNOFF_AND_TIMING_FAIL": 3, "FLOW_FAIL": 4};
+  function getRowValue(row, key, type) {
+    const raw = (row.dataset[key] || "").trim();
+    if (type === "number") {
+      if (raw === "") return Number.POSITIVE_INFINITY;
+      const parsed = Number(raw);
+      return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
     }
+    if (type === "status") {
+      return Object.prototype.hasOwnProperty.call(statusRank, raw) ? statusRank[raw] : 999;
+    }
+    return raw.toLowerCase();
   }
-  [q,s,g].forEach(el => el && el.addEventListener('input', apply));
-  apply();
+  function updateHeaderState() {
+    headerButtons.forEach((btn) => {
+      const indicator = btn.querySelector(".sort-indicator");
+      const isActive = btn.dataset.key === currentKey;
+      btn.classList.toggle("active", isActive);
+      btn.setAttribute("aria-sort", isActive ? (currentDir === "asc" ? "ascending" : "descending") : "none");
+      if (indicator) indicator.textContent = isActive ? (currentDir === "asc" ? "▲" : "▼") : "↕";
+    });
+  }
+  function applyFilters(rows) {
+    const wantedStatus = statusFilter && statusFilter.value ? statusFilter.value : "";
+    const wantedStage = stageFilter && stageFilter.value ? stageFilter.value : "";
+    const term = searchFilter && searchFilter.value ? searchFilter.value.trim().toLowerCase() : "";
+    return rows.filter((row) => {
+      const statusOk = !wantedStatus || (row.dataset.status || "") === wantedStatus;
+      const stageOk = !wantedStage || (row.dataset.stage || "") === wantedStage;
+      const haystack = [row.dataset.run || "", row.dataset.status || "", row.dataset.stage || "", row.dataset.remarks || ""].join(" ").toLowerCase();
+      const searchOk = !term || haystack.includes(term);
+      return statusOk && stageOk && searchOk;
+    });
+  }
+  function render() {
+    let rows = applyFilters(allRows.slice());
+    if (currentKey) {
+      const activeBtn = headerButtons.find((btn) => btn.dataset.key === currentKey);
+      const type = activeBtn ? (activeBtn.dataset.type || "text") : "text";
+      rows.sort((a, b) => {
+        const av = getRowValue(a, currentKey, type);
+        const bv = getRowValue(b, currentKey, type);
+        if (av < bv) return currentDir === "asc" ? -1 : 1;
+        if (av > bv) return currentDir === "asc" ? 1 : -1;
+        return 0;
+      });
+    }
+    if (pinSelected && pinSelected.checked) {
+      rows.sort((a, b) => Number(b.dataset.selected || "0") - Number(a.dataset.selected || "0"));
+    }
+    tbody.innerHTML = "";
+    rows.forEach((row) => tbody.appendChild(row));
+    if (visibleSummary) visibleSummary.textContent = "Showing " + rows.length + " of " + allRows.length + " runs";
+    updateHeaderState();
+  }
+  headerButtons.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const key = btn.dataset.key || "";
+      if (!key) return;
+      if (currentKey === key) currentDir = currentDir === "asc" ? "desc" : "asc";
+      else { currentKey = key; currentDir = "asc"; }
+      render();
+    });
+  });
+  [statusFilter, stageFilter, searchFilter, pinSelected].forEach((el) => {
+    if (!el) return;
+    el.addEventListener("input", render);
+    el.addEventListener("change", render);
+  });
+  render();
 })();
 </script>
 """
@@ -867,80 +1045,116 @@ def build_site(
     }
     (site_root / "site_manifest.json").write_text(json.dumps(site_manifest, indent=2), encoding="utf-8")
 
-    title_run = f"GitHub run {run_id}" if str(run_id).strip() else "current snapshot"
-    best_text = (
-        f"<p><strong>Selected best run:</strong> {html.escape(str(best.get('_variant','')))} / {html.escape(str(best.get('_run_dir','')))}</p>"
-        if best else "<p class=\"muted\">No ASIC best run is available because no metrics.csv files were collected.</p>"
+    selection_block = (
+        f'<section class="card span-7"><h2>Chosen best run</h2><p><strong>Run:</strong> {html.escape(str(best.get("_variant","")))} / {html.escape(str(best.get("_run_dir","")))}</p><p><strong>Clock:</strong> {html.escape(str(best.get("clock_ns","")))} ns</p><p><strong>Status:</strong> {badge_html(best.get("status",""))}</p><p><strong>Remarks:</strong> {html.escape(str(best.get("selection_reason","")))}</p></section>'
+        if best else '<section class="card span-7"><h2>Chosen best run</h2><p class="muted">No ASIC run rows were collected for this snapshot.</p></section>'
     )
 
     index_html = f"""<!doctype html>
-<html lang=\"en\">
+<html lang="en">
 <head>
-  <meta charset=\"utf-8\">
-  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ASIC Flow Run Explorer</title>
-  <link rel=\"stylesheet\" href=\"assets/explorer.css\">
+  <link rel="stylesheet" href="assets/explorer.css">
 </head>
 <body>
-  <main class=\"page grid\">
-    <section class=\"hero\">
-      <div>
-        <p class=\"eyebrow\">Variant-driven Sky130 + OpenLane2 / LibreLane explorer</p>
-        <h1>ASIC Flow Run Explorer</h1>
-        <p class=\"muted\">Snapshot: {html.escape(title_run)}. This page now shows the front-end precheck sequence first: Icarus RTL simulation → VCD waveform viewer on Surfer → Yosys structural pre-check → existing ASIC comparison.</p>
+  <div class="wrap">
+    <section class="hero">
+      <div class="hero-head">
+        <div class="hero-copy">
+          <h1>ASIC Flow Run Explorer</h1>
+          <p>Published summary of all collected runs, richer per-run metrics, and direct access to downloadable layout data.</p>
+          <p><strong>Workflow:</strong> Icarus RTL simulation → VCD waveform viewer on Surfer → Yosys structural pre-check → existing ASIC comparison.</p>
+          <p><strong>Snapshot run ID:</strong> {html.escape(run_id_label)}<br><strong>Repository:</strong> {html.escape(repo_slug_label)}</p>
+          <ul class="settings-list">{settings_html}</ul>
+        </div>
       </div>
-      <div class=\"actions\">{''.join(waveform_actions[:1]) if waveform_actions else ''}</div>
     </section>
 
-    <section class=\"card\">
-      <h2>Precheck status</h2>
-      {precheck_strip}
-    </section>
+    <div class="grid">
+      <section class="card span-5">
+        <h2>Selection order</h2>
+        <ol>
+          <li>Clean signoff plus non-negative setup timing wins.</li>
+          <li>If no full PASS exists, clean signoff wins over signoff violations.</li>
+          <li>Among comparable runs, lower requested clock period is preferred.</li>
+          <li>Setup WNS/TNS are used as tie-breakers.</li>
+        </ol>
+      </section>
 
-    <section class=\"card\">
-      <h2>Embedded waveform</h2>
-      <p class=\"muted\">The summary surface links the first stage directly to the VCD waveform on Surfer before the structural Yosys check and the ASIC matrix results.</p>
-      <div class=\"actions\">{''.join(waveform_actions)}</div>
-      {waveform_body}
-    </section>
+      {selection_block}
 
-    {best_block}
+      <section class="card span-12">
+        <h2>Waveform Viewer</h2>
+        <div class="actions">{''.join(waveform_actions)}</div>
+        {'' if local_vcd_href else '<div class="empty">No published VCD was found for this snapshot.</div>'}
+      </section>
 
-    <section class=\"card\">
-      <h2>Explorer settings</h2>
-      <table class=\"kv\">{settings_rows}</table>
-    </section>
+      <section class="card span-12">
+        <h2>Run overview</h2>
+        <div class="kpi-grid">
+          <div class="stat"><div class="label">Total runs</div><div class="value">{len(ordered)}</div></div>
+          <div class="stat"><div class="label">PASS runs</div><div class="value">{sum(1 for r in ordered if r.get('status') == 'PASS')}</div></div>
+          <div class="stat"><div class="label">Non-pass runs</div><div class="value">{sum(1 for r in ordered if r.get('status') != 'PASS')}</div></div>
+          <div class="stat"><div class="label">Best clock</div><div class="value">{html.escape(str(best.get('clock_ns', '')))}</div></div>
+        </div>
+      </section>
+    </div>
 
-    <section class=\"card\">
-      <h2>Selection order</h2>
-      <ol>
-        <li>Clean signoff plus non-negative setup timing wins.</li>
-        <li>If no full PASS exists, clean signoff wins over signoff violations.</li>
-        <li>Among comparable runs, lower requested clock period is preferred.</li>
-        <li>Setup WNS/TNS are used as tie-breakers.</li>
-      </ol>
-      {best_text}
-    </section>
-
-    <section class=\"card\">
-      <h2>All runs</h2>
-      <div class=\"filters\">
-        <select id=\"statusFilter\"><option value=\"\">Status: All</option><option>PASS</option><option>TIMING_FAIL</option><option>SIGNOFF_FAIL</option><option>SIGNOFF_AND_TIMING_FAIL</option><option>FLOW_FAIL</option></select>
-        <select id=\"stageFilter\"><option value=\"\">Stage: All</option>{stage_options_html}</select>
-        <input id=\"searchBox\" placeholder=\"Search runs, remarks, metrics\">
+    <section class="card table-card">
+      <div class="table-head"><h2>All runs</h2><span>Top row is the selected best run</span></div>
+      <div class="table-tools">
+        <label>Status
+          <select id="statusFilter">
+            <option value="">All</option>
+            <option value="PASS">PASS</option>
+            <option value="TIMING_FAIL">TIMING_FAIL</option>
+            <option value="SIGNOFF_FAIL">SIGNOFF_FAIL</option>
+            <option value="SIGNOFF_AND_TIMING_FAIL">SIGNOFF_AND_TIMING_FAIL</option>
+            <option value="FLOW_FAIL">FLOW_FAIL</option>
+          </select>
+        </label>
+        <label>Stage
+          <select id="stageFilter">
+            <option value="">All</option>
+            {stage_options_html}
+          </select>
+        </label>
+        <label>Search
+          <input id="searchFilter" type="search" placeholder="Run, remarks, status...">
+        </label>
+        <label class="inline-check">
+          <input type="checkbox" id="pinSelected" checked>
+          Keep selected run on top
+        </label>
+        <div class="summary" id="visibleRowsSummary"></div>
       </div>
-      <div class=\"table-wrap\">
-        <table class=\"table\">
+      <div class="table-wrap">
+        <table class="wide-table">
           <thead>
             <tr>
-              <th>Selected</th><th>Run</th><th>Clock (ns)</th><th>Setup WNS</th><th>Setup TNS</th><th>Core area</th><th>Total power</th><th>DRC</th><th>LVS</th><th>Antenna</th><th>IR drop</th><th>Status</th><th>Remarks</th><th>GDS</th><th>GDS Viewer</th>
+              <th><button class="sort-btn" data-key="run" data-type="text" aria-sort="none">Run <span class="sort-indicator">↕</span></button></th>
+              <th><button class="sort-btn" data-key="clock" data-type="number" aria-sort="none">Clock (ns) <span class="sort-indicator">↕</span></button></th>
+              <th><button class="sort-btn" data-key="setup_wns" data-type="number" aria-sort="none">Setup WNS <span class="sort-indicator">↕</span></button></th>
+              <th><button class="sort-btn" data-key="setup_tns" data-type="number" aria-sort="none">Setup TNS <span class="sort-indicator">↕</span></button></th>
+              <th><button class="sort-btn" data-key="core_area" data-type="number" aria-sort="none">Core area <span class="sort-indicator">↕</span></button></th>
+              <th><button class="sort-btn" data-key="power_total" data-type="number" aria-sort="none">Total power <span class="sort-indicator">↕</span></button></th>
+              <th><button class="sort-btn" data-key="drc" data-type="number" aria-sort="none">DRC <span class="sort-indicator">↕</span></button></th>
+              <th><button class="sort-btn" data-key="lvs" data-type="number" aria-sort="none">LVS <span class="sort-indicator">↕</span></button></th>
+              <th><button class="sort-btn" data-key="antenna" data-type="number" aria-sort="none">Antenna <span class="sort-indicator">↕</span></button></th>
+              <th><button class="sort-btn" data-key="ir_drop" data-type="number" aria-sort="none">IR drop <span class="sort-indicator">↕</span></button></th>
+              <th><button class="sort-btn" data-key="status" data-type="status" aria-sort="none">Status <span class="sort-indicator">↕</span></button></th>
+              <th><button class="sort-btn" data-key="remarks" data-type="text" aria-sort="none">Remarks <span class="sort-indicator">↕</span></button></th>
+              <th>GDS</th>
+              <th>GDS Viewer</th>
             </tr>
           </thead>
-          <tbody>{''.join(rows_html) if rows_html else '<tr><td colspan="15" class="muted">No ASIC run rows were collected for this snapshot.</td></tr>'}</tbody>
+          <tbody>{''.join(rows_html) if rows_html else '<tr><td colspan="14" class="muted">No ASIC run rows were collected for this snapshot.</td></tr>'}</tbody>
         </table>
       </div>
     </section>
-  </main>
+  </div>
   {sort_filter_script}
 </body>
 </html>"""
