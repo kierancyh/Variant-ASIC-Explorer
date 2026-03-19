@@ -680,8 +680,6 @@ def main() -> None:
     (out_root / "_autoflow_session.json").write_text(json.dumps(session_meta, indent=2), encoding="utf-8")
 
     summary_path = resolve_summary_path()
-    append_summary(summary_path, f"## Autoflow: {safe_variant}")
-    append_summary(summary_path, "")
     append_summary(summary_path, "| Attempt | Clock (ns) | Status | Setup WNS | Setup TNS | DRC | LVS | Antenna | RC | Remarks |")
     append_summary(summary_path, "|---:|---:|---|---:|---:|---:|---:|---:|---:|---|")
 

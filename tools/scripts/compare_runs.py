@@ -187,6 +187,73 @@ def first_render_path(base_dir: Path) -> Optional[Path]:
 def raw_row_key(raw_key: str) -> str:
     return f"_raw__{raw_key}"
 
+def raw_metric_value(row: Dict[str, Any], raw_key: str) -> Any:
+    return row.get(raw_row_key(raw_key), "")
+
+
+def pretty_raw_metric_label(raw_key: str) -> str:
+    pieces = [piece.replace("_", " ").strip() for piece in raw_key.split("__") if piece.strip()]
+    return " / ".join(piece.title() for piece in pieces)
+
+
+def raw_metric_sort_priority(raw_key: str) -> Tuple[int, str]:
+    priorities = [
+        ("clock__", 0),
+        ("timing__", 0),
+        ("power__", 1),
+        ("design__", 2),
+        ("floorplan__", 2),
+        ("place__", 3),
+        ("route__", 4),
+        ("cts__", 5),
+        ("drc__", 6),
+        ("klayout__", 6),
+        ("magic__", 6),
+        ("lvs__", 6),
+        ("antenna__", 6),
+        ("ir__", 6),
+    ]
+    for prefix, rank in priorities:
+        if raw_key.startswith(prefix):
+            return (rank, raw_key)
+    return (99, raw_key)
+
+
+def iter_raw_metrics(row: Dict[str, Any]) -> List[Tuple[str, Any]]:
+    items: List[Tuple[str, Any]] = []
+    for key, value in row.items():
+        if not key.startswith("_raw__"):
+            continue
+        if value in ("", None, "None"):
+            continue
+        raw_key = key[len("_raw__") :]
+        items.append((raw_key, value))
+    items.sort(key=lambda item: raw_metric_sort_priority(item[0]))
+    return items
+
+
+def pick_raw_metric_items(
+    row: Dict[str, Any],
+    prefixes: Tuple[str, ...],
+    consumed: Set[str],
+    *,
+    limit: int = 8,
+    catch_all: bool = False,
+) -> List[Tuple[str, Any]]:
+    selected: List[Tuple[str, Any]] = []
+    for raw_key, value in iter_raw_metrics(row):
+        if raw_key in consumed:
+            continue
+        matches = True if catch_all else any(raw_key.startswith(prefix) for prefix in prefixes)
+        if not matches:
+            continue
+        consumed.add(raw_key)
+        selected.append((pretty_raw_metric_label(raw_key), value))
+        if len(selected) >= limit:
+            break
+    return selected
+
+
 
 def collect_rows(artifacts_root: Path) -> List[Dict[str, str]]:
     rows: List[Dict[str, str]] = []
@@ -549,6 +616,32 @@ def badge_html(status: str) -> str:
     }.get(s, "skip")
     return f'<span class="badge {cls}">{html.escape(s or "UNKNOWN")}</span>'
 
+def value_or_dash(v: Any) -> str:
+    if isinstance(v, bool):
+        s = "yes" if v else "no"
+    else:
+        s = "" if v is None else str(v)
+    return html.escape(s) if s not in {"", "None"} else "—"
+
+
+def kv_rows(items: List[Tuple[str, Any]]) -> str:
+    return "".join(
+        f"<tr><td>{html.escape(k)}</td><td>{value_or_dash(v)}</td></tr>"
+        for k, v in items
+    )
+
+
+def metric_group_html(title: str, items: List[Tuple[str, Any]]) -> str:
+    return (
+        f'<section class="metric-group table-card">'
+        f'<div class="table-head"><h3>{html.escape(title)}</h3></div>'
+        f'<div class="kv-wrap"><table class="kv-table">'
+        f'<colgroup><col class="kv-key"><col class="kv-value"></colgroup>'
+        f"<tr><th>Field</th><th>Value</th></tr>{kv_rows(items)}</table></div>"
+        f"</section>"
+    )
+
+
 
 def write_redirect_page(path: Path, target: str, title: str, description: str) -> None:
     safe_title = html.escape(title)
@@ -592,8 +685,6 @@ def build_surfer_url(vcd_url: str) -> str:
 
 
 def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> None:
-    render_href = rel_href(Path(row["_render_path"]), run_dir) if row.get("_render_path") else ""
-    gds_href = rel_href(Path(row["_gds_path"]), run_dir) if row.get("_gds_path") else ""
     metrics_path = Path(row.get("_site_metrics_path") or (Path(row["_base_dir"]) / "metrics.csv"))
     metrics_href = rel_href(metrics_path, run_dir)
     failure_summary_href = rel_href(Path(row["_site_failure_summary_path"]), run_dir) if row.get("_site_failure_summary_path") else ""
@@ -602,23 +693,9 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
     snapshot_root = run_dir.parents[1]
     back_href = rel_href(snapshot_root / "index.html", run_dir)
     css_href = rel_href(snapshot_root / "assets" / "explorer.css", run_dir)
-    details = [
-        ("Variant", row.get("_variant", "")),
-        ("Stage", row.get("_stage_label", "")),
-        ("Requested clock", f"{row.get('_clock_requested','')} ns"),
-        ("Reported clock", f"{row.get('clock_ns','')} ns"),
-        ("Setup WNS", row.get("setup_wns_ns", "")),
-        ("Setup TNS", row.get("setup_tns_ns", "")),
-        ("Core area", row.get("core_area_um2", "")),
-        ("Total power", row.get("power_total_W", "")),
-        ("DRC", row.get("drc_errors", "")),
-        ("LVS", row.get("lvs_errors", "")),
-        ("Antenna", row.get("antenna_violations", "")),
-        ("Published on Pages", "Lightweight explorer assets only"),
-        ("Heavy backend outputs", "Kept in GitHub Actions artifacts, not GitHub Pages"),
-    ]
+
     actions = [
-        f'<a class="btn secondary" href="{back_href}">Back to explorer</a>',
+        f'<a class="btn secondary" href="{back_href}">Back to Explorer</a>',
         f'<a class="btn" href="{metrics_href}">Open metrics.csv</a>',
     ]
     if raw_metrics_href:
@@ -626,19 +703,111 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
     if meta_href:
         actions.append(f'<a class="btn secondary" href="{meta_href}">Open run_meta.json</a>')
     if failure_summary_href:
-        actions.append(f'<a class="btn secondary" href="{failure_summary_href}">Open failure summary</a>')
-    if gds_href:
-        actions.append(f'<a class="btn" href="{gds_href}">Download GDS</a>')
-        actions.append(f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener">Open GDS viewer</a>')
-    elif row.get("_gds_exists") == "yes":
-        actions.append(f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener">Open GDS viewer homepage</a>')
-    preview = f'<img src="{render_href}" alt="layout preview">' if render_href else '<div class="empty">No rendered layout preview found for this run.</div>'
-    gds_note = (
-        '<p class="muted">Heavy ASIC outputs, including most GDS assets, are intentionally kept out of GitHub Pages so the explorer stays below the Pages size limit. Use the workflow artifacts for full backend outputs.</p>'
-        if row.get("_gds_exists") == "yes" and not gds_href
-        else ''
+        actions.append(f'<a class="btn secondary" href="{failure_summary_href}">Open Failure Summary</a>')
+    if row.get("_gds_exists") == "yes":
+        actions.append(f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener">Open GDS Viewer</a>')
+
+    consumed_raw: Set[str] = set()
+
+    timing_items: List[Tuple[str, Any]] = [
+        ("Clock requested", f"{row.get('_clock_requested', '')} ns"),
+        ("Clock reported", f"{row.get('clock_ns_reported', row.get('clock_ns', ''))} ns"),
+        ("Setup WNS", f"{row.get('setup_wns_ns', '')} ns"),
+        ("Setup TNS", f"{row.get('setup_tns_ns', '')} ns"),
+        ("Hold WNS", f"{row.get('hold_wns_ns', '')} ns"),
+        ("Hold TNS", f"{row.get('hold_tns_ns', '')} ns"),
+    ]
+    timing_items.extend(pick_raw_metric_items(row, ("clock__", "timing__"), consumed_raw, limit=10))
+
+    physical_items: List[Tuple[str, Any]] = [
+        ("Core area", row.get("core_area_um2", "")),
+        ("Die area", row.get("die_area_um2", "")),
+        ("Instances", row.get("instance_count", "")),
+        ("Utilization", row.get("utilization_pct", "")),
+        ("Wire length", row.get("wire_length_um", "")),
+        ("Vias", row.get("vias_count", "")),
+    ]
+    physical_items.extend(
+        pick_raw_metric_items(row, ("design__", "floorplan__", "place__", "route__", "cts__"), consumed_raw, limit=12)
     )
-    table_rows = "".join(f"<tr><th>{html.escape(k)}</th><td>{html.escape(v)}</td></tr>" for k, v in details)
+
+    power_items: List[Tuple[str, Any]] = [
+        ("Total", row.get("power_total_W", "")),
+        ("Internal", row.get("power_internal_W", "")),
+        ("Switching", row.get("power_switching_W", "")),
+        ("Leakage", row.get("power_leakage_W", "")),
+        ("Source", row.get("power_source", "")),
+        ("FAIR STA rpt", row.get("power_fair_sta_rpt", "")),
+    ]
+    power_items.extend(pick_raw_metric_items(row, ("power__",), consumed_raw, limit=10))
+
+    signoff_items: List[Tuple[str, Any]] = [
+        ("DRC", row.get("drc_errors", "")),
+        ("KLayout DRC", row.get("drc_errors_klayout", "")),
+        ("Magic DRC", row.get("drc_errors_magic", "")),
+        ("LVS", row.get("lvs_errors", "")),
+        ("Antenna", row.get("antenna_violations", "")),
+        ("Worst IR drop", row.get("ir_drop_worst_V", "")),
+    ]
+    signoff_items.extend(
+        pick_raw_metric_items(
+            row,
+            ("drc__", "klayout__", "magic__", "lvs__", "antenna__", "ir__"),
+            consumed_raw,
+            limit=12,
+        )
+    )
+
+    additional_raw_items = pick_raw_metric_items(row, tuple(), consumed_raw, limit=24, catch_all=True)
+
+    failure_section = ""
+    failure_summary = row.get("_failure_summary", {})
+    if row.get("status") == "FLOW_FAIL" and isinstance(failure_summary, dict) and failure_summary:
+        checks = failure_summary.get("checks", {}) or {}
+        failure_rows: List[Tuple[str, Any]] = [
+            ("Primary reason", failure_summary.get("reason", row.get("_failure_reason", ""))),
+            ("Likely failing phase", failure_summary.get("likely_failure_phase", row.get("_failure_phase", ""))),
+            ("OpenLane return code", failure_summary.get("openlane_rc", row.get("_failure_openlane_rc", ""))),
+            ("Config generation return code", failure_summary.get("config_generation_rc", row.get("_failure_config_rc", ""))),
+            ("Config generated", checks.get("config_generated", "")),
+            ("OpenLane invoked", checks.get("openlane_invoked", "")),
+            ("Run directory found", checks.get("run_dir_found", "")),
+            ("metrics.csv present", checks.get("metrics_csv_present", "")),
+            ("metrics_raw.json present", checks.get("metrics_raw_present", "")),
+            ("Valid timing present", checks.get("timing_present", "")),
+            ("GDS present", checks.get("gds_present", "")),
+            ("OpenLane run copied", checks.get("openlane_run_present", "")),
+            ("Viewer HTML present", checks.get("viewer_present", "")),
+        ]
+        failure_section = (
+            '<section class="card span-12">'
+            '<div class="metrics-strip">'
+            f'{metric_group_html("Failure Diagnostic", failure_rows)}'
+            "</div>"
+            "</section>"
+        )
+
+    meta_rows = [
+        ("Variant", row.get("_variant")),
+        ("Run folder", row.get("_run_dir")),
+        ("Artifact label", row.get("_artifact")),
+        ("Stage label", row.get("_stage_label")),
+        ("Attempt number", row.get("_attempt_number")),
+        ("GitHub run ID", row.get("_github_run_id")),
+        ("Synthesis override", row.get("_synth_strategy_override")),
+        ("OpenLane run copied", row.get("_openlane_run_present")),
+        ("metrics_raw.json present", row.get("_metrics_raw_present")),
+        ("Raw metric count", row.get("_raw_metric_count")),
+        ("Failure summary present", row.get("_failure_summary_present")),
+        ("Likely failure phase", row.get("_failure_phase")),
+        ("Status", row.get("status")),
+        ("Remarks", row.get("selection_reason")),
+        ("Published on Pages", "Lightweight explorer assets only"),
+        ("Heavy backend outputs", "Kept in GitHub Actions artifacts, not GitHub Pages"),
+    ]
+
+    raw_group = metric_group_html("Additional Raw Metrics", additional_raw_items) if additional_raw_items else ""
+
     content = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -648,25 +817,44 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
   <link rel="stylesheet" href="{css_href}">
 </head>
 <body>
-  <main class="page">
+  <div class="wrap">
     <section class="hero">
-      <div>
-        <p class="eyebrow">Per-run details</p>
-        <h1>{html.escape(row.get('_variant',''))} / {html.escape(row.get('_run_dir',''))}</h1>
-        <p class="muted">{badge_html(row.get('status',''))} &nbsp; Remarks: {html.escape(row.get('selection_reason',''))}</p>
+      <div class="hero-head">
+        <div class="hero-copy">
+          <p class="eyebrow">Per-run details</p>
+          <h1>{html.escape(row.get('_variant',''))} / {html.escape(row.get('_run_dir',''))}</h1>
+          <p class="muted">{badge_html(row.get('status',''))} &nbsp; Remarks: {html.escape(row.get('selection_reason',''))}</p>
+        </div>
+        <div class="actions">{''.join(actions)}</div>
       </div>
-      <div class="actions">{''.join(actions)}</div>
     </section>
-    <section class="card">
-      <h2>Metrics by category</h2>
-      <table class="kv">{table_rows}</table>
-    </section>
-    <section class="card">
-      <h2>Layout preview</h2>
-      {preview}
-      {gds_note}
-    </section>
-  </main>
+
+    <div class="grid">
+      {failure_section}
+
+      <section class="card span-12">
+        <h2>Metrics by Category</h2>
+        <div class="metrics-strip">
+          {metric_group_html("Timing", timing_items)}
+          {metric_group_html("Physical", physical_items)}
+          {metric_group_html("Power (W)", power_items)}
+          {metric_group_html("Signoff", signoff_items)}
+          {raw_group}
+        </div>
+      </section>
+
+      <section class="card span-12 table-card">
+        <div class="table-head"><h2>Metadata</h2></div>
+        <div class="kv-wrap">
+          <table class="kv-table">
+            <colgroup><col class="kv-key"><col class="kv-value"></colgroup>
+            <tr><th>Field</th><th>Value</th></tr>
+            {kv_rows(meta_rows)}
+          </table>
+        </div>
+      </section>
+    </div>
+  </div>
 </body>
 </html>"""
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -805,12 +993,26 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
 .wide-table th,.wide-table td{padding:14px 16px;border-bottom:1px solid var(--border);vertical-align:top}
 .wide-table th{background:rgba(255,248,240,.92);text-align:left;font-size:13px;white-space:nowrap}
 .best-row{background:rgba(139,94,60,.06)}
+.page{max-width:1520px;margin:0 auto;padding:28px 20px 40px}
+.eyebrow{margin:0 0 8px 0;color:var(--muted);font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+.metrics-strip{display:grid;grid-template-columns:1fr;gap:14px}
+.metric-group{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-lg);padding:0;overflow:hidden}
+.metric-group h3{margin:0;font-size:15px}
+.kv-wrap{overflow:hidden}
+.kv-table{width:100%;border-collapse:collapse;table-layout:fixed;min-width:0}
+.kv-table col.kv-key{width:38%}
+.kv-table col.kv-value{width:62%}
+.kv-table th,.kv-table td{padding:12px 16px;border-bottom:1px solid var(--border);vertical-align:top}
+.kv-table th{background:rgba(255,248,240,.92);text-align:left;font-size:13px}
+.kv-table td:first-child,.kv-table th:first-child{white-space:nowrap}
+.kv-table td:last-child,.kv-table th:last-child{word-break:break-word}
 .kv{width:100%;border-collapse:collapse}
 .kv th,.kv td{padding:10px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}
 .kv th{width:220px;color:var(--muted)}
 .empty{padding:18px;border:1px dashed var(--border);border-radius:16px;color:var(--muted);background:rgba(255,255,255,.55)}
+.waveform-embed iframe{width:100%;min-height:760px;border:1px solid rgba(116,92,62,.22);border-radius:16px;background:#fff}
 @media(max-width:1080px){.span-7,.span-5{grid-column:span 12}.kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.table-tools .summary{margin-left:0;width:100%}}
-@media(max-width:720px){.kpi-grid{grid-template-columns:1fr}}
+@media(max-width:720px){.kpi-grid{grid-template-columns:1fr}.kv-table col.kv-key{width:42%}.kv-table col.kv-value{width:58%}}
 """
     (assets_dir / "explorer.css").write_text(css, encoding="utf-8")
 
@@ -841,7 +1043,12 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
 
     pages_base = pages_base_url(repo_slug)
     published_snapshot_prefix = pages_base.rstrip("/") if pages_base else ""
-    if normalized_site_subdir and published_snapshot_prefix:
+    if published_snapshot_prefix and run_id:
+        published_snapshot_prefix = (
+            f"{published_snapshot_prefix}/runs/"
+            f"{urllib.parse.quote(str(run_id), safe='')}"
+        )
+    elif normalized_site_subdir and published_snapshot_prefix:
         published_snapshot_prefix = published_snapshot_prefix + "/" + urllib.parse.quote(normalized_site_subdir, safe="/")
 
     local_vcd_href = ""
@@ -910,6 +1117,17 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
         waveform_actions.append(f'<a class="btn secondary" href="{yosys_stat_href}">Yosys Statistics</a>')
     if yosys_netlist_href:
         waveform_actions.append(f'<a class="btn secondary" href="{yosys_netlist_href}">Download Synthesized Netlist</a>')
+
+    waveform_embed_html = ""
+    if published_vcd:
+        waveform_embed_html = (
+            '<div class="waveform-embed" style="margin-top:16px;">'
+            f'<iframe src="{html.escape(surfer_url)}" '
+            'title="Embedded waveform viewer" '
+            'loading="lazy" '
+            'referrerpolicy="strict-origin-when-cross-origin"></iframe>'
+            '</div>'
+        )
 
     def sort_num_value(value: Any) -> str:
         n = to_float(value)
@@ -1088,7 +1306,7 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
       <section class="card span-12">
         <h2>Waveform Viewer</h2>
         <div class="actions">{''.join(waveform_actions)}</div>
-        {'' if local_vcd_href else '<div class="empty">No published VCD was found for this snapshot.</div>'}
+        {waveform_embed_html if waveform_embed_html else ('' if local_vcd_href else '<div class="empty">No published VCD was found for this snapshot.</div>')}
       </section>
 
       <section class="card span-12">
