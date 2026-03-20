@@ -1108,7 +1108,7 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
 
     <div class="grid">
       <section class="card span-5">
-        <h2>Selection order</h2>
+        <h2>Selection Criteria</h2>
         <ol>
           <li>Clean signoff plus non-negative setup timing wins.</li>
           <li>If no full PASS exists, clean signoff wins over signoff violations.</li>
