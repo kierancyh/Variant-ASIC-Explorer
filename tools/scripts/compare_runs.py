@@ -187,7 +187,6 @@ def first_render_path(base_dir: Path) -> Optional[Path]:
 def raw_row_key(raw_key: str) -> str:
     return f"_raw__{raw_key}"
 
-
 def raw_metric_value(row: Dict[str, Any], raw_key: str) -> Any:
     return row.get(raw_row_key(raw_key), "")
 
@@ -253,392 +252,6 @@ def pick_raw_metric_items(
         if len(selected) >= limit:
             break
     return selected
-
-
-def collect_rows(artifacts_root: Path) -> List[Dict[str, str]]:
-    rows: List[Dict[str, str]] = []
-    seen: set[Path] = set()
-    for pattern in ("**/ci_out/*/clk_*ns_*/metrics.csv", "**/*/clk_*ns_*/metrics.csv"):
-        for csv_path in sorted(artifacts_root.glob(pattern)):
-            if csv_path in seen:
-                continue
-            seen.add(csv_path)
-            row = read_csv_row(csv_path)
-            if not row:
-                continue
-            base_dir = csv_path.parent
-            meta_path = base_dir / "run_meta.json"
-            meta: Dict[str, Any] = (
-                json.loads(meta_path.read_text(encoding="utf-8"))
-                if meta_path.exists()
-                else {}
-            )
-            started = parse_attempt_started(base_dir / "attempt_started.txt")
-
-            raw_metrics = load_json(base_dir / "metrics_raw.json")
-            raw_flat = flatten_scalar_metrics(raw_metrics)
-            failure_summary = load_json(base_dir / "failure_summary.json")
-
-            row["_variant"] = str(meta.get("variant", base_dir.parent.name))
-            row["_artifact"] = str(meta.get("artifact_name", ""))
-            row["_run_dir"] = base_dir.name
-            row["_base_dir"] = str(base_dir)
-            row["_clock_requested"] = str(
-                meta.get("clock_ns_requested", row.get("clock_ns", ""))
-            )
-            row["_github_run_id"] = str(meta.get("github_run_id", ""))
-            row["_synth_strategy_override"] = str(meta.get("synth_strategy_override", ""))
-            row["_attempt_number"] = started.get("attempt", "")
-            row["_attempt_started_at"] = started.get("started_at", "")
-            row["_metrics_raw_present"] = "yes" if raw_metrics else "no"
-            row["_raw_metric_count"] = str(len(raw_flat))
-            row["status"] = classify_status(row)
-            row["selection_reason"] = explain_row(row)
-
-            meta_stage = str(meta.get("stage_label", "")).strip()
-            started_stage = str(started.get("stage_label", "")).strip()
-            row["_stage_label"] = meta_stage or started_stage or infer_stage_label(row)
-
-            row["_failure_summary_present"] = "yes" if failure_summary else "no"
-            row["_failure_reason"] = str(failure_summary.get("reason", ""))
-            row["_failure_phase"] = str(failure_summary.get("likely_failure_phase", ""))
-            row["_failure_openlane_rc"] = str(failure_summary.get("openlane_rc", ""))
-            row["_failure_config_rc"] = str(failure_summary.get("config_generation_rc", ""))
-            row["_failure_summary"] = failure_summary
-
-            for raw_key, raw_value in raw_flat.items():
-                row[raw_row_key(raw_key)] = raw_value
-
-            gds = first_gds_path(base_dir)
-            rnd = first_render_path(base_dir)
-            row["_gds_path"] = str(gds) if gds else ""
-            row["_render_path"] = str(rnd) if rnd else ""
-            row["_openlane_run_present"] = (
-                "yes" if (base_dir / "openlane_run").exists() else "no"
-            )
-            rows.append(row)
-    return rows
-
-
-def write_summary_csv(path: Path, rows: List[Dict[str, str]]) -> None:
-    base_keys = [
-        "_variant",
-        "_run_dir",
-        "_artifact",
-        "_clock_requested",
-        "_stage_label",
-        "_metrics_raw_present",
-        "_raw_metric_count",
-        "_failure_summary_present",
-        "_failure_reason",
-        "_failure_phase",
-        "_failure_openlane_rc",
-        "_failure_config_rc",
-        "clock_ns",
-        "clock_ns_reported",
-        "setup_wns_ns",
-        "setup_tns_ns",
-        "hold_wns_ns",
-        "hold_tns_ns",
-        "core_area_um2",
-        "die_area_um2",
-        "instance_count",
-        "utilization_pct",
-        "wire_length_um",
-        "vias_count",
-        "power_total_W",
-        "power_internal_W",
-        "power_switching_W",
-        "power_leakage_W",
-        "power_source",
-        "power_fair_sta_rpt",
-        "drc_errors",
-        "drc_errors_klayout",
-        "drc_errors_magic",
-        "lvs_errors",
-        "antenna_violations",
-        "antenna_violating_nets",
-        "antenna_violating_pins",
-        "ir_drop_worst_V",
-        "status",
-        "selection_reason",
-        "_openlane_run_present",
-        "_attempt_number",
-        "_github_run_id",
-        "_synth_strategy_override",
-    ]
-    raw_keys = sorted(
-        {
-            key
-            for row in rows
-            for key in row.keys()
-            if key.startswith("_raw__")
-        }
-    )
-    keys = base_keys + raw_keys
-    with path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=keys)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({k: row.get(k, "") for k in keys})
-
-
-def write_summary_md(path: Path, rows: List[Dict[str, str]]) -> None:
-    lines = [
-        "## Best run selection",
-        "",
-        "1. Clean signoff plus non-negative setup timing wins.",
-        "2. If no full PASS exists, clean signoff wins over signoff violations.",
-        "3. Among comparable runs, lower requested clock period is preferred.",
-        "4. Setup WNS/TNS are used as tie-breakers.",
-        "",
-    ]
-    ordered = sorted(rows, key=best_sort_key)
-    if ordered:
-        best = ordered[0]
-        lines += [
-            f"- Selected: `{best.get('_variant', '')}` / `{best.get('_run_dir', '')}`",
-            f"- Clock: `{best.get('clock_ns', '')} ns`",
-            f"- Status: `{best.get('status', '')}`",
-            f"- Remarks: {best.get('selection_reason', '')}",
-            "",
-        ]
-    lines += [
-        "## All runs",
-        "",
-        "| Variant | Run | Clock (ns) | Setup WNS | Setup TNS | Core area | Power total | DRC | LVS | Antenna | Status | Remarks |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
-    ]
-    for idx, row in enumerate(ordered):
-        remarks = row.get("selection_reason", "")
-        if idx == 0:
-            remarks = f"SELECTED — {remarks}"
-        lines.append(
-            f"| {row.get('_variant', '').replace('|', '/')} | {row.get('_run_dir', '').replace('|', '/')} | "
-            f"{row.get('clock_ns', '')} | {row.get('setup_wns_ns', '')} | {row.get('setup_tns_ns', '')} | "
-            f"{row.get('core_area_um2', '')} | {row.get('power_total_W', '')} | {row.get('drc_errors', '')} | "
-            f"{row.get('lvs_errors', '')} | {row.get('antenna_violations', '')} | {row.get('status', '')} | "
-            f"{remarks.replace('|', '/')} |"
-        )
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def copy_tree_if_exists(src: Path, dst: Path) -> None:
-    if not src.exists():
-        return
-    if src.is_dir():
-        if dst.exists():
-            shutil.rmtree(dst)
-        shutil.copytree(src, dst)
-    else:
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
-
-
-def write_best_json(path: Path, rows: List[Dict[str, str]]) -> Dict[str, Any]:
-    best = sorted(rows, key=best_sort_key)[0] if rows else {}
-    path.write_text(json.dumps(best, indent=2), encoding="utf-8")
-    return best
-
-
-def package_best_bundle(best_bundle_dir: Path, best: Dict[str, Any]) -> None:
-    best_bundle_dir.mkdir(parents=True, exist_ok=True)
-    if not best:
-        return
-    base_dir = Path(best["_base_dir"])
-    for name in (
-        "metrics.csv",
-        "metrics.md",
-        "metrics_raw.json",
-        "run_meta.json",
-        "attempt_started.txt",
-        "attempt_manifest.json",
-        "viewer.html",
-        "index.html",
-        "README.txt",
-        "failure_summary.md",
-        "failure_summary.json",
-    ):
-        src = base_dir / name
-        if src.exists():
-            shutil.copy2(src, best_bundle_dir / name)
-    copy_tree_if_exists(base_dir / "renders", best_bundle_dir / "renders")
-    copy_tree_if_exists(base_dir / "final" / "gds", best_bundle_dir / "final" / "gds")
-    copy_tree_if_exists(base_dir / "openlane_run", best_bundle_dir / "openlane_run")
-    for name in ("autoflow_history.json", "autoflow_history.csv", "autoflow_summary.md"):
-        src = base_dir.parent / name
-        if src.exists():
-            shutil.copy2(src, best_bundle_dir / name)
-
-
-def build_theme_widget(button_id: str, panel_id: str) -> str:
-    return f"""
-<div class="theme-control">
-  <button class="theme-launch" id="{button_id}" type="button" aria-expanded="false" aria-controls="{panel_id}">Appearance ⚙️</button>
-  <div class="theme-widget" id="{panel_id}" hidden>
-    <div class="theme-widget-body">
-      <h3>Appearance</h3>
-      <div class="theme-row"><label for="{panel_id}_preset">Theme preset</label><select id="{panel_id}_preset"><option value="canvas">Canvas Beige</option><option value="forest">Forest</option><option value="slate">Slate</option></select></div>
-      <div class="theme-inline">
-        <div class="theme-row"><label for="{panel_id}_bg">Base background</label><input type="color" id="{panel_id}_bg" value="#f4ecdf"></div>
-        <div class="theme-row"><label for="{panel_id}_accent">Accent</label><input type="color" id="{panel_id}_accent" value="#8b5e3c"></div>
-      </div>
-      <div class="theme-inline">
-        <div class="theme-row"><label for="{panel_id}_grad1">Gradient 1</label><input type="color" id="{panel_id}_grad1" value="#f8f1e7"></div>
-        <div class="theme-row"><label for="{panel_id}_grad2">Gradient 2</label><input type="color" id="{panel_id}_grad2" value="#efe4d3"></div>
-      </div>
-      <div class="theme-btn-row"><button id="{panel_id}_save" type="button">Save</button><button id="{panel_id}_reset" type="button">Reset</button></div>
-    </div>
-  </div>
-</div>
-"""
-
-
-def build_theme_script(button_id: str, panel_id: str, storage_key: str) -> str:
-    return f"""
-<script>
-(function () {{
-  const root = document.documentElement;
-  const button = document.getElementById("{button_id}");
-  const panel = document.getElementById("{panel_id}");
-  if (!root || !button || !panel) return;
-  document.body.appendChild(panel);
-  const presetTheme = document.getElementById("{panel_id}_preset");
-  const bgColor = document.getElementById("{panel_id}_bg");
-  const accentColor = document.getElementById("{panel_id}_accent");
-  const grad1 = document.getElementById("{panel_id}_grad1");
-  const grad2 = document.getElementById("{panel_id}_grad2");
-  const saveTheme = document.getElementById("{panel_id}_save");
-  const resetTheme = document.getElementById("{panel_id}_reset");
-  const presets = {{
-    canvas: {{"--bg":"#f4ecdf","--bg-grad-1":"#f8f1e7","--bg-grad-2":"#efe4d3","--accent":"#8b5e3c","--accent-2":"#b6845e"}},
-    forest: {{"--bg":"#e9efe7","--bg-grad-1":"#f3f7f1","--bg-grad-2":"#d9e7d5","--accent":"#4f7a5c","--accent-2":"#789d83"}},
-    slate: {{"--bg":"#e7ebf0","--bg-grad-1":"#f3f6fa","--bg-grad-2":"#d7dde6","--accent":"#496a8a","--accent-2":"#7292b0"}}
-  }};
-  function applyVars(vars) {{ Object.entries(vars).forEach(([k,v]) => root.style.setProperty(k, v)); }}
-  function syncInputsFromCurrentTheme() {{
-    const styles = getComputedStyle(root);
-    bgColor.value = styles.getPropertyValue("--bg").trim() || bgColor.value;
-    grad1.value = styles.getPropertyValue("--bg-grad-1").trim() || grad1.value;
-    grad2.value = styles.getPropertyValue("--bg-grad-2").trim() || grad2.value;
-    accentColor.value = styles.getPropertyValue("--accent").trim() || accentColor.value;
-  }}
-  function saveSettings() {{ localStorage.setItem("{storage_key}", JSON.stringify({{preset:presetTheme.value,bg:bgColor.value,grad1:grad1.value,grad2:grad2.value,accent:accentColor.value}})); }}
-  function loadSettings() {{
-    const raw = localStorage.getItem("{storage_key}");
-    if (!raw) {{
-      presetTheme.value = "canvas";
-      applyVars(presets.canvas);
-      syncInputsFromCurrentTheme();
-      return;
-    }}
-    try {{
-      const s = JSON.parse(raw);
-      const preset = (s.preset && presets[s.preset]) ? s.preset : "canvas";
-      presetTheme.value = preset;
-      applyVars(presets[preset]);
-      if (s.bg) bgColor.value = s.bg;
-      if (s.grad1) grad1.value = s.grad1;
-      if (s.grad2) grad2.value = s.grad2;
-      if (s.accent) accentColor.value = s.accent;
-      applyVars({{"--bg":bgColor.value,"--bg-grad-1":grad1.value,"--bg-grad-2":grad2.value,"--accent":accentColor.value,"--accent-2":accentColor.value}});
-    }} catch (e) {{
-      presetTheme.value = "canvas";
-      applyVars(presets.canvas);
-    }}
-    syncInputsFromCurrentTheme();
-  }}
-  function positionPanel() {{
-    if (panel.hidden) return;
-    const rect = button.getBoundingClientRect();
-    const vw = window.innerWidth || document.documentElement.clientWidth || 0;
-    const vh = window.innerHeight || document.documentElement.clientHeight || 0;
-    const margin = 12;
-    const w = Math.min(340, Math.max(260, vw - (margin * 2)));
-    panel.style.width = w + "px";
-    panel.style.maxWidth = w + "px";
-    const h = panel.offsetHeight || 320;
-    let left = rect.right - w;
-    left = Math.max(margin, Math.min(left, vw - w - margin));
-    let top = rect.bottom + 12;
-    if (top + h > vh - margin) top = Math.max(margin, rect.top - h - 12);
-    panel.style.left = left + "px";
-    panel.style.top = top + "px";
-  }}
-  function openPanel() {{ panel.hidden = false; button.setAttribute("aria-expanded", "true"); positionPanel(); }}
-  function closePanel() {{ panel.hidden = true; button.setAttribute("aria-expanded", "false"); }}
-  button.addEventListener("click", function (e) {{ e.stopPropagation(); if (panel.hidden) openPanel(); else closePanel(); }});
-  panel.addEventListener("click", function (e) {{ e.stopPropagation(); }});
-  document.addEventListener("click", function () {{ closePanel(); }});
-  document.addEventListener("keydown", function (e) {{ if (e.key === "Escape") closePanel(); }});
-  window.addEventListener("resize", function () {{ if (!panel.hidden) positionPanel(); }});
-  window.addEventListener("scroll", function () {{ if (!panel.hidden) positionPanel(); }}, true);
-  presetTheme.addEventListener("change", function () {{
-    if (presets[presetTheme.value]) {{
-      applyVars(presets[presetTheme.value]);
-      syncInputsFromCurrentTheme();
-      saveSettings();
-    }}
-  }});
-  [bgColor, grad1, grad2, accentColor].forEach(el => el.addEventListener("input", function () {{
-    applyVars({{"--bg":bgColor.value,"--bg-grad-1":grad1.value,"--bg-grad-2":grad2.value,"--accent":accentColor.value,"--accent-2":accentColor.value}});
-    saveSettings();
-  }}));
-  saveTheme.addEventListener("click", saveSettings);
-  resetTheme.addEventListener("click", function () {{
-    localStorage.removeItem("{storage_key}");
-    presetTheme.value = "canvas";
-    applyVars(presets.canvas);
-    syncInputsFromCurrentTheme();
-    closePanel();
-  }});
-  loadSettings();
-  closePanel();
-}})();
-</script>
-"""
-
-
-def value_or_dash(v: Any) -> str:
-    if isinstance(v, bool):
-        s = "yes" if v else "no"
-    else:
-        s = "" if v is None else str(v)
-    return html.escape(s) if s not in {"", "None"} else "—"
-
-
-def badge_html(status: str) -> str:
-    s = (status or "").upper()
-    cls = "flow"
-    if s == "PASS":
-        cls = "pass"
-    elif s == "TIMING_FAIL":
-        cls = "timing"
-    elif s == "SIGNOFF_FAIL":
-        cls = "signoff"
-    elif s == "SIGNOFF_AND_TIMING_FAIL":
-        cls = "mixed"
-    return f'<span class="badge {cls}">{html.escape(status or "")}</span>'
-
-
-def link_button(href: str, label: str, secondary: bool = False) -> str:
-    cls = "btn secondary" if secondary else "btn"
-    return f'<a class="{cls}" href="{html.escape(href)}">{html.escape(label)}</a>'
-
-
-def external_button(href: str, label: str, secondary: bool = False) -> str:
-    cls = "btn secondary" if secondary else "btn"
-    return (
-        f'<a class="{cls}" href="{html.escape(href)}" target="_blank" '
-        f'rel="noopener noreferrer">{html.escape(label)}</a>'
-    )
-
-
-def kv_rows(items: List[Tuple[str, Any]]) -> str:
-    return "".join(
-        f"<tr><td>{html.escape(k)}</td><td>{value_or_dash(v)}</td></tr>"
-        for k, v in items
-    )
 
 
 
@@ -914,7 +527,7 @@ def write_summary_md(path: Path, rows: List[Dict[str, str]], precheck: Dict[str,
         f"- TB top: {precheck.get('testbench_top', '')}",
         f"- VCD present: {'yes' if precheck.get('vcd_present') else 'no'}",
         "",
-        "## Selection Criteria",
+        "## Best run selection",
         "",
         "1. Clean signoff plus non-negative setup timing wins.",
         "2. If no full PASS exists, clean signoff wins over signoff violations.",
@@ -1003,15 +616,31 @@ def badge_html(status: str) -> str:
     }.get(s, "skip")
     return f'<span class="badge {cls}">{html.escape(s or "UNKNOWN")}</span>'
 
+def value_or_dash(v: Any) -> str:
+    if isinstance(v, bool):
+        s = "yes" if v else "no"
+    else:
+        s = "" if v is None else str(v)
+    return html.escape(s) if s not in {"", "None"} else "—"
 
-def format_metric_value(key: str, value: Any) -> str:
-    if value in (None, "", "None"):
-        return ""
-    if key == "power_total_W":
-        n = to_float(value)
-        if n is not None:
-            return f"{n:.6f}"
-    return str(value)
+
+def kv_rows(items: List[Tuple[str, Any]]) -> str:
+    return "".join(
+        f"<tr><td>{html.escape(k)}</td><td>{value_or_dash(v)}</td></tr>"
+        for k, v in items
+    )
+
+
+def metric_group_html(title: str, items: List[Tuple[str, Any]]) -> str:
+    return (
+        f'<section class="metric-group table-card">'
+        f'<div class="table-head"><h3>{html.escape(title)}</h3></div>'
+        f'<div class="kv-wrap"><table class="kv-table">'
+        f'<colgroup><col class="kv-key"><col class="kv-value"></colgroup>'
+        f"<tr><th>Field</th><th>Value</th></tr>{kv_rows(items)}</table></div>"
+        f"</section>"
+    )
+
 
 
 def write_redirect_page(path: Path, target: str, title: str, description: str) -> None:
@@ -1056,7 +685,6 @@ def build_surfer_url(vcd_url: str) -> str:
 
 
 def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> None:
-    gds_href = rel_href(Path(row["_gds_path"]), run_dir) if row.get("_gds_path") else ""
     metrics_path = Path(row.get("_site_metrics_path") or (Path(row["_base_dir"]) / "metrics.csv"))
     metrics_href = rel_href(metrics_path, run_dir)
     failure_summary_href = rel_href(Path(row["_site_failure_summary_path"]), run_dir) if row.get("_site_failure_summary_path") else ""
@@ -1066,27 +694,24 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
     back_href = rel_href(snapshot_root / "index.html", run_dir)
     css_href = rel_href(snapshot_root / "assets" / "explorer.css", run_dir)
 
-    actions: List[str] = [
-        link_button(back_href, "Back to explorer", secondary=True),
-        link_button(metrics_href, "Open metrics.csv"),
+    actions = [
+        f'<a class="btn secondary" href="{back_href}">Back to Explorer</a>',
+        f'<a class="btn" href="{metrics_href}">Open metrics.csv</a>',
     ]
     if raw_metrics_href:
-        actions.append(link_button(raw_metrics_href, "Open metrics_raw.json", secondary=True))
+        actions.append(f'<a class="btn secondary" href="{raw_metrics_href}">Open metrics_raw.json</a>')
     if meta_href:
-        actions.append(link_button(meta_href, "Open run_meta.json", secondary=True))
+        actions.append(f'<a class="btn secondary" href="{meta_href}">Open run_meta.json</a>')
     if failure_summary_href:
-        actions.append(link_button(failure_summary_href, "Open failure summary", secondary=True))
-    if gds_href:
-        actions.append(link_button(gds_href, "Download GDS"))
-        actions.append(external_button(TT_GDS_VIEWER_URL, "Open GDS viewer", secondary=True))
-    elif row.get("_gds_exists") == "yes":
-        actions.append(external_button(TT_GDS_VIEWER_URL, "Open GDS viewer homepage", secondary=True))
+        actions.append(f'<a class="btn secondary" href="{failure_summary_href}">Open Failure Summary</a>')
+    if row.get("_gds_exists") == "yes":
+        actions.append(f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener">Open GDS Viewer</a>')
 
     consumed_raw: Set[str] = set()
 
     timing_items: List[Tuple[str, Any]] = [
         ("Clock requested", f"{row.get('_clock_requested', '')} ns"),
-        ("Clock reported", f"{row.get('clock_ns', '')} ns"),
+        ("Clock reported", f"{row.get('clock_ns_reported', row.get('clock_ns', ''))} ns"),
         ("Setup WNS", f"{row.get('setup_wns_ns', '')} ns"),
         ("Setup TNS", f"{row.get('setup_tns_ns', '')} ns"),
         ("Hold WNS", f"{row.get('hold_wns_ns', '')} ns"),
@@ -1107,7 +732,7 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
     )
 
     power_items: List[Tuple[str, Any]] = [
-        ("Total", format_metric_value("power_total_W", row.get("power_total_W", ""))),
+        ("Total", row.get("power_total_W", "")),
         ("Internal", row.get("power_internal_W", "")),
         ("Switching", row.get("power_switching_W", "")),
         ("Leakage", row.get("power_leakage_W", "")),
@@ -1135,22 +760,6 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
 
     additional_raw_items = pick_raw_metric_items(row, tuple(), consumed_raw, limit=24, catch_all=True)
 
-    def metric_group_html(title: str, items: List[Tuple[str, Any]]) -> str:
-        return (
-            f'<section class="metric-group table-card">'
-            f'<div class="table-head"><h3>{html.escape(title)}</h3></div>'
-            f'<div class="kv-wrap"><table class="kv-table">'
-            f'<colgroup><col class="kv-key"><col class="kv-value"></colgroup>'
-            f"<tr><th>Field</th><th>Value</th></tr>{kv_rows(items)}</table></div>"
-            f"</section>"
-        )
-
-    timing_group = metric_group_html("Timing", timing_items)
-    physical_group = metric_group_html("Physical", physical_items)
-    power_group = metric_group_html("Power (W)", power_items)
-    signoff_group = metric_group_html("Signoff", signoff_items)
-    raw_group = metric_group_html("Additional raw metrics", additional_raw_items) if additional_raw_items else ""
-
     failure_section = ""
     failure_summary = row.get("_failure_summary", {})
     if row.get("status") == "FLOW_FAIL" and isinstance(failure_summary, dict) and failure_summary:
@@ -1167,16 +776,15 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
             ("metrics_raw.json present", checks.get("metrics_raw_present", "")),
             ("Valid timing present", checks.get("timing_present", "")),
             ("GDS present", checks.get("gds_present", "")),
-            ("Render present", checks.get("render_present", "")),
             ("OpenLane run copied", checks.get("openlane_run_present", "")),
             ("Viewer HTML present", checks.get("viewer_present", "")),
         ]
         failure_section = (
             '<section class="card span-12">'
             '<div class="metrics-strip">'
-            f'{metric_group_html("Failure diagnostic", failure_rows)}'
-            '</div>'
-            '</section>'
+            f'{metric_group_html("Failure Diagnostic", failure_rows)}'
+            "</div>"
+            "</section>"
         )
 
     meta_rows = [
@@ -1194,52 +802,43 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
         ("Likely failure phase", row.get("_failure_phase")),
         ("Status", row.get("status")),
         ("Remarks", row.get("selection_reason")),
+        ("Published on Pages", "Lightweight explorer assets only"),
+        ("Heavy backend outputs", "Kept in GitHub Actions artifacts, not GitHub Pages"),
     ]
 
-    title_text = f"{row.get('_variant','')} / {row.get('_run_dir','')}"
+    raw_group = metric_group_html("Additional Raw Metrics", additional_raw_items) if additional_raw_items else ""
+
     content = f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{html.escape(title_text)}</title>
+  <title>{html.escape(row.get('_variant',''))} / {html.escape(row.get('_run_dir',''))}</title>
   <link rel="stylesheet" href="{css_href}">
 </head>
 <body>
-  <main class="page">
+  <div class="wrap">
     <section class="hero">
       <div class="hero-head">
-        <div>
+        <div class="hero-copy">
           <p class="eyebrow">Per-run details</p>
-          <h1>{html.escape(title_text)}</h1>
+          <h1>{html.escape(row.get('_variant',''))} / {html.escape(row.get('_run_dir',''))}</h1>
           <p class="muted">{badge_html(row.get('status',''))} &nbsp; Remarks: {html.escape(row.get('selection_reason',''))}</p>
         </div>
+        <div class="actions">{''.join(actions)}</div>
       </div>
-      <div class="actions" style="margin-top:16px">{''.join(actions)}</div>
     </section>
 
     <div class="grid">
-      <section class="card span-5">
-        <h2>Run status</h2>
-        <p>{badge_html(row.get('status', ''))}</p>
-        <p><strong>Remarks:</strong> {html.escape(row.get('selection_reason', ''))}</p>
-        <p><a class="btn secondary" href="{back_href}">Back to ASIC Flow Run Explorer</a></p>
-      </section>
-
-      <section class="card span-7">
-        <h2>Download &amp; Tools</h2>
-        <div class="actions">{''.join(actions)}</div>
-      </section>
-
       {failure_section}
 
       <section class="card span-12">
-        <h2>Metrics by category</h2>
+        <h2>Metrics by Category</h2>
         <div class="metrics-strip">
-          {timing_group}
-          {physical_group}
-          {power_group}
-          {signoff_group}
+          {metric_group_html("Timing", timing_items)}
+          {metric_group_html("Physical", physical_items)}
+          {metric_group_html("Power (W)", power_items)}
+          {metric_group_html("Signoff", signoff_items)}
           {raw_group}
         </div>
       </section>
@@ -1255,7 +854,7 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
         </div>
       </section>
     </div>
-  </main>
+  </div>
 </body>
 </html>"""
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -1368,7 +967,7 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
 .stat .label{color:var(--muted);font-size:12px;text-transform:uppercase}
 .stat .value{font-size:28px;font-weight:700}
 .card h2{margin:0 0 12px 0}
-.badge{display:inline-flex;align-items:center;justify-content:center;min-width:84px;padding:4px 8px;border-radius:999px;font-size:11px;font-weight:700;line-height:1.1}
+.badge{display:inline-flex;align-items:center;justify-content:center;min-width:112px;padding:6px 10px;border-radius:999px;font-size:12px;font-weight:700}
 .badge.pass{background:var(--pass-bg);color:var(--pass-fg)}
 .badge.timing{background:var(--timing-bg);color:var(--timing-fg)}
 .badge.signoff{background:var(--signoff-bg);color:var(--signoff-fg)}
@@ -1382,17 +981,6 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
 .table-card{padding:0;overflow:hidden}
 .table-head{display:flex;justify-content:space-between;align-items:center;padding:18px 20px;border-bottom:1px solid var(--border)}
 .table-wrap{overflow:auto}
-.kv-wrap{overflow:hidden}
-.metrics-strip{display:grid;grid-template-columns:1fr;gap:14px}
-.metric-group{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-lg);padding:0;overflow:hidden}
-.metric-group h3{margin:0;font-size:15px}
-.kv-table{width:100%;border-collapse:collapse;table-layout:fixed;min-width:0}
-.kv-table col.kv-key{width:38%}
-.kv-table col.kv-value{width:62%}
-.kv-table th,.kv-table td{padding:12px 16px;border-bottom:1px solid var(--border);vertical-align:top}
-.kv-table th{background:rgba(255,248,240,.92);text-align:left;font-size:13px}
-.kv-table td:first-child,.kv-table th:first-child{white-space:nowrap}
-.kv-table td:last-child,.kv-table th:last-child{word-break:break-word}
 .table-tools{display:flex;gap:12px;flex-wrap:wrap;align-items:end;padding:16px 20px 0}
 .table-tools label{display:grid;gap:6px;color:var(--muted);font-size:12px;font-weight:700;text-transform:uppercase}
 .table-tools select,.table-tools input[type="search"]{min-width:180px;padding:10px 12px;border-radius:10px;border:1px solid var(--border-strong);background:var(--panel-soft);color:var(--text);font:500 13px/1.2 Inter,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
@@ -1401,32 +989,28 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
 .sort-btn{all:unset;cursor:pointer;font-weight:700;color:var(--text);display:inline-flex;align-items:center;gap:6px}
 .sort-btn:hover,.sort-btn.active{color:var(--accent)}
 .sort-indicator{font-size:11px;color:var(--muted)}
-.wide-table{width:100%;border-collapse:collapse;min-width:1120px}
-.wide-table col.col-run{width:23%}
-.wide-table col.col-clock{width:7%}
-.wide-table col.col-setup{width:6%}
-.wide-table col.col-setup-tns{width:6%}
-.wide-table col.col-core{width:8%}
-.wide-table col.col-power{width:8%}
-.wide-table col.col-drc{width:5%}
-.wide-table col.col-lvs{width:5%}
-.wide-table col.col-antenna{width:6%}
-.wide-table col.col-ir{width:6%}
-.wide-table col.col-status{width:8%}
-.wide-table col.col-remarks{width:12%}
-.wide-table col.col-gds{width:10%}
-.wide-table th,.wide-table td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:top;font-size:12px}
-.wide-table th{background:rgba(255,248,240,.92);text-align:left;font-size:12px;white-space:nowrap}
-.wide-table td.status-cell{white-space:nowrap}
-.wide-table td.remarks-cell{line-height:1.35}
-.wide-table td.gds-cell{white-space:nowrap}
-.gds-actions{display:flex;flex-direction:column;gap:6px;align-items:flex-start}
-.gds-actions .btn{padding:6px 10px;font-size:12px}
+.wide-table{width:100%;border-collapse:collapse;min-width:1180px}
+.wide-table th,.wide-table td{padding:14px 16px;border-bottom:1px solid var(--border);vertical-align:top}
+.wide-table th{background:rgba(255,248,240,.92);text-align:left;font-size:13px;white-space:nowrap}
 .best-row{background:rgba(139,94,60,.06)}
+.page{max-width:1520px;margin:0 auto;padding:28px 20px 40px}
+.eyebrow{margin:0 0 8px 0;color:var(--muted);font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+.metrics-strip{display:grid;grid-template-columns:1fr;gap:14px}
+.metric-group{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-lg);padding:0;overflow:hidden}
+.metric-group h3{margin:0;font-size:15px}
+.kv-wrap{overflow:hidden}
+.kv-table{width:100%;border-collapse:collapse;table-layout:fixed;min-width:0}
+.kv-table col.kv-key{width:38%}
+.kv-table col.kv-value{width:62%}
+.kv-table th,.kv-table td{padding:12px 16px;border-bottom:1px solid var(--border);vertical-align:top}
+.kv-table th{background:rgba(255,248,240,.92);text-align:left;font-size:13px}
+.kv-table td:first-child,.kv-table th:first-child{white-space:nowrap}
+.kv-table td:last-child,.kv-table th:last-child{word-break:break-word}
 .kv{width:100%;border-collapse:collapse}
 .kv th,.kv td{padding:10px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}
 .kv th{width:220px;color:var(--muted)}
 .empty{padding:18px;border:1px dashed var(--border);border-radius:16px;color:var(--muted);background:rgba(255,255,255,.55)}
+.waveform-embed iframe{width:100%;min-height:760px;border:1px solid rgba(116,92,62,.22);border-radius:16px;background:#fff}
 @media(max-width:1080px){.span-7,.span-5{grid-column:span 12}.kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.table-tools .summary{margin-left:0;width:100%}}
 @media(max-width:720px){.kpi-grid{grid-template-columns:1fr}.kv-table col.kv-key{width:42%}.kv-table col.kv-value{width:58%}}
 """
@@ -1459,7 +1043,12 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
 
     pages_base = pages_base_url(repo_slug)
     published_snapshot_prefix = pages_base.rstrip("/") if pages_base else ""
-    if normalized_site_subdir and published_snapshot_prefix:
+    if published_snapshot_prefix and run_id:
+        published_snapshot_prefix = (
+            f"{published_snapshot_prefix}/runs/"
+            f"{urllib.parse.quote(str(run_id), safe='')}"
+        )
+    elif normalized_site_subdir and published_snapshot_prefix:
         published_snapshot_prefix = published_snapshot_prefix + "/" + urllib.parse.quote(normalized_site_subdir, safe="/")
 
     local_vcd_href = ""
@@ -1529,6 +1118,17 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
     if yosys_netlist_href:
         waveform_actions.append(f'<a class="btn secondary" href="{yosys_netlist_href}">Download Synthesized Netlist</a>')
 
+    waveform_embed_html = ""
+    if published_vcd:
+        waveform_embed_html = (
+            '<div class="waveform-embed" style="margin-top:16px;">'
+            f'<iframe src="{html.escape(surfer_url)}" '
+            'title="Embedded waveform viewer" '
+            'loading="lazy" '
+            'referrerpolicy="strict-origin-when-cross-origin"></iframe>'
+            '</div>'
+        )
+
     def sort_num_value(value: Any) -> str:
         n = to_float(value)
         return "" if n is None else str(n)
@@ -1536,21 +1136,14 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
     rows_html: List[str] = []
     for idx, row in enumerate(ordered):
         if row.get("_gds_published") == "yes" and row.get("_gds_path"):
-            gds_cell_html = (
-                '<div class="gds-actions">'
-                f'<a class="btn secondary" href="{rel_href(Path(row["_gds_path"]), snapshot_root)}">Download GDS</a>'
-                f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener noreferrer">Viewer</a>'
-                '</div>'
-            )
+            gds_html = f'<a class="btn secondary" href="{rel_href(Path(row["_gds_path"]), snapshot_root)}">GDS</a>'
+            viewer_html = f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener noreferrer">Viewer</a>'
         elif row.get("_gds_exists") == "yes":
-            gds_cell_html = (
-                '<div class="gds-actions">'
-                '<span class="muted">Artifact only</span>'
-                f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener noreferrer">Viewer</a>'
-                '</div>'
-            )
+            gds_html = "Artifact only"
+            viewer_html = f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener noreferrer">Viewer</a>'
         else:
-            gds_cell_html = "—"
+            gds_html = "—"
+            viewer_html = "—"
         row_classes = "best-row" if idx == 0 else ""
         run_text = f"{row.get('_variant', '')} / {row.get('_run_dir', '')}"
         rows_html.append(
@@ -1560,14 +1153,15 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
             f'<td>{html.escape(str(row.get("setup_wns_ns", "")))}</td>'
             f'<td>{html.escape(str(row.get("setup_tns_ns", "")))}</td>'
             f'<td>{html.escape(str(row.get("core_area_um2", "")))}</td>'
-            f'<td>{html.escape(format_metric_value("power_total_W", row.get("power_total_W", "")))}</td>'
+            f'<td>{html.escape(str(row.get("power_total_W", "")))}</td>'
             f'<td>{html.escape(str(row.get("drc_errors", "")))}</td>'
             f'<td>{html.escape(str(row.get("lvs_errors", "")))}</td>'
             f'<td>{html.escape(str(row.get("antenna_violations", "")))}</td>'
             f'<td>{html.escape(str(row.get("ir_drop_worst_V", "")))}</td>'
-            f'<td class="status-cell">{badge_html(row.get("status", ""))}</td>'
-            f'<td class="remarks-cell">{html.escape(str(row.get("selection_reason", "")))}</td>'
-            f'<td class="gds-cell">{gds_cell_html}</td>'
+            f'<td>{badge_html(row.get("status", ""))}</td>'
+            f'<td>{html.escape(str(row.get("selection_reason", "")))}</td>'
+            f'<td>{gds_html}</td>'
+            f'<td>{viewer_html}</td>'
             '</tr>'
         )
 
@@ -1670,8 +1264,8 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
     (site_root / "site_manifest.json").write_text(json.dumps(site_manifest, indent=2), encoding="utf-8")
 
     selection_block = (
-        f'<section class="card span-7"><h2>Best Run</h2><p><strong>Run:</strong> {html.escape(str(best.get("_variant","")))} / {html.escape(str(best.get("_run_dir","")))}</p><p><strong>Clock:</strong> {html.escape(str(best.get("clock_ns","")))} ns</p><p><strong>Status:</strong> {badge_html(best.get("status",""))}</p><p><strong>Remarks:</strong> {html.escape(str(best.get("selection_reason","")))}</p></section>'
-        if best else '<section class="card span-7"><h2>Best Run</h2><p class="muted">No ASIC run rows were collected for this snapshot.</p></section>'
+        f'<section class="card span-7"><h2>Chosen best run</h2><p><strong>Run:</strong> {html.escape(str(best.get("_variant","")))} / {html.escape(str(best.get("_run_dir","")))}</p><p><strong>Clock:</strong> {html.escape(str(best.get("clock_ns","")))} ns</p><p><strong>Status:</strong> {badge_html(best.get("status",""))}</p><p><strong>Remarks:</strong> {html.escape(str(best.get("selection_reason","")))}</p></section>'
+        if best else '<section class="card span-7"><h2>Chosen best run</h2><p class="muted">No ASIC run rows were collected for this snapshot.</p></section>'
     )
 
     index_html = f"""<!doctype html>
@@ -1698,7 +1292,7 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
 
     <div class="grid">
       <section class="card span-5">
-        <h2>Selection Criteria</h2>
+        <h2>Selection order</h2>
         <ol>
           <li>Clean signoff plus non-negative setup timing wins.</li>
           <li>If no full PASS exists, clean signoff wins over signoff violations.</li>
@@ -1712,7 +1306,7 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
       <section class="card span-12">
         <h2>Waveform Viewer</h2>
         <div class="actions">{''.join(waveform_actions)}</div>
-        {f'<div style="margin-top:16px"><iframe src="{html.escape(surfer_url)}" title="Embedded waveform viewer" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" style="width:100%;min-height:840px;border:1px solid rgba(116,92,62,.22);border-radius:16px;background:#fff;"></iframe></div>' if local_vcd_href else '<div class="empty">No published VCD was found for this snapshot.</div>'}
+        {waveform_embed_html if waveform_embed_html else ('' if local_vcd_href else '<div class="empty">No published VCD was found for this snapshot.</div>')}
       </section>
 
       <section class="card span-12">
@@ -1727,7 +1321,7 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
     </div>
 
     <section class="card table-card">
-      <div class="table-head"><h2>Run Comparison Table</h2><span>Top row is the selected best run</span></div>
+      <div class="table-head"><h2>All runs</h2><span>Top row is the selected best run</span></div>
       <div class="table-tools">
         <label>Status
           <select id="statusFilter">
@@ -1756,21 +1350,6 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
       </div>
       <div class="table-wrap">
         <table class="wide-table">
-          <colgroup>
-            <col class="col-run">
-            <col class="col-clock">
-            <col class="col-setup">
-            <col class="col-setup-tns">
-            <col class="col-core">
-            <col class="col-power">
-            <col class="col-drc">
-            <col class="col-lvs">
-            <col class="col-antenna">
-            <col class="col-ir">
-            <col class="col-status">
-            <col class="col-remarks">
-            <col class="col-gds">
-          </colgroup>
           <thead>
             <tr>
               <th><button class="sort-btn" data-key="run" data-type="text" aria-sort="none">Run <span class="sort-indicator">↕</span></button></th>
@@ -1778,7 +1357,7 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
               <th><button class="sort-btn" data-key="setup_wns" data-type="number" aria-sort="none">Setup WNS <span class="sort-indicator">↕</span></button></th>
               <th><button class="sort-btn" data-key="setup_tns" data-type="number" aria-sort="none">Setup TNS <span class="sort-indicator">↕</span></button></th>
               <th><button class="sort-btn" data-key="core_area" data-type="number" aria-sort="none">Core area <span class="sort-indicator">↕</span></button></th>
-              <th><button class="sort-btn" data-key="power_total" data-type="number" aria-sort="none">Total Power (W) <span class="sort-indicator">↕</span></button></th>
+              <th><button class="sort-btn" data-key="power_total" data-type="number" aria-sort="none">Total power <span class="sort-indicator">↕</span></button></th>
               <th><button class="sort-btn" data-key="drc" data-type="number" aria-sort="none">DRC <span class="sort-indicator">↕</span></button></th>
               <th><button class="sort-btn" data-key="lvs" data-type="number" aria-sort="none">LVS <span class="sort-indicator">↕</span></button></th>
               <th><button class="sort-btn" data-key="antenna" data-type="number" aria-sort="none">Antenna <span class="sort-indicator">↕</span></button></th>
@@ -1786,9 +1365,10 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
               <th><button class="sort-btn" data-key="status" data-type="status" aria-sort="none">Status <span class="sort-indicator">↕</span></button></th>
               <th><button class="sort-btn" data-key="remarks" data-type="text" aria-sort="none">Remarks <span class="sort-indicator">↕</span></button></th>
               <th>GDS</th>
+              <th>GDS Viewer</th>
             </tr>
           </thead>
-          <tbody>{''.join(rows_html) if rows_html else '<tr><td colspan="13" class="muted">No ASIC run rows were collected for this snapshot.</td></tr>'}</tbody>
+          <tbody>{''.join(rows_html) if rows_html else '<tr><td colspan="14" class="muted">No ASIC run rows were collected for this snapshot.</td></tr>'}</tbody>
         </table>
       </div>
     </section>
