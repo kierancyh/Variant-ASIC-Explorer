@@ -25,44 +25,6 @@ def to_float(v: Any) -> Optional[float]:
         return None
 
 
-def format_power_w(value: Any) -> str:
-    n = to_float(value)
-    if n is None:
-        return str(value or "")
-    return f"{n:.6f}"
-
-
-def pretty_metric_label(key: str) -> str:
-    mapping = {
-        "power_total_W": "Total Power (W)",
-        "power_internal_W": "Internal Power (W)",
-        "power_switching_W": "Switching Power (W)",
-        "power_leakage_W": "Leakage Power (W)",
-        "setup_wns_ns": "Setup WNS",
-        "setup_tns_ns": "Setup TNS",
-        "hold_wns_ns": "Hold WNS",
-        "hold_tns_ns": "Hold TNS",
-        "core_area_um2": "Core Area (um^2)",
-        "die_area_um2": "Die Area (um^2)",
-        "wire_length_um": "Wire Length (um)",
-        "ir_drop_worst_V": "IR Drop (V)",
-    }
-    if key in mapping:
-        return mapping[key]
-    text = key.replace("_", " ").strip()
-    if not text:
-        return key
-    return text[:1].upper() + text[1:]
-
-
-def format_metric_value(key: str, value: Any) -> str:
-    if key.endswith("_W"):
-        return format_power_w(value)
-    if value in (None, "None"):
-        return ""
-    return str(value)
-
-
 def load_json(path: Path) -> Dict[str, Any]:
     if not path.exists():
         return {}
@@ -399,17 +361,15 @@ def publish_run_site_artifact(base_dir: Path, row: Dict[str, str], site_artifact
             copy_file_if_exists(src, site_artifact_dir / name)
             published[name] = str(site_artifact_dir / name)
 
-    # Keep Pages light: do not publish render previews unless they are explicitly needed.
+    render_path = Path(row["_render_path"]) if row.get("_render_path") else None
+    if render_path and render_path.exists():
+        dst = site_artifact_dir / "renders" / render_path.name
+        copy_file_if_exists(render_path, dst)
+        published["render_path"] = str(dst)
+
     gds_path = Path(row["_gds_path"]) if row.get("_gds_path") else None
-    if gds_path and gds_path.exists():
-        dst = site_artifact_dir / "gds" / gds_path.name
-        copy_file_if_exists(gds_path, dst)
-        published["gds_exists"] = "yes"
-        published["gds_published"] = "yes"
-        published["gds_path"] = str(dst)
-    else:
-        published["gds_exists"] = "no"
-        published["gds_published"] = "no"
+    published["gds_exists"] = "yes" if gds_path and gds_path.exists() else "no"
+    published["gds_published"] = "no"
 
     return published
 
@@ -500,7 +460,7 @@ def write_summary_md(path: Path, rows: List[Dict[str, str]], precheck: Dict[str,
         f"- TB top: {precheck.get('testbench_top', '')}",
         f"- VCD present: {'yes' if precheck.get('vcd_present') else 'no'}",
         "",
-        "## Selection Criteria for Best Run",
+        "## Selection Criteria",
         "",
         "1. Clean signoff plus non-negative setup timing wins.",
         "2. If no full PASS exists, clean signoff wins over signoff violations.",
@@ -513,7 +473,7 @@ def write_summary_md(path: Path, rows: List[Dict[str, str]], precheck: Dict[str,
     else:
         best = sorted(rows, key=best_sort_key)[0]
         lines += [
-            f"Selected Best Run: {best.get('_variant', '')} / {best.get('_run_dir', '')}",
+            f"Selected best run: {best.get('_variant', '')} / {best.get('_run_dir', '')}",
             "",
             "| Variant | Stage | Clock (ns) | Status | Remarks |",
             "|---|---:|---:|---|---|",
@@ -590,6 +550,16 @@ def badge_html(status: str) -> str:
     return f'<span class="badge {cls}">{html.escape(s or "UNKNOWN")}</span>'
 
 
+def format_metric_value(key: str, value: Any) -> str:
+    if value in (None, "", "None"):
+        return ""
+    if key == "power_total_W":
+        n = to_float(value)
+        if n is not None:
+            return f"{n:.6f}"
+    return str(value)
+
+
 def write_redirect_page(path: Path, target: str, title: str, description: str) -> None:
     safe_title = html.escape(title)
     safe_description = html.escape(description)
@@ -632,6 +602,7 @@ def build_surfer_url(vcd_url: str) -> str:
 
 
 def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> None:
+    render_href = rel_href(Path(row["_render_path"]), run_dir) if row.get("_render_path") else ""
     gds_href = rel_href(Path(row["_gds_path"]), run_dir) if row.get("_gds_path") else ""
     metrics_path = Path(row.get("_site_metrics_path") or (Path(row["_base_dir"]) / "metrics.csv"))
     metrics_href = rel_href(metrics_path, run_dir)
@@ -641,30 +612,21 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
     snapshot_root = run_dir.parents[1]
     back_href = rel_href(snapshot_root / "index.html", run_dir)
     css_href = rel_href(snapshot_root / "assets" / "explorer.css", run_dir)
-
-    metric_rows: List[Tuple[str, str]] = []
-    for key in sorted(k for k in row.keys() if k and not k.startswith("_")):
-        metric_rows.append((pretty_metric_label(key), format_metric_value(key, row.get(key, ""))))
-
-    metadata_rows: List[Tuple[str, str]] = [
-        ("Variant", str(row.get("_variant", ""))),
-        ("Run", str(row.get("_run_dir", ""))),
-        ("Stage", str(row.get("_stage_label", ""))),
-        ("Requested Clock (ns)", str(row.get("_clock_requested", ""))),
-        ("Attempt Number", str(row.get("_attempt_number", ""))),
-        ("Attempt Started At", str(row.get("_attempt_started_at", ""))),
-        ("GitHub Run ID", str(row.get("_github_run_id", ""))),
-        ("Synthesis Strategy Override", str(row.get("_synth_strategy_override", ""))),
-        ("Metrics Raw Present", str(row.get("_metrics_raw_present", ""))),
-        ("Failure Summary Present", str(row.get("_failure_summary_present", ""))),
-        ("Failure Reason", str(row.get("_failure_reason", ""))),
-        ("Failure Phase", str(row.get("_failure_phase", ""))),
-        ("OpenLane Run Present", str(row.get("_openlane_run_present", ""))),
-        ("Published on Pages", "Lightweight explorer assets plus the run GDS"),
+    details = [
+        ("Variant", row.get("_variant", "")),
+        ("Stage", row.get("_stage_label", "")),
+        ("Requested clock", f"{row.get('_clock_requested','')} ns"),
+        ("Reported clock", f"{row.get('clock_ns','')} ns"),
+        ("Setup WNS", row.get("setup_wns_ns", "")),
+        ("Setup TNS", row.get("setup_tns_ns", "")),
+        ("Core area", row.get("core_area_um2", "")),
+        ("Total power", row.get("power_total_W", "")),
+        ("DRC", row.get("drc_errors", "")),
+        ("LVS", row.get("lvs_errors", "")),
+        ("Antenna", row.get("antenna_violations", "")),
+        ("Published on Pages", "Lightweight explorer assets only"),
         ("Heavy backend outputs", "Kept in GitHub Actions artifacts, not GitHub Pages"),
     ]
-    metadata_rows = [(k, v) for k, v in metadata_rows if str(v).strip()]
-
     actions = [
         f'<a class="btn secondary" href="{back_href}">Back to explorer</a>',
         f'<a class="btn" href="{metrics_href}">Open metrics.csv</a>',
@@ -677,11 +639,16 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
         actions.append(f'<a class="btn secondary" href="{failure_summary_href}">Open failure summary</a>')
     if gds_href:
         actions.append(f'<a class="btn" href="{gds_href}">Download GDS</a>')
-        actions.append(f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener">Open GDS Viewer</a>')
-
-    metric_table_rows = "".join(f"<tr><th>{html.escape(k)}</th><td>{html.escape(v)}</td></tr>" for k, v in metric_rows)
-    metadata_table_rows = "".join(f"<tr><th>{html.escape(k)}</th><td>{html.escape(v)}</td></tr>" for k, v in metadata_rows)
-
+        actions.append(f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener">Open GDS viewer</a>')
+    elif row.get("_gds_exists") == "yes":
+        actions.append(f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener">Open GDS viewer homepage</a>')
+    preview = f'<img src="{render_href}" alt="layout preview">' if render_href else '<div class="empty">No rendered layout preview found for this run.</div>'
+    gds_note = (
+        '<p class="muted">Heavy ASIC outputs, including most GDS assets, are intentionally kept out of GitHub Pages so the explorer stays below the Pages size limit. Use the workflow artifacts for full backend outputs.</p>'
+        if row.get("_gds_exists") == "yes" and not gds_href
+        else ''
+    )
+    table_rows = "".join(f"<tr><th>{html.escape(k)}</th><td>{html.escape(v)}</td></tr>" for k, v in details)
     content = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -701,12 +668,13 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
       <div class="actions">{''.join(actions)}</div>
     </section>
     <section class="card">
-      <h2>All Metrics</h2>
-      <table class="kv">{metric_table_rows}</table>
+      <h2>Metrics by category</h2>
+      <table class="kv">{table_rows}</table>
     </section>
     <section class="card">
-      <h2>Metadata</h2>
-      <table class="kv">{metadata_table_rows}</table>
+      <h2>Layout preview</h2>
+      {preview}
+      {gds_note}
     </section>
   </main>
 </body>
@@ -821,7 +789,7 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
 .stat .label{color:var(--muted);font-size:12px;text-transform:uppercase}
 .stat .value{font-size:28px;font-weight:700}
 .card h2{margin:0 0 12px 0}
-.badge{display:inline-flex;align-items:center;justify-content:center;min-width:112px;padding:6px 10px;border-radius:999px;font-size:12px;font-weight:700}
+.badge{display:inline-flex;align-items:center;justify-content:center;min-width:84px;padding:4px 8px;border-radius:999px;font-size:11px;font-weight:700;line-height:1.1}
 .badge.pass{background:var(--pass-bg);color:var(--pass-fg)}
 .badge.timing{background:var(--timing-bg);color:var(--timing-fg)}
 .badge.signoff{background:var(--signoff-bg);color:var(--signoff-fg)}
@@ -843,16 +811,27 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
 .sort-btn{all:unset;cursor:pointer;font-weight:700;color:var(--text);display:inline-flex;align-items:center;gap:6px}
 .sort-btn:hover,.sort-btn.active{color:var(--accent)}
 .sort-indicator{font-size:11px;color:var(--muted)}
-.wide-table{width:100%;border-collapse:collapse;table-layout:fixed;min-width:0;font-size:12px}
-.wide-table th,.wide-table td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:top;line-height:1.35}
-.wide-table th{background:rgba(255,248,240,.92);text-align:left;font-size:12px;white-space:normal}
-.wide-table td{overflow-wrap:anywhere;word-break:break-word}
-.wide-table th:nth-child(1),.wide-table td:nth-child(1){width:17rem}
-.wide-table th:nth-child(12),.wide-table td:nth-child(12){width:12rem}
-.wide-table th:nth-child(13),.wide-table td:nth-child(13){width:7.5rem}
-.wide-table th:nth-child(14),.wide-table td:nth-child(14){width:6.5rem}
-.waveform-shell{margin-top:16px;border:1px solid var(--border);border-radius:16px;overflow:hidden;background:#fff}
-.waveform-frame{display:block;width:100%;height:780px;border:0;background:#fff}
+.wide-table{width:100%;border-collapse:collapse;min-width:1120px}
+.wide-table col.col-run{width:23%}
+.wide-table col.col-clock{width:7%}
+.wide-table col.col-setup{width:6%}
+.wide-table col.col-setup-tns{width:6%}
+.wide-table col.col-core{width:8%}
+.wide-table col.col-power{width:8%}
+.wide-table col.col-drc{width:5%}
+.wide-table col.col-lvs{width:5%}
+.wide-table col.col-antenna{width:6%}
+.wide-table col.col-ir{width:6%}
+.wide-table col.col-status{width:8%}
+.wide-table col.col-remarks{width:12%}
+.wide-table col.col-gds{width:10%}
+.wide-table th,.wide-table td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:top;font-size:12px}
+.wide-table th{background:rgba(255,248,240,.92);text-align:left;font-size:12px;white-space:nowrap}
+.wide-table td.status-cell{white-space:nowrap}
+.wide-table td.remarks-cell{line-height:1.35}
+.wide-table td.gds-cell{white-space:nowrap}
+.gds-actions{display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.gds-actions .btn{padding:6px 10px;font-size:12px}
 .best-row{background:rgba(139,94,60,.06)}
 .kv{width:100%;border-collapse:collapse}
 .kv th,.kv td{padding:10px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}
@@ -882,7 +861,7 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
         row["_gds_exists"] = published.get("gds_exists", "no")
         row["_gds_published"] = published.get("gds_published", "no")
         row["_render_path"] = published.get("render_path", "")
-        row["_gds_path"] = published.get("gds_path", "")
+        row["_gds_path"] = ""
         row["_row_href"] = rel_href(row_site_dir / "index.html", snapshot_root)
         write_run_page(row_site_dir, row, "/")
 
@@ -890,11 +869,7 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
 
     pages_base = pages_base_url(repo_slug)
     published_snapshot_prefix = pages_base.rstrip("/") if pages_base else ""
-    if published_snapshot_prefix and run_id:
-        published_snapshot_prefix = (
-            f"{published_snapshot_prefix}/runs/{urllib.parse.quote(str(run_id), safe='')}"
-        )
-    elif normalized_site_subdir and published_snapshot_prefix:
+    if normalized_site_subdir and published_snapshot_prefix:
         published_snapshot_prefix = published_snapshot_prefix + "/" + urllib.parse.quote(normalized_site_subdir, safe="/")
 
     local_vcd_href = ""
@@ -939,10 +914,10 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
 
     settings_html = "".join([
         f"<li><strong>Synthesis strategy:</strong> {html.escape(pretty_setting(explorer_settings.get('synth_strategy'), 'Default'))}</li>",
-        f"<li><strong>Antenna repair:</strong> {html.escape(pretty_setting(explorer_settings.get('antenna_repair'), 'Enabled'))}</li>",
-        f"<li><strong>Heuristic diode insertion:</strong> {html.escape(pretty_setting(explorer_settings.get('heuristic_diode_insertion'), 'Enabled'))}</li>",
-        f"<li><strong>Post-GRT design repair:</strong> {html.escape(pretty_setting(explorer_settings.get('post_grt_design_repair'), 'Enabled'))}</li>",
-        f"<li><strong>Post-GRT resizer timing:</strong> {html.escape(pretty_setting(explorer_settings.get('post_grt_resizer_timing'), 'Disabled'))}</li>",
+        f"<li><strong>Antenna repair:</strong> {html.escape(pretty_setting(explorer_settings.get('antenna_repair')))}</li>",
+        f"<li><strong>Heuristic diode insertion:</strong> {html.escape(pretty_setting(explorer_settings.get('heuristic_diode_insertion')))}</li>",
+        f"<li><strong>Post-GRT design repair:</strong> {html.escape(pretty_setting(explorer_settings.get('post_grt_design_repair')))}</li>",
+        f"<li><strong>Post-GRT resizer timing:</strong> {html.escape(pretty_setting(explorer_settings.get('post_grt_resizer_timing')))}</li>",
     ])
 
     stage_values = sorted({str(row.get("_stage_label", "")).strip() for row in ordered if str(row.get("_stage_label", "")).strip()})
@@ -964,16 +939,6 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
     if yosys_netlist_href:
         waveform_actions.append(f'<a class="btn secondary" href="{yosys_netlist_href}">Download Synthesized Netlist</a>')
 
-    waveform_embed_html = ""
-    if published_vcd:
-        waveform_embed_html = (
-            f'<div class="waveform-shell">'
-            f'<iframe class="waveform-frame" src="{html.escape(surfer_url)}" '
-            f'title="Embedded waveform viewer" loading="lazy" '
-            f'referrerpolicy="strict-origin-when-cross-origin"></iframe>'
-            f'</div>'
-        )
-
     def sort_num_value(value: Any) -> str:
         n = to_float(value)
         return "" if n is None else str(n)
@@ -981,14 +946,21 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
     rows_html: List[str] = []
     for idx, row in enumerate(ordered):
         if row.get("_gds_published") == "yes" and row.get("_gds_path"):
-            gds_html = f'<a class="btn secondary" href="{rel_href(Path(row["_gds_path"]), snapshot_root)}">Download GDS</a>'
-            viewer_html = f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener noreferrer">Viewer</a>'
+            gds_cell_html = (
+                '<div class="gds-actions">'
+                f'<a class="btn secondary" href="{rel_href(Path(row["_gds_path"]), snapshot_root)}">Download GDS</a>'
+                f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener noreferrer">Viewer</a>'
+                '</div>'
+            )
         elif row.get("_gds_exists") == "yes":
-            gds_html = "Artifact only"
-            viewer_html = f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener noreferrer">Viewer</a>'
+            gds_cell_html = (
+                '<div class="gds-actions">'
+                '<span class="muted">Artifact only</span>'
+                f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener noreferrer">Viewer</a>'
+                '</div>'
+            )
         else:
-            gds_html = "—"
-            viewer_html = "—"
+            gds_cell_html = "—"
         row_classes = "best-row" if idx == 0 else ""
         run_text = f"{row.get('_variant', '')} / {row.get('_run_dir', '')}"
         rows_html.append(
@@ -998,15 +970,14 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
             f'<td>{html.escape(str(row.get("setup_wns_ns", "")))}</td>'
             f'<td>{html.escape(str(row.get("setup_tns_ns", "")))}</td>'
             f'<td>{html.escape(str(row.get("core_area_um2", "")))}</td>'
-            f'<td>{html.escape(format_power_w(row.get("power_total_W", "")))}</td>'
+            f'<td>{html.escape(format_metric_value("power_total_W", row.get("power_total_W", "")))}</td>'
             f'<td>{html.escape(str(row.get("drc_errors", "")))}</td>'
             f'<td>{html.escape(str(row.get("lvs_errors", "")))}</td>'
             f'<td>{html.escape(str(row.get("antenna_violations", "")))}</td>'
             f'<td>{html.escape(str(row.get("ir_drop_worst_V", "")))}</td>'
-            f'<td>{badge_html(row.get("status", ""))}</td>'
-            f'<td>{html.escape(str(row.get("selection_reason", "")))}</td>'
-            f'<td>{gds_html}</td>'
-            f'<td>{viewer_html}</td>'
+            f'<td class="status-cell">{badge_html(row.get("status", ""))}</td>'
+            f'<td class="remarks-cell">{html.escape(str(row.get("selection_reason", "")))}</td>'
+            f'<td class="gds-cell">{gds_cell_html}</td>'
             '</tr>'
         )
 
@@ -1109,8 +1080,8 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
     (site_root / "site_manifest.json").write_text(json.dumps(site_manifest, indent=2), encoding="utf-8")
 
     selection_block = (
-        f'<section class="card span-7"><h2>Chosen best run</h2><p><strong>Run:</strong> {html.escape(str(best.get("_variant","")))} / {html.escape(str(best.get("_run_dir","")))}</p><p><strong>Clock:</strong> {html.escape(str(best.get("clock_ns","")))} ns</p><p><strong>Status:</strong> {badge_html(best.get("status",""))}</p><p><strong>Remarks:</strong> {html.escape(str(best.get("selection_reason","")))}</p></section>'
-        if best else '<section class="card span-7"><h2>Chosen best run</h2><p class="muted">No ASIC run rows were collected for this snapshot.</p></section>'
+        f'<section class="card span-7"><h2>Best Run</h2><p><strong>Run:</strong> {html.escape(str(best.get("_variant","")))} / {html.escape(str(best.get("_run_dir","")))}</p><p><strong>Clock:</strong> {html.escape(str(best.get("clock_ns","")))} ns</p><p><strong>Status:</strong> {badge_html(best.get("status",""))}</p><p><strong>Remarks:</strong> {html.escape(str(best.get("selection_reason","")))}</p></section>'
+        if best else '<section class="card span-7"><h2>Best Run</h2><p class="muted">No ASIC run rows were collected for this snapshot.</p></section>'
     )
 
     index_html = f"""<!doctype html>
@@ -1151,8 +1122,7 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
       <section class="card span-12">
         <h2>Waveform Viewer</h2>
         <div class="actions">{''.join(waveform_actions)}</div>
-        {waveform_embed_html}
-        {'' if local_vcd_href else '<div class="empty">No published VCD was found for this snapshot.</div>'}
+        {f'<div style="margin-top:16px"><iframe src="{html.escape(surfer_url)}" title="Embedded waveform viewer" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" style="width:100%;min-height:840px;border:1px solid rgba(116,92,62,.22);border-radius:16px;background:#fff;"></iframe></div>' if local_vcd_href else '<div class="empty">No published VCD was found for this snapshot.</div>'}
       </section>
 
       <section class="card span-12">
@@ -1196,6 +1166,21 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
       </div>
       <div class="table-wrap">
         <table class="wide-table">
+          <colgroup>
+            <col class="col-run">
+            <col class="col-clock">
+            <col class="col-setup">
+            <col class="col-setup-tns">
+            <col class="col-core">
+            <col class="col-power">
+            <col class="col-drc">
+            <col class="col-lvs">
+            <col class="col-antenna">
+            <col class="col-ir">
+            <col class="col-status">
+            <col class="col-remarks">
+            <col class="col-gds">
+          </colgroup>
           <thead>
             <tr>
               <th><button class="sort-btn" data-key="run" data-type="text" aria-sort="none">Run <span class="sort-indicator">↕</span></button></th>
@@ -1211,10 +1196,9 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
               <th><button class="sort-btn" data-key="status" data-type="status" aria-sort="none">Status <span class="sort-indicator">↕</span></button></th>
               <th><button class="sort-btn" data-key="remarks" data-type="text" aria-sort="none">Remarks <span class="sort-indicator">↕</span></button></th>
               <th>GDS</th>
-              <th>GDS Viewer</th>
             </tr>
           </thead>
-          <tbody>{''.join(rows_html) if rows_html else '<tr><td colspan="14" class="muted">No ASIC run rows were collected for this snapshot.</td></tr>'}</tbody>
+          <tbody>{''.join(rows_html) if rows_html else '<tr><td colspan="13" class="muted">No ASIC run rows were collected for this snapshot.</td></tr>'}</tbody>
         </table>
       </div>
     </section>
