@@ -319,6 +319,13 @@ def normalize_site_subdir(site_subdir: str) -> str:
     return "/".join(parts)
 
 
+def pretty_stage_label(stage: str) -> str:
+    text = str(stage or "").strip()
+    if not text:
+        return ""
+    return text[:1].upper() + text[1:]
+
+
 def copy_tree_if_exists(src: Path, dst: Path) -> None:
     if not src.exists():
         return
@@ -370,6 +377,12 @@ def publish_run_site_artifact(base_dir: Path, row: Dict[str, str], site_artifact
     gds_path = Path(row["_gds_path"]) if row.get("_gds_path") else None
     published["gds_exists"] = "yes" if gds_path and gds_path.exists() else "no"
     published["gds_published"] = "no"
+    if gds_path and gds_path.exists():
+        dst = site_artifact_dir / "gds" / gds_path.name
+        copy_file_if_exists(gds_path, dst)
+        if dst.exists():
+            published["gds_path"] = str(dst)
+            published["gds_published"] = "yes"
 
     return published
 
@@ -601,6 +614,134 @@ def build_surfer_url(vcd_url: str) -> str:
     return f"{SURFER_WEB_APP_URL}?load_url={urllib.parse.quote(vcd_url, safe='')}"
 
 
+def build_theme_widget(button_id: str, panel_id: str) -> str:
+    return f"""
+<div class="theme-control">
+  <button class="theme-launch" id="{button_id}" type="button" aria-expanded="false" aria-controls="{panel_id}">Appearance ⚙️</button>
+  <div class="theme-widget" id="{panel_id}" hidden>
+    <div class="theme-widget-body">
+      <h3>Appearance</h3>
+      <div class="theme-row"><label for="{panel_id}_preset">Theme preset</label><select id="{panel_id}_preset"><option value="canvas">Canvas Beige</option><option value="forest">Forest</option><option value="slate">Slate</option></select></div>
+      <div class="theme-inline">
+        <div class="theme-row"><label for="{panel_id}_bg">Base background</label><input type="color" id="{panel_id}_bg" value="#f4ecdf"></div>
+        <div class="theme-row"><label for="{panel_id}_accent">Accent</label><input type="color" id="{panel_id}_accent" value="#8b5e3c"></div>
+      </div>
+      <div class="theme-inline">
+        <div class="theme-row"><label for="{panel_id}_grad1">Gradient 1</label><input type="color" id="{panel_id}_grad1" value="#f8f1e7"></div>
+        <div class="theme-row"><label for="{panel_id}_grad2">Gradient 2</label><input type="color" id="{panel_id}_grad2" value="#efe4d3"></div>
+      </div>
+      <div class="theme-btn-row"><button id="{panel_id}_save" type="button">Save</button><button id="{panel_id}_reset" type="button">Reset</button></div>
+    </div>
+  </div>
+</div>
+"""
+
+
+def build_theme_script(button_id: str, panel_id: str, storage_key: str) -> str:
+    return f"""
+<script>
+(function () {{
+  const root = document.documentElement;
+  const button = document.getElementById("{button_id}");
+  const panel = document.getElementById("{panel_id}");
+  if (!root || !button || !panel) return;
+  document.body.appendChild(panel);
+  const presetTheme = document.getElementById("{panel_id}_preset");
+  const bgColor = document.getElementById("{panel_id}_bg");
+  const accentColor = document.getElementById("{panel_id}_accent");
+  const grad1 = document.getElementById("{panel_id}_grad1");
+  const grad2 = document.getElementById("{panel_id}_grad2");
+  const saveTheme = document.getElementById("{panel_id}_save");
+  const resetTheme = document.getElementById("{panel_id}_reset");
+  const presets = {{
+    canvas: {{"--bg":"#f4ecdf","--bg-grad-1":"#f8f1e7","--bg-grad-2":"#efe4d3","--accent":"#8b5e3c","--accent-2":"#b6845e"}},
+    forest: {{"--bg":"#e9efe7","--bg-grad-1":"#f3f7f1","--bg-grad-2":"#d9e7d5","--accent":"#4f7a5c","--accent-2":"#789d83"}},
+    slate: {{"--bg":"#e7ebf0","--bg-grad-1":"#f3f6fa","--bg-grad-2":"#d7dde6","--accent":"#496a8a","--accent-2":"#7292b0"}}
+  }};
+  function applyVars(vars) {{ Object.entries(vars).forEach(([k,v]) => root.style.setProperty(k, v)); }}
+  function syncInputsFromCurrentTheme() {{
+    const styles = getComputedStyle(root);
+    bgColor.value = styles.getPropertyValue("--bg").trim() || bgColor.value;
+    grad1.value = styles.getPropertyValue("--bg-grad-1").trim() || grad1.value;
+    grad2.value = styles.getPropertyValue("--bg-grad-2").trim() || grad2.value;
+    accentColor.value = styles.getPropertyValue("--accent").trim() || accentColor.value;
+  }}
+  function saveSettings() {{ localStorage.setItem("{storage_key}", JSON.stringify({{preset:presetTheme.value,bg:bgColor.value,grad1:grad1.value,grad2:grad2.value,accent:accentColor.value}})); }}
+  function loadSettings() {{
+    const raw = localStorage.getItem("{storage_key}");
+    if (!raw) {{
+      presetTheme.value = "canvas";
+      applyVars(presets.canvas);
+      syncInputsFromCurrentTheme();
+      return;
+    }}
+    try {{
+      const s = JSON.parse(raw);
+      const preset = (s.preset && presets[s.preset]) ? s.preset : "canvas";
+      presetTheme.value = preset;
+      applyVars(presets[preset]);
+      if (s.bg) bgColor.value = s.bg;
+      if (s.grad1) grad1.value = s.grad1;
+      if (s.grad2) grad2.value = s.grad2;
+      if (s.accent) accentColor.value = s.accent;
+      applyVars({{"--bg":bgColor.value,"--bg-grad-1":grad1.value,"--bg-grad-2":grad2.value,"--accent":accentColor.value,"--accent-2":accentColor.value}});
+    }} catch (e) {{
+      presetTheme.value = "canvas";
+      applyVars(presets.canvas);
+    }}
+    syncInputsFromCurrentTheme();
+  }}
+  function positionPanel() {{
+    if (panel.hidden) return;
+    const rect = button.getBoundingClientRect();
+    const vw = window.innerWidth || document.documentElement.clientWidth || 0;
+    const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+    const margin = 12;
+    const w = Math.min(340, Math.max(260, vw - (margin * 2)));
+    panel.style.width = w + "px";
+    panel.style.maxWidth = w + "px";
+    const h = panel.offsetHeight || 320;
+    let left = rect.right - w;
+    left = Math.max(margin, Math.min(left, vw - w - margin));
+    let top = rect.bottom + 12;
+    if (top + h > vh - margin) top = Math.max(margin, rect.top - h - 12);
+    panel.style.left = left + "px";
+    panel.style.top = top + "px";
+  }}
+  function openPanel() {{ panel.hidden = false; button.setAttribute("aria-expanded", "true"); positionPanel(); }}
+  function closePanel() {{ panel.hidden = true; button.setAttribute("aria-expanded", "false"); }}
+  button.addEventListener("click", function (e) {{ e.stopPropagation(); if (panel.hidden) openPanel(); else closePanel(); }});
+  panel.addEventListener("click", function (e) {{ e.stopPropagation(); }});
+  document.addEventListener("click", function () {{ closePanel(); }});
+  document.addEventListener("keydown", function (e) {{ if (e.key === "Escape") closePanel(); }});
+  window.addEventListener("resize", function () {{ if (!panel.hidden) positionPanel(); }});
+  window.addEventListener("scroll", function () {{ if (!panel.hidden) positionPanel(); }}, true);
+  presetTheme.addEventListener("change", function () {{
+    if (presets[presetTheme.value]) {{
+      applyVars(presets[presetTheme.value]);
+      syncInputsFromCurrentTheme();
+      saveSettings();
+    }}
+  }});
+  [bgColor, grad1, grad2, accentColor].forEach(el => el.addEventListener("input", function () {{
+    applyVars({{"--bg":bgColor.value,"--bg-grad-1":grad1.value,"--bg-grad-2":grad2.value,"--accent":accentColor.value,"--accent-2":accentColor.value}});
+    saveSettings();
+  }}));
+  saveTheme.addEventListener("click", saveSettings);
+  resetTheme.addEventListener("click", function () {{
+    localStorage.removeItem("{storage_key}");
+    presetTheme.value = "canvas";
+    applyVars(presets.canvas);
+    syncInputsFromCurrentTheme();
+    closePanel();
+  }});
+  loadSettings();
+  closePanel();
+}})();
+</script>
+"""
+
+
 def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> None:
     render_href = rel_href(Path(row["_render_path"]), run_dir) if row.get("_render_path") else ""
     gds_href = rel_href(Path(row["_gds_path"]), run_dir) if row.get("_gds_path") else ""
@@ -649,6 +790,8 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
         else ''
     )
     table_rows = "".join(f"<tr><th>{html.escape(k)}</th><td>{html.escape(v)}</td></tr>" for k, v in details)
+    theme_widget = build_theme_widget("runAppearanceButton", "runThemeWidget")
+    theme_script = build_theme_script("runAppearanceButton", "runThemeWidget", "asic-flow-theme")
     content = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -660,12 +803,15 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
 <body>
   <main class="page">
     <section class="hero">
-      <div>
-        <p class="eyebrow">Per-run details</p>
-        <h1>{html.escape(row.get('_variant',''))} / {html.escape(row.get('_run_dir',''))}</h1>
-        <p class="muted">{badge_html(row.get('status',''))} &nbsp; Remarks: {html.escape(row.get('selection_reason',''))}</p>
+      <div class="hero-head">
+        <div>
+          <p class="eyebrow">Per-run details</p>
+          <h1>{html.escape(row.get('_variant',''))} / {html.escape(row.get('_run_dir',''))}</h1>
+          <p class="muted">{badge_html(row.get('status',''))} &nbsp; Remarks: {html.escape(row.get('selection_reason',''))}</p>
+        </div>
+        {theme_widget}
       </div>
-      <div class="actions">{''.join(actions)}</div>
+      <div class="actions" style="margin-top:16px">{''.join(actions)}</div>
     </section>
     <section class="card">
       <h2>Metrics by category</h2>
@@ -677,6 +823,7 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
       {gds_note}
     </section>
   </main>
+  {theme_script}
 </body>
 </html>"""
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -747,6 +894,7 @@ body{
 a{color:var(--accent);text-decoration:none}
 img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
 .wrap{max-width:1520px;margin:0 auto;padding:28px 20px 40px}
+.page{max-width:1520px;margin:0 auto;padding:28px 20px 40px}
 .hero{
   background:var(--panel-strong);
   border:1px solid var(--border-strong);
@@ -800,7 +948,22 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
 .actions{display:flex;gap:8px;flex-wrap:wrap}
 .muted{color:var(--muted)}
 .tag{display:inline-flex;align-items:center;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:700;background:rgba(139,94,60,.12);color:var(--accent)}
+.theme-control{position:relative;z-index:40}
+.theme-launch{display:inline-flex;align-items:center;justify-content:center;min-width:148px;padding:10px 14px;border-radius:12px;border:1px solid var(--border-strong);background:var(--panel-soft);color:var(--text);font:600 13px/1.2 Inter,Segoe UI,Roboto,Helvetica,Arial,sans-serif;cursor:pointer;box-shadow:none}
+.theme-widget{position:fixed;top:72px;right:24px;width:320px;max-width:min(320px,calc(100vw - 24px));z-index:99999;pointer-events:auto}
+.theme-widget[hidden]{display:none !important}
+.theme-widget-body{padding:16px;border-radius:16px;border:1px solid var(--border-strong);background:var(--panel-strong);box-shadow:var(--shadow)}
+.theme-widget-body h3{margin:0 0 12px;font-size:16px}
+.theme-row{display:grid;gap:6px;margin-bottom:12px}
+.theme-row label{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase}
+.theme-row select,.theme-row input,.theme-btn-row button{font:500 13px/1.2 Inter,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:var(--text)}
+.theme-row select{padding:10px 12px;border-radius:10px;border:1px solid var(--border-strong);background:var(--panel-soft)}
+.theme-row input[type="color"]{width:100%;height:42px;padding:4px;border-radius:10px;border:1px solid var(--border-strong);background:var(--panel-soft)}
+.theme-inline{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.theme-btn-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.theme-btn-row button{padding:10px 12px;border-radius:10px;border:1px solid var(--border-strong);background:var(--panel-soft);cursor:pointer}
 .table-card{padding:0;overflow:hidden}
+.homepage-table{margin-top:18px}
 .table-head{display:flex;justify-content:space-between;align-items:center;padding:18px 20px;border-bottom:1px solid var(--border)}
 .table-wrap{overflow:auto}
 .table-tools{display:flex;gap:12px;flex-wrap:wrap;align-items:end;padding:16px 20px 0}
@@ -861,7 +1024,7 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
         row["_gds_exists"] = published.get("gds_exists", "no")
         row["_gds_published"] = published.get("gds_published", "no")
         row["_render_path"] = published.get("render_path", "")
-        row["_gds_path"] = ""
+        row["_gds_path"] = published.get("gds_path", "")
         row["_row_href"] = rel_href(row_site_dir / "index.html", snapshot_root)
         write_run_page(row_site_dir, row, "/")
 
@@ -869,8 +1032,11 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
 
     pages_base = pages_base_url(repo_slug)
     published_snapshot_prefix = pages_base.rstrip("/") if pages_base else ""
-    if normalized_site_subdir and published_snapshot_prefix:
-        published_snapshot_prefix = published_snapshot_prefix + "/" + urllib.parse.quote(normalized_site_subdir, safe="/")
+    if published_snapshot_prefix:
+        if normalized_site_subdir:
+            published_snapshot_prefix = published_snapshot_prefix + "/" + urllib.parse.quote(normalized_site_subdir, safe="/")
+        elif str(run_id or "").strip():
+            published_snapshot_prefix = published_snapshot_prefix + "/runs/" + urllib.parse.quote(str(run_id).strip(), safe="")
 
     local_vcd_href = ""
     published_vcd = ""
@@ -922,7 +1088,7 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
 
     stage_values = sorted({str(row.get("_stage_label", "")).strip() for row in ordered if str(row.get("_stage_label", "")).strip()})
     stage_options_html = "".join(
-        f'<option value="{html.escape(stage)}">{html.escape(stage)}</option>'
+        f'<option value="{html.escape(stage)}">{html.escape(pretty_stage_label(stage))}</option>'
         for stage in stage_values
     )
 
@@ -1083,6 +1249,8 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
         f'<section class="card span-7"><h2>Best Run</h2><p><strong>Run:</strong> {html.escape(str(best.get("_variant","")))} / {html.escape(str(best.get("_run_dir","")))}</p><p><strong>Clock:</strong> {html.escape(str(best.get("clock_ns","")))} ns</p><p><strong>Status:</strong> {badge_html(best.get("status",""))}</p><p><strong>Remarks:</strong> {html.escape(str(best.get("selection_reason","")))}</p></section>'
         if best else '<section class="card span-7"><h2>Best Run</h2><p class="muted">No ASIC run rows were collected for this snapshot.</p></section>'
     )
+    theme_widget = build_theme_widget("indexAppearanceButton", "indexThemeWidget")
+    theme_script = build_theme_script("indexAppearanceButton", "indexThemeWidget", "asic-flow-theme")
 
     index_html = f"""<!doctype html>
 <html lang="en">
@@ -1103,6 +1271,7 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
           <p><strong>Snapshot run ID:</strong> {html.escape(run_id_label)}<br><strong>Repository:</strong> {html.escape(repo_slug_label)}</p>
           <ul class="settings-list">{settings_html}</ul>
         </div>
+        {theme_widget}
       </div>
     </section>
 
@@ -1136,7 +1305,7 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
       </section>
     </div>
 
-    <section class="card table-card">
+    <section class="card table-card homepage-table">
       <div class="table-head"><h2>Run Comparison Table</h2><span>Top row is the selected best run</span></div>
       <div class="table-tools">
         <label>Status
@@ -1203,6 +1372,7 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
       </div>
     </section>
   </div>
+  {theme_script}
   {sort_filter_script}
 </body>
 </html>"""
