@@ -422,6 +422,7 @@ def publish_run_site_artifact(base_dir: Path, row: Dict[str, str], site_artifact
         "viewer.html",
         "index.html",
     )
+
     for name in small_files:
         src = base_dir / name
         if src.exists():
@@ -437,6 +438,13 @@ def publish_run_site_artifact(base_dir: Path, row: Dict[str, str], site_artifact
     gds_path = Path(row["_gds_path"]) if row.get("_gds_path") else None
     published["gds_exists"] = "yes" if gds_path and gds_path.exists() else "no"
     published["gds_published"] = "no"
+
+    if gds_path and gds_path.exists():
+        dst = site_artifact_dir / "final" / "gds" / gds_path.name
+        copy_file_if_exists(gds_path, dst)
+        if dst.exists():
+            published["gds_path"] = str(dst)
+            published["gds_published"] = "yes"
 
     return published
 
@@ -527,7 +535,7 @@ def write_summary_md(path: Path, rows: List[Dict[str, str]], precheck: Dict[str,
         f"- TB top: {precheck.get('testbench_top', '')}",
         f"- VCD present: {'yes' if precheck.get('vcd_present') else 'no'}",
         "",
-        "## Best run selection",
+        "## Selection Criteria",
         "",
         "1. Clean signoff plus non-negative setup timing wins.",
         "2. If no full PASS exists, clean signoff wins over signoff violations.",
@@ -605,15 +613,16 @@ def badge_html(status: str) -> str:
     s = str(status or "").upper()
     cls = {
         "PASS": "pass",
-        "WARN": "warn",
-        "FAIL": "fail",
-        "SKIP": "skip",
-        "TIMING_FAIL": "fail",
-        "SIGNOFF_FAIL": "fail",
-        "SIGNOFF_AND_TIMING_FAIL": "fail",
-        "FLOW_FAIL": "fail",
-        "MISSING": "skip",
-    }.get(s, "skip")
+        "TIMING_FAIL": "timing",
+        "SIGNOFF_FAIL": "signoff",
+        "SIGNOFF_AND_TIMING_FAIL": "mixed",
+        "FLOW_FAIL": "flow",
+        "WARN": "mixed",
+        "FAIL": "flow",
+        "SKIP": "flow",
+        "MISSING": "flow",
+        "UNKNOWN": "flow",
+    }.get(s, "flow")
     return f'<span class="badge {cls}">{html.escape(s or "UNKNOWN")}</span>'
 
 def value_or_dash(v: Any) -> str:
@@ -801,9 +810,7 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
         ("Failure summary present", row.get("_failure_summary_present")),
         ("Likely failure phase", row.get("_failure_phase")),
         ("Status", row.get("status")),
-        ("Remarks", row.get("selection_reason")),
-        ("Published on Pages", "Lightweight explorer assets only"),
-        ("Heavy backend outputs", "Kept in GitHub Actions artifacts, not GitHub Pages"),
+        ("Remarks", row.get("selection_reason"))
     ]
 
     raw_group = metric_group_html("Additional Raw Metrics", additional_raw_items) if additional_raw_items else ""
@@ -883,137 +890,312 @@ def build_site(
     assets_dir = snapshot_root / "assets"
     assets_dir.mkdir(parents=True, exist_ok=True)
     css = """
-:root{
-  color-scheme:light dark;
-  --bg:#f4ecdf;
-  --bg-grad-1:#f8f1e7;
-  --bg-grad-2:#efe4d3;
-  --panel:rgba(255,250,243,.82);
-  --panel-strong:rgba(255,248,238,.94);
-  --panel-soft:rgba(255,255,255,.46);
-  --border:rgba(116,92,62,.16);
-  --border-strong:rgba(116,92,62,.22);
-  --text:#2f2418;
-  --muted:#716250;
-  --accent:#8b5e3c;
-  --accent-2:#b6845e;
-  --shadow:0 18px 45px rgba(110,84,53,.12);
-  --pass-bg:rgba(73,143,96,.14);
-  --pass-fg:#285a38;
-  --timing-bg:rgba(190,143,45,.16);
-  --timing-fg:#7d5b13;
-  --signoff-bg:rgba(180,83,72,.14);
-  --signoff-fg:#7b2f28;
-  --mixed-bg:rgba(135,96,166,.14);
-  --mixed-fg:#5b3f77;
-  --flow-bg:rgba(120,115,108,.14);
-  --flow-fg:#504a44;
-  --radius-xl:28px;
-  --radius-lg:20px;
-  --radius-md:14px
-}
-*{box-sizing:border-box}
-body{
-  margin:0;
-  background:
-    radial-gradient(circle at top left,var(--bg-grad-1)0%,transparent 36%),
-    radial-gradient(circle at top right,var(--bg-grad-2)0%,transparent 28%),
-    linear-gradient(180deg,var(--bg-grad-1)0%,var(--bg)100%);
-  color:var(--text);
-  font:15px/1.6 Inter,Segoe UI,Roboto,Helvetica,Arial,sans-serif
-}
-a{color:var(--accent);text-decoration:none}
-img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
-.wrap{max-width:1520px;margin:0 auto;padding:28px 20px 40px}
-.hero{
-  background:var(--panel-strong);
-  border:1px solid var(--border-strong);
-  border-radius:var(--radius-xl);
-  padding:30px;
-  box-shadow:var(--shadow);
-  margin-bottom:22px
-}
-.hero-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
-.hero-copy{max-width:1100px}
-.hero-copy p{margin:0 0 8px 0}
-.settings-list{
-  margin:10px 0 0;
-  padding:0;
-  list-style:none;
-  display:grid;
-  gap:6px;
-  color:var(--muted);
-  font-size:14px
-}
-.settings-list strong{color:var(--text)}
-.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:18px}
-.card{
-  background:var(--panel);
-  border:1px solid var(--border);
-  border-radius:var(--radius-lg);
-  padding:22px;
-  box-shadow:var(--shadow)
-}
-.span-12{grid-column:span 12}
-.span-7{grid-column:span 7}
-.span-5{grid-column:span 5}
-.kpi-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
-.stat{
-  background:var(--panel-soft);
-  border:1px solid var(--border);
-  border-radius:var(--radius-md);
-  padding:16px
-}
-.stat .label{color:var(--muted);font-size:12px;text-transform:uppercase}
-.stat .value{font-size:28px;font-weight:700}
-.card h2{margin:0 0 12px 0}
-.badge{display:inline-flex;align-items:center;justify-content:center;min-width:112px;padding:6px 10px;border-radius:999px;font-size:12px;font-weight:700}
-.badge.pass{background:var(--pass-bg);color:var(--pass-fg)}
-.badge.timing{background:var(--timing-bg);color:var(--timing-fg)}
-.badge.signoff{background:var(--signoff-bg);color:var(--signoff-fg)}
-.badge.mixed{background:var(--mixed-bg);color:var(--mixed-fg)}
-.badge.flow{background:var(--flow-bg);color:var(--flow-fg)}
-.btn{display:inline-flex;align-items:center;justify-content:center;padding:8px 12px;border-radius:10px;border:1px solid rgba(139,94,60,.20);background:rgba(139,94,60,.08);color:var(--text);font-weight:600;font-size:13px}
-.btn.secondary{border-color:var(--border-strong);background:rgba(255,255,255,.08)}
-.actions{display:flex;gap:8px;flex-wrap:wrap}
-.muted{color:var(--muted)}
-.tag{display:inline-flex;align-items:center;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:700;background:rgba(139,94,60,.12);color:var(--accent)}
-.table-card{padding:0;overflow:hidden}
-.table-head{display:flex;justify-content:space-between;align-items:center;padding:18px 20px;border-bottom:1px solid var(--border)}
-.table-wrap{overflow:auto}
-.table-tools{display:flex;gap:12px;flex-wrap:wrap;align-items:end;padding:16px 20px 0}
-.table-tools label{display:grid;gap:6px;color:var(--muted);font-size:12px;font-weight:700;text-transform:uppercase}
-.table-tools select,.table-tools input[type="search"]{min-width:180px;padding:10px 12px;border-radius:10px;border:1px solid var(--border-strong);background:var(--panel-soft);color:var(--text);font:500 13px/1.2 Inter,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
-.table-tools .inline-check{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;text-transform:none;color:var(--text);padding-bottom:2px}
-.table-tools .summary{margin-left:auto;font-size:13px;color:var(--muted);padding-bottom:4px}
-.sort-btn{all:unset;cursor:pointer;font-weight:700;color:var(--text);display:inline-flex;align-items:center;gap:6px}
-.sort-btn:hover,.sort-btn.active{color:var(--accent)}
-.sort-indicator{font-size:11px;color:var(--muted)}
-.wide-table{width:100%;border-collapse:collapse;min-width:1180px}
-.wide-table th,.wide-table td{padding:14px 16px;border-bottom:1px solid var(--border);vertical-align:top}
-.wide-table th{background:rgba(255,248,240,.92);text-align:left;font-size:13px;white-space:nowrap}
-.best-row{background:rgba(139,94,60,.06)}
-.page{max-width:1520px;margin:0 auto;padding:28px 20px 40px}
-.eyebrow{margin:0 0 8px 0;color:var(--muted);font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
-.metrics-strip{display:grid;grid-template-columns:1fr;gap:14px}
-.metric-group{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-lg);padding:0;overflow:hidden}
-.metric-group h3{margin:0;font-size:15px}
-.kv-wrap{overflow:hidden}
-.kv-table{width:100%;border-collapse:collapse;table-layout:fixed;min-width:0}
-.kv-table col.kv-key{width:38%}
-.kv-table col.kv-value{width:62%}
-.kv-table th,.kv-table td{padding:12px 16px;border-bottom:1px solid var(--border);vertical-align:top}
-.kv-table th{background:rgba(255,248,240,.92);text-align:left;font-size:13px}
-.kv-table td:first-child,.kv-table th:first-child{white-space:nowrap}
-.kv-table td:last-child,.kv-table th:last-child{word-break:break-word}
-.kv{width:100%;border-collapse:collapse}
-.kv th,.kv td{padding:10px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}
-.kv th{width:220px;color:var(--muted)}
-.empty{padding:18px;border:1px dashed var(--border);border-radius:16px;color:var(--muted);background:rgba(255,255,255,.55)}
-.waveform-embed iframe{width:100%;min-height:760px;border:1px solid rgba(116,92,62,.22);border-radius:16px;background:#fff}
-@media(max-width:1080px){.span-7,.span-5{grid-column:span 12}.kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.table-tools .summary{margin-left:0;width:100%}}
-@media(max-width:720px){.kpi-grid{grid-template-columns:1fr}.kv-table col.kv-key{width:42%}.kv-table col.kv-value{width:58%}}
-"""
+    :root{
+      color-scheme:light dark;
+      --bg:#f4ecdf;
+      --bg-grad-1:#f8f1e7;
+      --bg-grad-2:#efe4d3;
+      --panel:rgba(255,250,243,.82);
+      --panel-strong:rgba(255,248,238,.94);
+      --panel-soft:rgba(255,255,255,.46);
+      --border:rgba(116,92,62,.16);
+      --border-strong:rgba(116,92,62,.22);
+      --text:#2f2418;
+      --muted:#716250;
+      --accent:#8b5e3c;
+      --accent-2:#b6845e;
+      --shadow:0 18px 45px rgba(110,84,53,.12);
+      --pass-bg:rgba(73,143,96,.14);
+      --pass-fg:#285a38;
+      --timing-bg:rgba(190,143,45,.16);
+      --timing-fg:#7d5b13;
+      --signoff-bg:rgba(180,83,72,.14);
+      --signoff-fg:#7b2f28;
+      --mixed-bg:rgba(135,96,166,.14);
+      --mixed-fg:#5b3f77;
+      --flow-bg:rgba(120,115,108,.14);
+      --flow-fg:#504a44;
+      --radius-xl:28px;
+      --radius-lg:20px;
+      --radius-md:14px
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      background:
+        radial-gradient(circle at top left,var(--bg-grad-1)0%,transparent 36%),
+        radial-gradient(circle at top right,var(--bg-grad-2)0%,transparent 28%),
+        linear-gradient(180deg,var(--bg-grad-1)0%,var(--bg)100%);
+      color:var(--text);
+      font:15px/1.6 Inter,Segoe UI,Roboto,Helvetica,Arial,sans-serif
+    }
+    a{color:var(--accent);text-decoration:none}
+    img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
+    .wrap{max-width:1520px;margin:0 auto;padding:28px 20px 40px}
+    .hero{
+      background:var(--panel-strong);
+      border:1px solid var(--border-strong);
+      border-radius:var(--radius-xl);
+      padding:30px;
+      box-shadow:var(--shadow);
+      margin-bottom:22px
+    }
+    .hero-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+    .hero-copy{max-width:1100px}
+    .hero-copy p{margin:0 0 8px 0}
+    .settings-list{
+      margin:10px 0 0;
+      padding:0;
+      list-style:none;
+      display:grid;
+      gap:6px;
+      color:var(--muted);
+      font-size:14px
+    }
+    .settings-list strong{color:var(--text)}
+    .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:18px}
+    .card{
+      background:var(--panel);
+      border:1px solid var(--border);
+      border-radius:var(--radius-lg);
+      padding:22px;
+      box-shadow:var(--shadow)
+    }
+    .span-12{grid-column:span 12}
+    .span-7{grid-column:span 7}
+    .span-5{grid-column:span 5}
+    .kpi-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+    .stat{
+      background:var(--panel-soft);
+      border:1px solid var(--border);
+      border-radius:var(--radius-md);
+      padding:16px
+    }
+    .stat .label{color:var(--muted);font-size:12px;text-transform:uppercase}
+    .stat .value{font-size:28px;font-weight:700}
+    .card h2{margin:0 0 12px 0}
+
+    .badge{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      min-width:112px;
+      padding:6px 10px;
+      border-radius:999px;
+      font-size:12px;
+      font-weight:700
+    }
+    .badge.pass{background:var(--pass-bg);color:var(--pass-fg)}
+    .badge.timing{background:var(--timing-bg);color:var(--timing-fg)}
+    .badge.signoff{background:var(--signoff-bg);color:var(--signoff-fg)}
+    .badge.mixed{background:var(--mixed-bg);color:var(--mixed-fg)}
+    .badge.flow{background:var(--flow-bg);color:var(--flow-fg)}
+
+    /* Homepage-only smaller status badges */
+    .wide-table .badge{
+      min-width:84px;
+      padding:5px 8px;
+      font-size:10px
+    }
+
+    .btn{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      padding:8px 12px;
+      border-radius:10px;
+      border:1px solid rgba(139,94,60,.20);
+      background:rgba(139,94,60,.08);
+      color:var(--text);
+      font-weight:600;
+      font-size:13px
+    }
+    .btn.secondary{border-color:var(--border-strong);background:rgba(255,255,255,.08)}
+    .btn-sm{
+      padding:6px 10px;
+      font-size:12px;
+      border-radius:9px
+    }
+
+    .actions{display:flex;gap:8px;flex-wrap:wrap}
+    .inline-actions{
+      display:inline-flex;
+      flex-wrap:nowrap;
+      align-items:center;
+      gap:8px;
+      min-width:max-content
+    }
+
+    .muted{color:var(--muted)}
+    .tag{
+      display:inline-flex;
+      align-items:center;
+      padding:4px 10px;
+      border-radius:999px;
+      font-size:12px;
+      font-weight:700;
+      background:rgba(139,94,60,.12);
+      color:var(--accent)
+    }
+
+    .table-card{padding:0;overflow:hidden}
+    .section-gap-lg{margin-top:26px}
+
+    .table-head{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      padding:18px 20px;
+      border-bottom:1px solid var(--border)
+    }
+    .table-wrap{overflow:auto}
+    .table-tools{
+      display:flex;
+      gap:12px;
+      flex-wrap:wrap;
+      align-items:end;
+      padding:16px 20px 0
+    }
+    .table-tools label{
+      display:grid;
+      gap:6px;
+      color:var(--muted);
+      font-size:12px;
+      font-weight:700;
+      text-transform:uppercase
+    }
+    .table-tools select,.table-tools input[type="search"]{
+      min-width:180px;
+      padding:10px 12px;
+      border-radius:10px;
+      border:1px solid var(--border-strong);
+      background:var(--panel-soft);
+      color:var(--text);
+      font:500 13px/1.2 Inter,Segoe UI,Roboto,Helvetica,Arial,sans-serif
+    }
+    .table-tools .inline-check{
+      display:flex;
+      align-items:center;
+      gap:8px;
+      font-size:13px;
+      font-weight:600;
+      text-transform:none;
+      color:var(--text);
+      padding-bottom:2px
+    }
+    .table-tools .summary{
+      margin-left:auto;
+      font-size:13px;
+      color:var(--muted);
+      padding-bottom:4px
+    }
+
+    .sort-btn{
+      all:unset;
+      cursor:pointer;
+      font-weight:700;
+      color:var(--text);
+      display:inline-flex;
+      align-items:center;
+      gap:6px
+    }
+    .sort-btn:hover,.sort-btn.active{color:var(--accent)}
+    .sort-indicator{font-size:11px;color:var(--muted)}
+
+    .wide-table{
+      width:100%;
+      border-collapse:collapse;
+      min-width:1180px
+    }
+    .wide-table th,.wide-table td{
+      padding:14px 16px;
+      border-bottom:1px solid var(--border);
+      vertical-align:top
+    }
+    .wide-table th{
+      background:rgba(255,248,240,.92);
+      text-align:left;
+      font-size:13px;
+      white-space:nowrap
+    }
+    /* Keep homepage GDS actions on one line; table can scroll horizontally if needed */
+    .wide-table td:last-child{white-space:nowrap}
+
+    .best-row{background:rgba(139,94,60,.06)}
+    .page{max-width:1520px;margin:0 auto;padding:28px 20px 40px}
+    .eyebrow{
+      margin:0 0 8px 0;
+      color:var(--muted);
+      font-size:12px;
+      font-weight:700;
+      letter-spacing:.08em;
+      text-transform:uppercase
+    }
+    .metrics-strip{display:grid;grid-template-columns:1fr;gap:14px}
+    .metric-group{
+      background:var(--panel);
+      border:1px solid var(--border);
+      border-radius:var(--radius-lg);
+      padding:0;
+      overflow:hidden
+    }
+    .metric-group h3{margin:0;font-size:15px}
+    .kv-wrap{overflow:hidden}
+    .kv-table{
+      width:100%;
+      border-collapse:collapse;
+      table-layout:fixed;
+      min-width:0
+    }
+    .kv-table col.kv-key{width:38%}
+    .kv-table col.kv-value{width:62%}
+    .kv-table th,.kv-table td{
+      padding:12px 16px;
+      border-bottom:1px solid var(--border);
+      vertical-align:top
+    }
+    .kv-table th{
+      background:rgba(255,248,240,.92);
+      text-align:left;
+      font-size:13px
+    }
+    .kv-table td:first-child,.kv-table th:first-child{white-space:nowrap}
+    .kv-table td:last-child,.kv-table th:last-child{word-break:break-word}
+    .kv{width:100%;border-collapse:collapse}
+    .kv th,.kv td{
+      padding:10px;
+      border-bottom:1px solid var(--border);
+      text-align:left;
+      vertical-align:top
+    }
+    .kv th{width:220px;color:var(--muted)}
+    .empty{
+      padding:18px;
+      border:1px dashed var(--border);
+      border-radius:16px;
+      color:var(--muted);
+      background:rgba(255,255,255,.55)
+    }
+    .waveform-embed iframe{
+      width:100%;
+      min-height:760px;
+      border:1px solid rgba(116,92,62,.22);
+      border-radius:16px;
+      background:#fff
+    }
+
+    @media(max-width:1080px){
+      .span-7,.span-5{grid-column:span 12}
+      .kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+      .table-tools .summary{margin-left:0;width:100%}
+    }
+
+    @media(max-width:720px){
+      .kpi-grid{grid-template-columns:1fr}
+      .kv-table col.kv-key{width:42%}
+      .kv-table col.kv-value{width:58%}
+    }
+    """
     (assets_dir / "explorer.css").write_text(css, encoding="utf-8")
 
     ordered = sorted(rows, key=best_sort_key)
@@ -1031,11 +1213,13 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
         row["_site_metrics_path"] = published.get("metrics.csv", str(site_artifact_dir / "metrics.csv"))
         row["_site_metrics_raw_path"] = published.get("metrics_raw.json", "")
         row["_site_run_meta_path"] = published.get("run_meta.json", "")
-        row["_site_failure_summary_path"] = published.get("failure_summary.json", "") or published.get("failure_summary.md", "")
+        row["_site_failure_summary_path"] = published.get("failure_summary.json", "") or published.get(
+            "failure_summary.md", "")
         row["_gds_exists"] = published.get("gds_exists", "no")
         row["_gds_published"] = published.get("gds_published", "no")
         row["_render_path"] = published.get("render_path", "")
-        row["_gds_path"] = ""
+        row["_gds_path"] = published.get("gds_path", "")
+        row["_gds_href"] = rel_href(Path(published["gds_path"]), snapshot_root) if published.get("gds_path") else ""
         row["_row_href"] = rel_href(row_site_dir / "index.html", snapshot_root)
         write_run_page(row_site_dir, row, "/")
 
@@ -1100,8 +1284,23 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
     ])
 
     stage_values = sorted({str(row.get("_stage_label", "")).strip() for row in ordered if str(row.get("_stage_label", "")).strip()})
+
+    def pretty_stage_label(stage: str) -> str:
+        mapping = {
+            "coarse": "Coarse",
+            "mid": "Mid",
+            "refine-1": "Refine-1",
+            "refine-2": "Refine-2",
+            "refine-3": "Refine-3",
+            "1.0 ns": "Refine-1",
+            "0.5 ns": "Refine-2",
+            "0.125 ns": "Refine-3",
+            "5 ns": "Mid",
+        }
+        return mapping.get(stage, stage.title())
+
     stage_options_html = "".join(
-        f'<option value="{html.escape(stage)}">{html.escape(stage)}</option>'
+        f'<option value="{html.escape(stage)}">{html.escape(pretty_stage_label(stage))}</option>'
         for stage in stage_values
     )
 
@@ -1135,34 +1334,65 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
 
     rows_html: List[str] = []
     for idx, row in enumerate(ordered):
-        if row.get("_gds_published") == "yes" and row.get("_gds_path"):
-            gds_html = f'<a class="btn secondary" href="{rel_href(Path(row["_gds_path"]), snapshot_root)}">GDS</a>'
-            viewer_html = f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener noreferrer">Viewer</a>'
-        elif row.get("_gds_exists") == "yes":
-            gds_html = "Artifact only"
-            viewer_html = f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener noreferrer">Viewer</a>'
-        else:
-            gds_html = "—"
-            viewer_html = "—"
-        row_classes = "best-row" if idx == 0 else ""
         run_text = f"{row.get('_variant', '')} / {row.get('_run_dir', '')}"
+        run_href = str(row.get("_row_href", "#"))
+
+        power_total = to_float(row.get("power_total_W"))
+        power_total_display = f"{power_total:.6f}" if power_total is not None else html.escape(
+            str(row.get("power_total_W", "")))
+
+        gds_actions: List[str] = []
+        if row.get("_gds_published") == "yes" and row.get("_gds_href"):
+            gds_actions.append(
+                f'<a class="btn secondary btn-sm" href="{html.escape(str(row.get("_gds_href", "")))}">Download GDS</a>'
+            )
+        elif row.get("_gds_exists") == "yes":
+            gds_actions.append('<span class="muted">Artifact only</span>')
+
+        if row.get("_gds_exists") == "yes":
+            gds_actions.append(
+                f'<a class="btn secondary btn-sm" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener">Viewer</a>'
+            )
+
+        gds_html = f'<div class="inline-actions">{"".join(gds_actions)}</div>' if gds_actions else "—"
+
+        row_classes = "best-row" if idx == 0 else ""
         rows_html.append(
-            f'<tr class="{row_classes}" data-selected="{1 if idx == 0 else 0}" data-run="{html.escape(run_text)}" data-clock="{html.escape(sort_num_value(row.get("clock_ns")))}" data-setup_wns="{html.escape(sort_num_value(row.get("setup_wns_ns")))}" data-setup_tns="{html.escape(sort_num_value(row.get("setup_tns_ns")))}" data-core_area="{html.escape(sort_num_value(row.get("core_area_um2")))}" data-power_total="{html.escape(sort_num_value(row.get("power_total_W")))}" data-drc="{html.escape(sort_num_value(row.get("drc_errors")))}" data-lvs="{html.escape(sort_num_value(row.get("lvs_errors")))}" data-antenna="{html.escape(sort_num_value(row.get("antenna_violations")))}" data-ir_drop="{html.escape(sort_num_value(row.get("ir_drop_worst_V")))}" data-status="{html.escape(str(row.get("status", "")))}" data-stage="{html.escape(str(row.get("_stage_label", "")))}" data-remarks="{html.escape(str(row.get("selection_reason", "")))}">'
-            f'<td><a href="{html.escape(row.get("_row_href", ""))}"><strong>{html.escape(str(row.get("_variant", "")))} / {html.escape(str(row.get("_run_dir", "")))}</strong></a></td>'
-            f'<td>{html.escape(str(row.get("clock_ns", "")))}</td>'
-            f'<td>{html.escape(str(row.get("setup_wns_ns", "")))}</td>'
-            f'<td>{html.escape(str(row.get("setup_tns_ns", "")))}</td>'
-            f'<td>{html.escape(str(row.get("core_area_um2", "")))}</td>'
-            f'<td>{html.escape(str(row.get("power_total_W", "")))}</td>'
-            f'<td>{html.escape(str(row.get("drc_errors", "")))}</td>'
-            f'<td>{html.escape(str(row.get("lvs_errors", "")))}</td>'
-            f'<td>{html.escape(str(row.get("antenna_violations", "")))}</td>'
-            f'<td>{html.escape(str(row.get("ir_drop_worst_V", "")))}</td>'
-            f'<td>{badge_html(row.get("status", ""))}</td>'
-            f'<td>{html.escape(str(row.get("selection_reason", "")))}</td>'
-            f'<td>{gds_html}</td>'
-            f'<td>{viewer_html}</td>'
-            '</tr>'
+            f'''
+            <tr class="{row_classes}"
+                data-run="{html.escape(run_text)}"
+                data-clock="{sort_num_value(row.get('clock_ns'))}"
+                data-setup_wns="{sort_num_value(row.get('setup_wns_ns'))}"
+                data-setup_tns="{sort_num_value(row.get('setup_tns_ns'))}"
+                data-core_area="{sort_num_value(row.get('core_area_um2'))}"
+                data-power_total="{sort_num_value(row.get('power_total_W'))}"
+                data-drc="{sort_num_value(row.get('drc_errors'))}"
+                data-lvs="{sort_num_value(row.get('lvs_errors'))}"
+                data-antenna="{sort_num_value(row.get('antenna_violations'))}"
+                data-ir_drop="{sort_num_value(row.get('ir_drop_worst_V'))}"
+                data-status="{html.escape(str(row.get('status', '')))}"
+                data-stage="{html.escape(str(row.get('_stage_label', '')))}"
+                data-remarks="{html.escape(str(row.get('selection_reason', '')))}"
+                data-selected="{'1' if idx == 0 else '0'}">
+              <td data-sort="{html.escape(run_text)}">
+                <a href="{html.escape(run_href)}">
+                  {html.escape(run_text)}
+                </a>
+              </td>
+              <td data-sort="{html.escape(str(row.get('clock_ns', '')))}">{html.escape(str(row.get('clock_ns', '')))}</td>
+              <td data-sort="{html.escape(str(row.get('setup_wns_ns', '')))}">{html.escape(str(row.get('setup_wns_ns', '')))}</td>
+              <td data-sort="{html.escape(str(row.get('setup_tns_ns', '')))}">{html.escape(str(row.get('setup_tns_ns', '')))}</td>
+              <td data-sort="{html.escape(str(row.get('core_area_um2', '')))}">{html.escape(str(row.get('core_area_um2', '')))}</td>
+              <td data-sort="{sort_num_value(row.get('power_total_W'))}">{power_total_display}</td>
+              <td data-sort="{html.escape(str(row.get('drc_errors', '')))}">{html.escape(str(row.get('drc_errors', '')))}</td>
+              <td data-sort="{html.escape(str(row.get('lvs_errors', '')))}">{html.escape(str(row.get('lvs_errors', '')))}</td>
+              <td data-sort="{html.escape(str(row.get('antenna_violations', '')))}">{html.escape(str(row.get('antenna_violations', '')))}</td>
+              <td data-sort="{html.escape(str(row.get('ir_drop_worst_V', '')))}">{html.escape(str(row.get('ir_drop_worst_V', '')))}</td>
+              <td>{badge_html(row.get('status', ''))}</td>
+              <td>{html.escape(str(row.get('selection_reason', '')))}</td>
+              <td>{gds_html}</td>
+            </tr>
+            '''
         )
 
     sort_filter_script = """
@@ -1264,8 +1494,8 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
     (site_root / "site_manifest.json").write_text(json.dumps(site_manifest, indent=2), encoding="utf-8")
 
     selection_block = (
-        f'<section class="card span-7"><h2>Chosen best run</h2><p><strong>Run:</strong> {html.escape(str(best.get("_variant","")))} / {html.escape(str(best.get("_run_dir","")))}</p><p><strong>Clock:</strong> {html.escape(str(best.get("clock_ns","")))} ns</p><p><strong>Status:</strong> {badge_html(best.get("status",""))}</p><p><strong>Remarks:</strong> {html.escape(str(best.get("selection_reason","")))}</p></section>'
-        if best else '<section class="card span-7"><h2>Chosen best run</h2><p class="muted">No ASIC run rows were collected for this snapshot.</p></section>'
+        f'<section class="card span-7"><h2>Best Run</h2><p><strong>Run:</strong> {html.escape(str(best.get("_variant","")))} / {html.escape(str(best.get("_run_dir","")))}</p><p><strong>Clock:</strong> {html.escape(str(best.get("clock_ns","")))} ns</p><p><strong>Status:</strong> {badge_html(best.get("status",""))}</p><p><strong>Remarks:</strong> {html.escape(str(best.get("selection_reason","")))}</p></section>'
+        if best else '<section class="card span-7"><h2>Best Run</h2><p class="muted">No ASIC run rows were collected for this snapshot.</p></section>'
     )
 
     index_html = f"""<!doctype html>
@@ -1292,7 +1522,7 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
 
     <div class="grid">
       <section class="card span-5">
-        <h2>Selection order</h2>
+        <h2>Selection Criteria</h2>
         <ol>
           <li>Clean signoff plus non-negative setup timing wins.</li>
           <li>If no full PASS exists, clean signoff wins over signoff violations.</li>
@@ -1320,8 +1550,8 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
       </section>
     </div>
 
-    <section class="card table-card">
-      <div class="table-head"><h2>All runs</h2><span>Top row is the selected best run</span></div>
+    <section class="card table-card section-gap-lg">
+      <div class="table-head"><h2>Run Comparison Table</h2><span>Top row is the selected best run</span></div>
       <div class="table-tools">
         <label>Status
           <select id="statusFilter">
@@ -1357,7 +1587,7 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
               <th><button class="sort-btn" data-key="setup_wns" data-type="number" aria-sort="none">Setup WNS <span class="sort-indicator">↕</span></button></th>
               <th><button class="sort-btn" data-key="setup_tns" data-type="number" aria-sort="none">Setup TNS <span class="sort-indicator">↕</span></button></th>
               <th><button class="sort-btn" data-key="core_area" data-type="number" aria-sort="none">Core area <span class="sort-indicator">↕</span></button></th>
-              <th><button class="sort-btn" data-key="power_total" data-type="number" aria-sort="none">Total power <span class="sort-indicator">↕</span></button></th>
+              <th><button class="sort-btn" data-key="power_total" data-type="number" aria-sort="none">Total Power (W) <span class="sort-indicator">↕</span></button></th>
               <th><button class="sort-btn" data-key="drc" data-type="number" aria-sort="none">DRC <span class="sort-indicator">↕</span></button></th>
               <th><button class="sort-btn" data-key="lvs" data-type="number" aria-sort="none">LVS <span class="sort-indicator">↕</span></button></th>
               <th><button class="sort-btn" data-key="antenna" data-type="number" aria-sort="none">Antenna <span class="sort-indicator">↕</span></button></th>
@@ -1365,7 +1595,6 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
               <th><button class="sort-btn" data-key="status" data-type="status" aria-sort="none">Status <span class="sort-indicator">↕</span></button></th>
               <th><button class="sort-btn" data-key="remarks" data-type="text" aria-sort="none">Remarks <span class="sort-indicator">↕</span></button></th>
               <th>GDS</th>
-              <th>GDS Viewer</th>
             </tr>
           </thead>
           <tbody>{''.join(rows_html) if rows_html else '<tr><td colspan="14" class="muted">No ASIC run rows were collected for this snapshot.</td></tr>'}</tbody>
@@ -1377,7 +1606,6 @@ img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
 </body>
 </html>"""
     (snapshot_root / "index.html").write_text(index_html, encoding="utf-8")
-
 
 def main() -> None:
     ap = argparse.ArgumentParser()
@@ -1418,7 +1646,6 @@ def main() -> None:
         run_id=args.run_id,
         site_subdir=args.site_subdir,
     )
-
 
 if __name__ == "__main__":
     main()
