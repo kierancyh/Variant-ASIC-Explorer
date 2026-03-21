@@ -1019,13 +1019,17 @@ def build_site(
 
     .actions{display:flex;gap:8px;flex-wrap:wrap}
     .inline-actions{
-      display:inline-flex;
-      flex-wrap:nowrap;
-      align-items:center;
-      gap:8px;
-      min-width:max-content
+      display:flex;
+      flex-direction:column;
+      align-items:stretch;
+      gap:6px;
     }
-
+    
+    .inline-actions .btn{
+      width:100%;
+      justify-content:center;
+    }
+    
     .muted{color:var(--muted)}
     .tag{
       display:inline-flex;
@@ -1037,7 +1041,7 @@ def build_site(
       background:rgba(139,94,60,.12);
       color:var(--accent)
     }
-
+    
     .table-card{padding:0;overflow:hidden}
     .section-gap-lg{margin-top:26px}
 
@@ -1105,7 +1109,7 @@ def build_site(
     .wide-table{
       width:100%;
       border-collapse:collapse;
-      min-width:1180px
+      min-width:0
     }
     .wide-table th,.wide-table td{
       padding:14px 16px;
@@ -1118,8 +1122,14 @@ def build_site(
       font-size:13px;
       white-space:nowrap
     }
-    /* Keep homepage GDS actions on one line; table can scroll horizontally if needed */
-    .wide-table td:last-child{white-space:nowrap}
+    .wide-table td:last-child{
+      white-space:normal;
+    }
+    .wide-table td:last-child,
+    .wide-table th:last-child{
+      padding-left:10px;
+      padding-right:10px;
+    }
 
     .best-row{background:rgba(139,94,60,.06)}
     .page{max-width:1520px;margin:0 auto;padding:28px 20px 40px}
@@ -1342,17 +1352,18 @@ def build_site(
             str(row.get("power_total_W", "")))
 
         gds_actions: List[str] = []
+
+        if row.get("_gds_exists") == "yes":
+            gds_actions.append(
+                f'<a class="btn secondary btn-sm" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener">Viewer</a>'
+            )
+
         if row.get("_gds_published") == "yes" and row.get("_gds_href"):
             gds_actions.append(
                 f'<a class="btn secondary btn-sm" href="{html.escape(str(row.get("_gds_href", "")))}">Download GDS</a>'
             )
         elif row.get("_gds_exists") == "yes":
             gds_actions.append('<span class="muted">Artifact only</span>')
-
-        if row.get("_gds_exists") == "yes":
-            gds_actions.append(
-                f'<a class="btn secondary btn-sm" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener">Viewer</a>'
-            )
 
         gds_html = f'<div class="inline-actions">{"".join(gds_actions)}</div>' if gds_actions else "—"
 
@@ -1582,19 +1593,19 @@ def build_site(
         <table class="wide-table">
           <thead>
             <tr>
-              <th><button class="sort-btn" data-key="run" data-type="text" aria-sort="none">Run <span class="sort-indicator">↕</span></button></th>
-              <th><button class="sort-btn" data-key="clock" data-type="number" aria-sort="none">Clock (ns) <span class="sort-indicator">↕</span></button></th>
-              <th><button class="sort-btn" data-key="setup_wns" data-type="number" aria-sort="none">Setup WNS <span class="sort-indicator">↕</span></button></th>
-              <th><button class="sort-btn" data-key="setup_tns" data-type="number" aria-sort="none">Setup TNS <span class="sort-indicator">↕</span></button></th>
-              <th><button class="sort-btn" data-key="core_area" data-type="number" aria-sort="none">Core area <span class="sort-indicator">↕</span></button></th>
-              <th><button class="sort-btn" data-key="power_total" data-type="number" aria-sort="none">Total Power (W) <span class="sort-indicator">↕</span></button></th>
-              <th><button class="sort-btn" data-key="drc" data-type="number" aria-sort="none">DRC <span class="sort-indicator">↕</span></button></th>
-              <th><button class="sort-btn" data-key="lvs" data-type="number" aria-sort="none">LVS <span class="sort-indicator">↕</span></button></th>
-              <th><button class="sort-btn" data-key="antenna" data-type="number" aria-sort="none">Antenna <span class="sort-indicator">↕</span></button></th>
-              <th><button class="sort-btn" data-key="ir_drop" data-type="number" aria-sort="none">IR drop <span class="sort-indicator">↕</span></button></th>
-              <th><button class="sort-btn" data-key="status" data-type="status" aria-sort="none">Status <span class="sort-indicator">↕</span></button></th>
-              <th><button class="sort-btn" data-key="remarks" data-type="text" aria-sort="none">Remarks <span class="sort-indicator">↕</span></button></th>
-              <th>GDS</th>
+            <th><button class="sort-btn" data-key="run" data-type="text" aria-sort="none">Run <span class="sort-indicator">↕</span></button></th>
+            <th><button class="sort-btn" data-key="clock" data-type="number" aria-sort="none">Clock (ns) <span class="sort-indicator">↕</span></button></th>
+            <th><button class="sort-btn" data-key="setup_wns" data-type="number" aria-sort="none">Setup WNS (ns) <span class="sort-indicator">↕</span></button></th>
+            <th><button class="sort-btn" data-key="setup_tns" data-type="number" aria-sort="none">Setup TNS (ns) <span class="sort-indicator">↕</span></button></th>
+            <th><button class="sort-btn" data-key="core_area" data-type="number" aria-sort="none">Core Area (μm²) <span class="sort-indicator">↕</span></button></th>
+            <th><button class="sort-btn" data-key="power_total" data-type="number" aria-sort="none">Total Power (W) <span class="sort-indicator">↕</span></button></th>
+            <th><button class="sort-btn" data-key="drc" data-type="number" aria-sort="none">DRC <span class="sort-indicator">↕</span></button></th>
+            <th><button class="sort-btn" data-key="lvs" data-type="number" aria-sort="none">LVS <span class="sort-indicator">↕</span></button></th>
+            <th><button class="sort-btn" data-key="antenna" data-type="number" aria-sort="none">Antenna <span class="sort-indicator">↕</span></button></th>
+            <th><button class="sort-btn" data-key="ir_drop" data-type="number" aria-sort="none">IR Drop (V) <span class="sort-indicator">↕</span></button></th>
+            <th><button class="sort-btn" data-key="status" data-type="status" aria-sort="none">Status <span class="sort-indicator">↕</span></button></th>
+            <th><button class="sort-btn" data-key="remarks" data-type="text" aria-sort="none">Remarks <span class="sort-indicator">↕</span></button></th>
+            <th>GDS</th>
             </tr>
           </thead>
           <tbody>{''.join(rows_html) if rows_html else '<tr><td colspan="14" class="muted">No ASIC run rows were collected for this snapshot.</td></tr>'}</tbody>
