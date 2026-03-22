@@ -931,7 +931,7 @@ def build_site(
     }
     a{color:var(--accent);text-decoration:none}
     img{max-width:100%;border-radius:14px;border:1px solid var(--border)}
-    .wrap{max-width:1520px;margin:0 auto;padding:28px 20px 40px}
+    .wrap{max-width:min(96vw,1800px);margin:0 auto;padding:24px 12px 36px}
     .hero{
       background:var(--panel-strong);
       border:1px solid var(--border-strong);
@@ -953,7 +953,7 @@ def build_site(
       font-size:14px
     }
     .settings-list strong{color:var(--text)}
-    .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:18px}
+    .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}
     .card{
       background:var(--panel);
       border:1px solid var(--border);
@@ -1132,7 +1132,7 @@ def build_site(
     }
 
     .best-row{background:rgba(139,94,60,.06)}
-    .page{max-width:1520px;margin:0 auto;padding:28px 20px 40px}
+    .page{max-width:min(96vw,1800px);margin:0 auto;padding:24px 12px 36px}
     .eyebrow{
       margin:0 0 8px 0;
       color:var(--muted);
