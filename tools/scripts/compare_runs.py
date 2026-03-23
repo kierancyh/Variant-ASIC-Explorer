@@ -692,6 +692,132 @@ def pages_base_url(repo_slug: str) -> str:
 def build_surfer_url(vcd_url: str) -> str:
     return f"{SURFER_WEB_APP_URL}?load_url={urllib.parse.quote(vcd_url, safe='')}"
 
+def build_theme_widget(button_id: str, panel_id: str) -> str:
+    return f"""
+<div class="theme-control">
+  <button class="theme-launch" id="{button_id}" type="button" aria-expanded="false" aria-controls="{panel_id}">Appearance ⚙️</button>
+  <div class="theme-widget" id="{panel_id}" hidden>
+    <div class="theme-widget-body">
+      <h3>Appearance</h3>
+      <div class="theme-row"><label for="{panel_id}_preset">Theme preset</label><select id="{panel_id}_preset"><option value="canvas">Canvas Beige</option><option value="forest">Forest</option><option value="slate">Slate</option></select></div>
+      <div class="theme-inline">
+        <div class="theme-row"><label for="{panel_id}_bg">Base background</label><input type="color" id="{panel_id}_bg" value="#f4ecdf"></div>
+        <div class="theme-row"><label for="{panel_id}_accent">Accent</label><input type="color" id="{panel_id}_accent" value="#8b5e3c"></div>
+      </div>
+      <div class="theme-inline">
+        <div class="theme-row"><label for="{panel_id}_grad1">Gradient 1</label><input type="color" id="{panel_id}_grad1" value="#f8f1e7"></div>
+        <div class="theme-row"><label for="{panel_id}_grad2">Gradient 2</label><input type="color" id="{panel_id}_grad2" value="#efe4d3"></div>
+      </div>
+      <div class="theme-btn-row"><button id="{panel_id}_save" type="button">Save</button><button id="{panel_id}_reset" type="button">Reset</button></div>
+    </div>
+  </div>
+</div>
+"""
+
+
+def build_theme_script(button_id: str, panel_id: str, storage_key: str) -> str:
+    return f"""
+<script>
+(function () {{
+  const root = document.documentElement;
+  const button = document.getElementById("{button_id}");
+  const panel = document.getElementById("{panel_id}");
+  if (!root || !button || !panel) return;
+  document.body.appendChild(panel);
+  const presetTheme = document.getElementById("{panel_id}_preset");
+  const bgColor = document.getElementById("{panel_id}_bg");
+  const accentColor = document.getElementById("{panel_id}_accent");
+  const grad1 = document.getElementById("{panel_id}_grad1");
+  const grad2 = document.getElementById("{panel_id}_grad2");
+  const saveTheme = document.getElementById("{panel_id}_save");
+  const resetTheme = document.getElementById("{panel_id}_reset");
+  const presets = {{
+    canvas: {{"--bg":"#f4ecdf","--bg-grad-1":"#f8f1e7","--bg-grad-2":"#efe4d3","--accent":"#8b5e3c","--accent-2":"#b6845e"}},
+    forest: {{"--bg":"#e9efe7","--bg-grad-1":"#f3f7f1","--bg-grad-2":"#d9e7d5","--accent":"#4f7a5c","--accent-2":"#789d83"}},
+    slate: {{"--bg":"#e7ebf0","--bg-grad-1":"#f3f6fa","--bg-grad-2":"#d7dde6","--accent":"#496a8a","--accent-2":"#7292b0"}}
+  }};
+  function applyVars(vars) {{ Object.entries(vars).forEach(([k,v]) => root.style.setProperty(k, v)); }}
+  function syncInputsFromCurrentTheme() {{
+    const styles = getComputedStyle(root);
+    bgColor.value = styles.getPropertyValue("--bg").trim() || bgColor.value;
+    grad1.value = styles.getPropertyValue("--bg-grad-1").trim() || grad1.value;
+    grad2.value = styles.getPropertyValue("--bg-grad-2").trim() || grad2.value;
+    accentColor.value = styles.getPropertyValue("--accent").trim() || accentColor.value;
+  }}
+  function saveSettings() {{ localStorage.setItem("{storage_key}", JSON.stringify({{preset:presetTheme.value,bg:bgColor.value,grad1:grad1.value,grad2:grad2.value,accent:accentColor.value}})); }}
+  function loadSettings() {{
+    const raw = localStorage.getItem("{storage_key}");
+    if (!raw) {{
+      presetTheme.value = "canvas";
+      applyVars(presets.canvas);
+      syncInputsFromCurrentTheme();
+      return;
+    }}
+    try {{
+      const s = JSON.parse(raw);
+      const preset = (s.preset && presets[s.preset]) ? s.preset : "canvas";
+      presetTheme.value = preset;
+      applyVars(presets[preset]);
+      if (s.bg) bgColor.value = s.bg;
+      if (s.grad1) grad1.value = s.grad1;
+      if (s.grad2) grad2.value = s.grad2;
+      if (s.accent) accentColor.value = s.accent;
+      applyVars({{"--bg":bgColor.value,"--bg-grad-1":grad1.value,"--bg-grad-2":grad2.value,"--accent":accentColor.value,"--accent-2":accentColor.value}});
+    }} catch (e) {{
+      presetTheme.value = "canvas";
+      applyVars(presets.canvas);
+    }}
+    syncInputsFromCurrentTheme();
+  }}
+  function positionPanel() {{
+    if (panel.hidden) return;
+    const rect = button.getBoundingClientRect();
+    const vw = window.innerWidth || document.documentElement.clientWidth || 0;
+    const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+    const margin = 12;
+    const w = Math.min(340, Math.max(260, vw - (margin * 2)));
+    panel.style.width = w + "px";
+    panel.style.maxWidth = w + "px";
+    const h = panel.offsetHeight || 320;
+    let left = rect.right - w;
+    left = Math.max(margin, Math.min(left, vw - w - margin));
+    let top = rect.bottom + 12;
+    if (top + h > vh - margin) top = Math.max(margin, rect.top - h - 12);
+    panel.style.left = left + "px";
+    panel.style.top = top + "px";
+  }}
+  function openPanel() {{ panel.hidden = false; button.setAttribute("aria-expanded", "true"); positionPanel(); }}
+  function closePanel() {{ panel.hidden = true; button.setAttribute("aria-expanded", "false"); }}
+  button.addEventListener("click", function (e) {{ e.stopPropagation(); if (panel.hidden) openPanel(); else closePanel(); }});
+  panel.addEventListener("click", function (e) {{ e.stopPropagation(); }});
+  document.addEventListener("click", function () {{ closePanel(); }});
+  document.addEventListener("keydown", function (e) {{ if (e.key === "Escape") closePanel(); }});
+  window.addEventListener("resize", function () {{ if (!panel.hidden) positionPanel(); }});
+  window.addEventListener("scroll", function () {{ if (!panel.hidden) positionPanel(); }}, true);
+  presetTheme.addEventListener("change", function () {{
+    if (presets[presetTheme.value]) {{
+      applyVars(presets[presetTheme.value]);
+      syncInputsFromCurrentTheme();
+      saveSettings();
+    }}
+  }});
+  [bgColor, grad1, grad2, accentColor].forEach(el => el.addEventListener("input", function () {{
+    applyVars({{"--bg":bgColor.value,"--bg-grad-1":grad1.value,"--bg-grad-2":grad2.value,"--accent":accentColor.value,"--accent-2":accentColor.value}});
+    saveSettings();
+  }}));
+  saveTheme.addEventListener("click", saveSettings);
+  resetTheme.addEventListener("click", function () {{
+    localStorage.removeItem("{storage_key}");
+    presetTheme.value = "canvas";
+    applyVars(presets.canvas);
+    syncInputsFromCurrentTheme();
+    closePanel();
+  }});
+  loadSettings();
+  closePanel();
+}})();
+</script>
+"""
 
 def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> None:
     metrics_path = Path(row.get("_site_metrics_path") or (Path(row["_base_dir"]) / "metrics.csv"))
@@ -713,8 +839,14 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
         actions.append(f'<a class="btn secondary" href="{meta_href}">Open run_meta.json</a>')
     if failure_summary_href:
         actions.append(f'<a class="btn secondary" href="{failure_summary_href}">Open Failure Summary</a>')
+    if row.get("_gds_published") == "yes" and row.get("_gds_href"):
+        actions.append(
+            f'<a class="btn secondary" href="{html.escape(str(row.get("_gds_href", "")))}">Download GDS</a>'
+        )
     if row.get("_gds_exists") == "yes":
-        actions.append(f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener">Open GDS Viewer</a>')
+        actions.append(
+            f'<a class="btn secondary" href="{TT_GDS_VIEWER_URL}" target="_blank" rel="noopener">Open GDS Viewer</a>'
+        )
 
     consumed_raw: Set[str] = set()
 
@@ -1193,6 +1325,76 @@ def build_site(
       border-radius:16px;
       background:#fff
     }
+    
+    .theme-control{position:relative;z-index:40}
+    .theme-launch{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      min-width:148px;
+      padding:10px 14px;
+      border-radius:12px;
+      border:1px solid var(--border-strong);
+      background:var(--panel-soft);
+      color:var(--text);
+      font:600 13px/1.2 Inter,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+      cursor:pointer;
+      box-shadow:none
+    }
+    .theme-widget{
+      position:fixed;
+      top:72px;
+      right:24px;
+      width:320px;
+      max-width:min(320px,calc(100vw - 24px));
+      z-index:99999;
+      pointer-events:auto
+    }
+    .theme-widget[hidden]{display:none !important}
+    .theme-widget-body{
+      padding:16px;
+      border-radius:16px;
+      border:1px solid var(--border-strong);
+      background:var(--panel-strong);
+      box-shadow:var(--shadow)
+    }
+    .theme-widget-body h3{margin:0 0 12px;font-size:16px}
+    .theme-row{display:grid;gap:6px;margin-bottom:12px}
+    .theme-row label{
+      font-size:12px;
+      font-weight:600;
+      color:var(--muted);
+      text-transform:uppercase
+    }
+    .theme-row select,
+    .theme-row input,
+    .theme-btn-row button{
+      font:500 13px/1.2 Inter,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+      color:var(--text)
+    }
+    .theme-row select{
+      padding:10px 12px;
+      border-radius:10px;
+      border:1px solid var(--border-strong);
+      background:var(--panel-soft)
+    }
+    .theme-row input[type='color']{
+      width:100%;
+      height:42px;
+      padding:4px;
+      border-radius:10px;
+      border:1px solid var(--border-strong);
+      background:var(--panel-soft)
+    }
+    .theme-inline{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .theme-btn-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .theme-btn-row button{
+      padding:10px 12px;
+      border-radius:10px;
+      border:1px solid var(--border-strong);
+      background:var(--panel-soft);
+      cursor:pointer
+    }
 
     @media(max-width:1080px){
       .span-7,.span-5{grid-column:span 12}
@@ -1495,6 +1697,11 @@ def build_site(
 </script>
 """
 
+    theme_widget = build_theme_widget("indexAppearanceButton", "indexThemeWidget")
+    theme_script = build_theme_script(
+        "indexAppearanceButton", "indexThemeWidget", "asic-flow-theme"
+    )
+    
     site_manifest = {
         "repo_slug": repo_slug,
         "run_id": run_id,
@@ -1528,6 +1735,7 @@ def build_site(
           <p><strong>Snapshot run ID:</strong> {html.escape(run_id_label)}<br><strong>Repository:</strong> {html.escape(repo_slug_label)}</p>
           <ul class="settings-list">{settings_html}</ul>
         </div>
+        {theme_widget}
       </div>
     </section>
 
@@ -1613,6 +1821,7 @@ def build_site(
       </div>
     </section>
   </div>
+  {theme_script}
   {sort_filter_script}
 </body>
 </html>"""

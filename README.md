@@ -247,7 +247,7 @@ For the full technical explanation of the workflow, architecture, artifact model
 
 ---
 
-## Screenshots
+## Explorer Preview (Screenshots)
 
 ### 1. Run Explorer Homepage
 A high-level summary of the selected run, including the chosen best result, key metrics, and quick access to waveform and GDS viewing tools.
