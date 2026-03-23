@@ -6,7 +6,7 @@ This repository is built for **you to upload a verilog(.v) design and the CI flo
 
 ---
 
-## What is this?
+## What Is This?
 
 `Variant-ASIC-Explorer` is a GitHub-based workflow for running ASIC experiments in a clean, repeatable way, built around **named design variants**.
 
@@ -22,7 +22,7 @@ From there, the CI runs the following:
 
 ---
 
-## The idea in one minute
+## TL:DR
 
 The normal user workflow is:
 
@@ -37,7 +37,7 @@ The normal user workflow is:
 That is the whole philosophy of the repo.
 
 
-### A quick note on `src/` and `tb/`
+### A Quick Note on `src/` and `tb/`
 
 This is important.
 
@@ -49,16 +49,16 @@ That separation makes the prechecks cleaner and the backend flow much more trust
 
 ---
 
-## Quick start
+## Quick Start Guide
 
-### 1. Clone the repository
+### 1. Clone the Repository
 
 ```bash
 git clone https://github.com/kierancyh/Variant-ASIC-Explorer.git
 cd Variant-ASIC-Explorer
 ```
 
-### 2. Create or edit a design variant
+### 2. Create or Edit a Design Variant
 
 Make a design folder under `designs/`.
 
@@ -74,7 +74,7 @@ designs/my_variant/
    └─ tb_my_top.v
 ```
 
-### 3. Put your files in the right place
+### 3. Put your Files in the Right Place
 
 - Place your synthesizable RTL in `src/`
 - Place your simulation/testbench files in `tb/`
@@ -113,7 +113,7 @@ precheck:
     mode: structural
 ```
 
-### 5. Select the active variant in `manifest.yaml`
+### 5. Select the Active Variant in `manifest.yaml`
 
 Example:
 
@@ -128,7 +128,7 @@ experiments:
     enabled: true
 ```
 
-### 6. Push your changes
+### 6. Push Your Changes
 
 The normal usage model is simply:
 
@@ -188,7 +188,7 @@ The homepage is designed to answer the big questions quickly:
 
 The per-run pages give you more detail, including grouped metrics and useful output links.
 
-### What the main metrics mean
+### Metric Definitions
 
 - **WNS (ns)** — worst negative slack
 - **TNS (ns)** — total negative slack
@@ -198,16 +198,15 @@ The per-run pages give you more detail, including grouped metrics and useful out
 
 ---
 
-## Viewing your waveform
+## Viewing your Waveform
 
 This repo can surface RTL precheck VCDs so you can inspect the waveform more easily.
 
-### External waveform viewer
+### External Waveform Viewer
 
 Surfer is a modern waveform viewer that supports browser-based inspection of waveforms, including VCD files.
 
-- **Surfer homepage:** <https://surfer-project.org/>
-- **Browser app:** <https://app.surfer-project.org/>
+- **Surfer Web Viewer:** <https://app.surfer-project.org/>
 
 ### Simple way to use it
 
@@ -229,7 +228,7 @@ It only uses the external Tiny Tapeout viewer as a convenient way to inspect a g
 
 - **Tiny Tapeout GDS Viewer:** <https://gds-viewer.tinytapeout.com/>
 
-### Simple way to use it
+### How to use it
 
 1. Download the GDS from the run page or artifact
 2. Open the Tiny Tapeout GDS Viewer
@@ -238,10 +237,9 @@ It only uses the external Tiny Tapeout viewer as a convenient way to inspect a g
 
 If the Run Explorer shows a **Viewer** button for GDS, that is the quickest route.
 
-
 ---
 
-## Further reading
+## Further Reading
 
 For the full technical explanation of the workflow, architecture, artifact model, and timing refinement logic, see:
 
@@ -249,13 +247,11 @@ For the full technical explanation of the workflow, architecture, artifact model
 
 ---
 
-```md
 ## Screenshots
 ![Run Explorer Homepage](assets/Homepage.png)
 ![Run Comparison Table](assets/Run_Comparison_Table.png)
 ![Per-Run Page](assets/Per_Run_Page.png)
 ![Waveform Viewer](assets/Waveform_Viewer.png)
 ![TinyTapeout GDS Viewer](assets/GDS_Viewer.png)
-```
 
 ---
