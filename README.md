@@ -248,10 +248,38 @@ For the full technical explanation of the workflow, architecture, artifact model
 ---
 
 ## Screenshots
+
+### 1. Run Explorer Homepage
+A high-level summary of the selected run, including the chosen best result, key metrics, and quick access to waveform and GDS viewing tools.
+
 ![Run Explorer Homepage](assets/Homepage.png)
+
+---
+
+### 2. Run Comparison Table
+The comparison view for all generated runs, showing timing, area, power, IR drop, status, remarks, and GDS actions in one place.
+
 ![Run Comparison Table](assets/Run_Comparison_Table.png)
+
+---
+
+### 3. Per-Run Page
+The detailed page for a single run, including grouped metadata, stage information, metrics, downloads, and run-specific outputs.
+
 ![Per-Run Page](assets/Per_Run_Page.png)
+
+---
+
+### 4. Waveform Viewer
+The embedded waveform section used to inspect RTL simulation output and VCD behaviour through the external Surfer workflow.
+
 ![Waveform Viewer](assets/Waveform_Viewer.png)
+
+---
+
+### 5. TinyTapeout GDS Viewer
+The external GDS viewing workflow used for layout inspection when a generated GDS is available.
+
 ![TinyTapeout GDS Viewer](assets/GDS_Viewer.png)
 
 ---
