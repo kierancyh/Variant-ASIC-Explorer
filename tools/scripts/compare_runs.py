@@ -1551,7 +1551,7 @@ def build_site(
       </section>
 
       <section class="card span-12">
-        <h2>Run overview</h2>
+        <h2>Run Overview</h2>
         <div class="kpi-grid">
           <div class="stat"><div class="label">Total runs</div><div class="value">{len(ordered)}</div></div>
           <div class="stat"><div class="label">PASS runs</div><div class="value">{sum(1 for r in ordered if r.get('status') == 'PASS')}</div></div>
