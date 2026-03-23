@@ -249,9 +249,8 @@ For the full technical explanation of the workflow, architecture, artifact model
 
 ---
 
-
-## Screenshots
 ```md
+## Screenshots
 ![Run Explorer Homepage](assets/Homepage.png)
 ![Run Comparison Table](assets/Run_Comparison_Table.png)
 ![Per-Run Page](assets/Per_Run_Page.png)
