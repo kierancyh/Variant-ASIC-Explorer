@@ -1,7 +1,7 @@
-name: rns_mrc
+name: crns_crt
 pdk: sky130A
 
-top_module: rns_top_mrc
+top_module: crns_top_crt
 
 clock:
   port: clk
@@ -14,7 +14,7 @@ sources:
 precheck:
   icarus:
     enabled: true
-    testbench_top: tb_rns_top_mrc
+    testbench_top: tb_crns_top_crt
     testbench_sources:
       - tb/**/*.v
       - tb/**/*.sv

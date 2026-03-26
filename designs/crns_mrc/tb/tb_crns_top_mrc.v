@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
 
-module tb_rns_top_mrc;
+module tb_crns_top_mrc;
 
     // Clock & Reset
     reg clk;
@@ -9,14 +9,13 @@ module tb_rns_top_mrc;
     // DUT interface signals
     reg         Start;
     reg  [1:0]  Op_Sel;       // 00=ADD, 01=SUB, 10=MUL
-    reg  [15:0] A_in;
-    reg  [15:0] B_in;
-
+    reg  signed [15:0] A_in;
+    reg  signed [15:0] B_in;
     wire        Done;
-    wire [15:0] X_out;
+    wire signed [15:0] X_out;
 
     // Instantiate MRC DUT
-    rns_top_mrc #(
+    crns_top_mrc #(
         .WIDTH_IN (16),
         .M0       (3),
         .M1       (5),
@@ -46,19 +45,19 @@ module tb_rns_top_mrc;
     // VCD dump for workflow precheck / Surfer
     initial begin
         $dumpfile("rtl_precheck.vcd");
-        $dumpvars(0, tb_rns_top_mrc);
+        $dumpvars(0, tb_crns_top_mrc);
     end
 
     // Task: run one ALU operation
     // op       : 00=ADD, 01=SUB, 10=MUL
     // a, b     : operands
-    // expected : expected result mod 1155
+    // expected : expected centered result
     // name     : test name for printing
     task run_test;
         input [1:0]   op;
-        input [15:0]  a;
-        input [15:0]  b;
-        input [15:0]  expected;
+        input signed [15:0] a;
+        input signed [15:0] b;
+        input signed [15:0] expected;
         input [127:0] name;
     begin
         Op_Sel = op;
@@ -106,7 +105,7 @@ module tb_rns_top_mrc;
 
         // SUB
         run_test(2'b01, 16'd200,  16'd50,  16'd150,  "SUB_200_50");
-        run_test(2'b01, 16'd50,   16'd200, 16'd1005, "SUB_WRAP");
+        run_test(2'b01, 16'sd50, 16'sd200, -16'sd150, "SUB_WRAP");
 
         // MUL
         run_test(2'b10, 16'd11,   16'd17,  16'd187,  "MUL_11_17");

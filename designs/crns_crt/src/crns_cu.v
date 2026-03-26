@@ -4,18 +4,17 @@
 //   IDLE -> LOAD -> ENCODE -> ALU -> RECON -> OUT -> DONE
 
 // Controls:
-//   - rns_encoder.v   (Encode_EN / Encode_Done)
-//   - rns_slice.v     (ALU_EN / ALU_Done)
-//   - rns_crt_recon.v (CRT_Start / CRT_Done)
-//   - rns_mrc_recon.v (MRC_Start / MRC_Done)
+//   - crns_encoder.v   (Encode_EN / Encode_Done)
+//   - crns_slice.v     (ALU_EN / ALU_Done)
+//   - crns_crt_recon.v (CRT_Start / CRT_Done)
+//   - crns_mrc_recon.v (MRC_Start / MRC_Done)
 
 // Reconstruction Selection (runtime):
 //   Recon_Mode = 0 -> use CRT
 //   Recon_Mode = 1 -> use MRC
 
 `timescale 1ns/1ps
-
-module rns_cu (
+module crns_cu (
     // Clock & Reset
     input  wire clk,
     input  wire rst_n,
