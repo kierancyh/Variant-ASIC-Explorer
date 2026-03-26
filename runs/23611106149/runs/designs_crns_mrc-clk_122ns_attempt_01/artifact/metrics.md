@@ -1,0 +1,3 @@
+| clock_ns | clock_ns_reported | setup_wns_ns | setup_tns_ns | hold_wns_ns | hold_tns_ns | core_area_um2 | die_area_um2 | instance_count | utilization_pct | wire_length_um | vias_count | power_total_W | power_internal_W | power_switching_W | power_leakage_W | power_source | drc_errors | drc_errors_klayout | drc_errors_magic | lvs_errors | antenna_violations | antenna_violating_nets | antenna_violating_pins | ir_drop_worst_V | power_fair_sta_rpt | status |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 122.0 |  | 0 | 0 | 0 | 0 | 560162 | 585824 | 16468 | 0.129031 | 162134 | 42375 | 86009511936 |  |  |  | metrics.json | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 27500000000 |  | PASS |
