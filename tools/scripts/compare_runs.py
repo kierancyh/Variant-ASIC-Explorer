@@ -64,71 +64,148 @@ def flatten_scalar_metrics(value: Any, prefix: str = "", out: Optional[Dict[str,
     return out
 
 
-def signoff_clean(row: Dict[str, str]) -> bool:
-    for key in ("drc_errors", "lvs_errors", "antenna_violations"):
-        v = to_float(row.get(key))
-        if v is not None and v != 0.0:
-            return False
-    return True
+def required_metric_fields() -> Tuple[str, ...]:
+    return (
+        "setup_wns_ns",
+        "setup_tns_ns",
+        "hold_wns_ns",
+        "hold_tns_ns",
+        "setup_vio_count",
+        "hold_vio_count",
+        "max_slew_violation_count",
+        "max_cap_violation_count",
+        "drc_errors",
+        "lvs_errors",
+        "antenna_violations",
+    )
 
 
-def timing_ok(row: Dict[str, str]) -> bool:
-    swns = to_float(row.get("setup_wns_ns"))
-    stns = to_float(row.get("setup_tns_ns"))
-    return swns is not None and stns is not None and swns >= 0.0 and stns >= 0.0
+def missing_required_metrics(row: Dict[str, str]) -> List[str]:
+    return [field for field in required_metric_fields() if to_float(row.get(field)) is None]
 
 
 def classify_status(row: Dict[str, str]) -> str:
     raw_status = str(row.get("status", "")).strip().upper()
-    if raw_status in {"FLOW_FAIL", "INCOMPLETE"}:
-        return "FLOW_FAIL"
-    if not (
-        to_float(row.get("setup_wns_ns")) is not None
-        and to_float(row.get("setup_tns_ns")) is not None
-    ):
-        return "FLOW_FAIL"
-    clean = signoff_clean(row)
-    ok = timing_ok(row)
-    if clean and ok:
-        return "PASS"
-    if clean and not ok:
-        return "TIMING_FAIL"
-    if (not clean) and ok:
-        return "SIGNOFF_FAIL"
-    return "SIGNOFF_AND_TIMING_FAIL"
+    known = {
+        "SIGNOFF_PASS",
+        "FLOW_COMPLETED_TIMING_FAIL",
+        "FLOW_COMPLETED_ELECTRICAL_FAIL",
+        "FLOW_COMPLETED_SIGNOFF_FAIL",
+        "FLOW_COMPLETED_TIMING_AND_SIGNOFF_FAIL",
+        "METRICS_MISSING",
+        "FLOW_FAIL",
+        "INCOMPLETE",
+    }
+    if raw_status in known:
+        return raw_status
+
+    missing = missing_required_metrics(row)
+    if missing:
+        return "METRICS_MISSING"
+
+    setup_wns = to_float(row.get("setup_wns_ns"))
+    setup_tns = to_float(row.get("setup_tns_ns"))
+    hold_wns = to_float(row.get("hold_wns_ns"))
+    hold_tns = to_float(row.get("hold_tns_ns"))
+    setup_vio = to_float(row.get("setup_vio_count"))
+    hold_vio = to_float(row.get("hold_vio_count"))
+    max_slew = to_float(row.get("max_slew_violation_count"))
+    max_cap = to_float(row.get("max_cap_violation_count"))
+    drc = to_float(row.get("drc_errors"))
+    lvs = to_float(row.get("lvs_errors"))
+    ant = to_float(row.get("antenna_violations"))
+
+    timing_setup_pass = setup_wns >= 0.0 and setup_tns >= 0.0 and setup_vio == 0.0
+    timing_hold_pass = hold_wns >= 0.0 and hold_tns >= 0.0 and hold_vio == 0.0
+    electrical_pass = max_slew == 0.0 and max_cap == 0.0
+    physical_pass = drc == 0.0 and lvs == 0.0 and ant == 0.0
+
+    if timing_setup_pass and timing_hold_pass and electrical_pass and physical_pass:
+        return "SIGNOFF_PASS"
+    if (not timing_setup_pass or not timing_hold_pass) and (not electrical_pass or not physical_pass):
+        return "FLOW_COMPLETED_TIMING_AND_SIGNOFF_FAIL"
+    if not timing_setup_pass or not timing_hold_pass:
+        return "FLOW_COMPLETED_TIMING_FAIL"
+    if not electrical_pass:
+        return "FLOW_COMPLETED_ELECTRICAL_FAIL"
+    return "FLOW_COMPLETED_SIGNOFF_FAIL"
 
 
 def explain_row(row: Dict[str, str]) -> str:
-    if classify_status(row) == "FLOW_FAIL":
-        return "Flow failed before valid timing metrics were produced."
+    status = classify_status(row)
+    if status == "FLOW_FAIL":
+        return "Flow failed before final metrics could be extracted."
+    missing = missing_required_metrics(row)
+    if missing:
+        preview = ", ".join(missing[:6])
+        suffix = "..." if len(missing) > 6 else ""
+        return f"Final metrics incomplete; missing {preview}{suffix}."
+
     reasons: List[str] = []
-    for k, label in (("drc_errors", "DRC"), ("lvs_errors", "LVS"), ("antenna_violations", "Antenna")):
-        v = to_float(row.get(k))
-        if v not in (None, 0.0):
-            reasons.append(f"{label}={int(v) if float(v).is_integer() else v}")
-    swns = to_float(row.get("setup_wns_ns"))
-    stns = to_float(row.get("setup_tns_ns"))
-    if swns is None or swns < 0.0:
-        reasons.append(f"setup WNS={row.get('setup_wns_ns', '')}")
-    if stns is None or stns < 0.0:
-        reasons.append(f"setup TNS={row.get('setup_tns_ns', '')}")
-    return "; ".join(reasons) if reasons else "Clean signoff and non-negative setup timing."
+    if status == "SIGNOFF_PASS":
+        return "Worst-corner timing and signoff checks passed."
+
+    setup_wns = to_float(row.get("setup_wns_ns"))
+    setup_tns = to_float(row.get("setup_tns_ns"))
+    hold_wns = to_float(row.get("hold_wns_ns"))
+    hold_tns = to_float(row.get("hold_tns_ns"))
+    setup_vio = to_float(row.get("setup_vio_count"))
+    hold_vio = to_float(row.get("hold_vio_count"))
+    max_slew = to_float(row.get("max_slew_violation_count"))
+    max_cap = to_float(row.get("max_cap_violation_count"))
+    drc = to_float(row.get("drc_errors"))
+    lvs = to_float(row.get("lvs_errors"))
+    ant = to_float(row.get("antenna_violations"))
+
+    timing_setup_pass = setup_wns is not None and setup_tns is not None and setup_vio is not None and setup_wns >= 0.0 and setup_tns >= 0.0 and setup_vio == 0.0
+    timing_hold_pass = hold_wns is not None and hold_tns is not None and hold_vio is not None and hold_wns >= 0.0 and hold_tns >= 0.0 and hold_vio == 0.0
+    electrical_pass = max_slew is not None and max_cap is not None and max_slew == 0.0 and max_cap == 0.0
+    physical_pass = drc is not None and lvs is not None and ant is not None and drc == 0.0 and lvs == 0.0 and ant == 0.0
+
+    if not timing_setup_pass:
+        reasons.append(f"setup WNS={row.get('setup_wns_ns', '')}, TNS={row.get('setup_tns_ns', '')}, vio={row.get('setup_vio_count', '')}")
+    if not timing_hold_pass:
+        reasons.append(f"hold WNS={row.get('hold_wns_ns', '')}, TNS={row.get('hold_tns_ns', '')}, vio={row.get('hold_vio_count', '')}")
+    if not electrical_pass:
+        reasons.append(f"max slew violations={row.get('max_slew_violation_count', '')}; max cap violations={row.get('max_cap_violation_count', '')}")
+    if not physical_pass:
+        reasons.append(f"DRC={row.get('drc_errors', '')}; LVS={row.get('lvs_errors', '')}; Antenna={row.get('antenna_violations', '')}")
+    return "; ".join(reasons) if reasons else status
 
 
 def best_sort_key(row: Dict[str, str]) -> Tuple[Any, ...]:
-    clean = signoff_clean(row)
-    ok = timing_ok(row)
+    status = classify_status(row)
+    status_rank = {
+        "SIGNOFF_PASS": 0,
+        "FLOW_COMPLETED_ELECTRICAL_FAIL": 1,
+        "FLOW_COMPLETED_SIGNOFF_FAIL": 2,
+        "FLOW_COMPLETED_TIMING_FAIL": 3,
+        "FLOW_COMPLETED_TIMING_AND_SIGNOFF_FAIL": 4,
+        "METRICS_MISSING": 5,
+        "FLOW_FAIL": 6,
+        "INCOMPLETE": 6,
+    }.get(status, 99)
     clk = to_float(row.get("clock_ns"))
-    swns = to_float(row.get("setup_wns_ns"))
-    stns = to_float(row.get("setup_tns_ns"))
-    penalty = sum((to_float(row.get(k)) or 0.0) for k in ("antenna_violations", "drc_errors", "lvs_errors"))
+    setup_wns = to_float(row.get("setup_wns_ns"))
+    setup_tns = to_float(row.get("setup_tns_ns"))
+    hold_wns = to_float(row.get("hold_wns_ns"))
+    hold_tns = to_float(row.get("hold_tns_ns"))
+    setup_vio = to_float(row.get("setup_vio_count")) or 0.0
+    hold_vio = to_float(row.get("hold_vio_count")) or 0.0
+    max_slew = to_float(row.get("max_slew_violation_count")) or 0.0
+    max_cap = to_float(row.get("max_cap_violation_count")) or 0.0
+    drc = to_float(row.get("drc_errors")) or 0.0
+    lvs = to_float(row.get("lvs_errors")) or 0.0
+    ant = to_float(row.get("antenna_violations")) or 0.0
+    penalty = setup_vio + hold_vio + max_slew + max_cap + drc + lvs + ant
     return (
-        0 if clean and ok else 1,
-        0 if clean else 1,
-        penalty,
+        status_rank,
         clk if clk is not None else 1e12,
-        -(swns if swns is not None else -1e12),
-        -(stns if stns is not None else -1e12),
+        penalty,
+        -(setup_wns if setup_wns is not None else -1e12),
+        -(setup_tns if setup_tns is not None else -1e12),
+        -(hold_wns if hold_wns is not None else -1e12),
+        -(hold_tns if hold_tns is not None else -1e12),
     )
 
 
@@ -508,6 +585,12 @@ def write_summary_csv(path: Path, rows: List[Dict[str, str]]) -> None:
         "clock_ns",
         "setup_wns_ns",
         "setup_tns_ns",
+        "hold_wns_ns",
+        "hold_tns_ns",
+        "setup_vio_count",
+        "hold_vio_count",
+        "max_slew_violation_count",
+        "max_cap_violation_count",
         "core_area_um2",
         "power_total_W",
         "drc_errors",
@@ -537,10 +620,10 @@ def write_summary_md(path: Path, rows: List[Dict[str, str]], precheck: Dict[str,
         "",
         "## Selection Criteria",
         "",
-        "1. Clean signoff plus non-negative setup timing wins.",
-        "2. If no full PASS exists, clean signoff wins over signoff violations.",
-        "3. Among comparable runs, lower requested clock period is preferred.",
-        "4. Setup WNS/TNS are used as tie-breakers.",
+        "1. Only SIGNOFF_PASS can be selected as the true best clock.",
+        "2. SIGNOFF_PASS requires worst-corner setup/hold closure, zero setup/hold violations, zero slew/cap violations, and clean DRC/LVS/antenna.",
+        "3. If no SIGNOFF_PASS exists, the explorer shows the least-bad completed run for inspection only.",
+        "4. Among comparable runs, lower requested clock period is preferred, then timing margins are used as tie-breakers.",
         "",
     ]
     if not rows:
@@ -612,10 +695,12 @@ def rel_href(path: Path, root: Path) -> str:
 def badge_html(status: str) -> str:
     s = str(status or "").upper()
     cls = {
-        "PASS": "pass",
-        "TIMING_FAIL": "timing",
-        "SIGNOFF_FAIL": "signoff",
-        "SIGNOFF_AND_TIMING_FAIL": "mixed",
+        "SIGNOFF_PASS": "pass",
+        "FLOW_COMPLETED_TIMING_FAIL": "timing",
+        "FLOW_COMPLETED_ELECTRICAL_FAIL": "signoff",
+        "FLOW_COMPLETED_SIGNOFF_FAIL": "signoff",
+        "FLOW_COMPLETED_TIMING_AND_SIGNOFF_FAIL": "mixed",
+        "METRICS_MISSING": "flow",
         "FLOW_FAIL": "flow",
         "WARN": "mixed",
         "FAIL": "flow",
@@ -855,8 +940,10 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
         ("Clock reported", f"{row.get('clock_ns_reported', row.get('clock_ns', ''))} ns"),
         ("Setup WNS", f"{row.get('setup_wns_ns', '')} ns"),
         ("Setup TNS", f"{row.get('setup_tns_ns', '')} ns"),
+        ("Setup violations", row.get("setup_vio_count", "")),
         ("Hold WNS", f"{row.get('hold_wns_ns', '')} ns"),
         ("Hold TNS", f"{row.get('hold_tns_ns', '')} ns"),
+        ("Hold violations", row.get("hold_vio_count", "")),
     ]
     timing_items.extend(pick_raw_metric_items(row, ("clock__", "timing__"), consumed_raw, limit=10))
 
@@ -878,17 +965,23 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
         ("Switching", row.get("power_switching_W", "")),
         ("Leakage", row.get("power_leakage_W", "")),
         ("Source", row.get("power_source", "")),
+        ("Status", row.get("power_status", "")),
         ("FAIR STA rpt", row.get("power_fair_sta_rpt", "")),
     ]
     power_items.extend(pick_raw_metric_items(row, ("power__",), consumed_raw, limit=10))
 
     signoff_items: List[Tuple[str, Any]] = [
         ("DRC", row.get("drc_errors", "")),
+        ("Route DRC", row.get("drc_errors_route", "")),
         ("KLayout DRC", row.get("drc_errors_klayout", "")),
         ("Magic DRC", row.get("drc_errors_magic", "")),
         ("LVS", row.get("lvs_errors", "")),
         ("Antenna", row.get("antenna_violations", "")),
+        ("Route antenna", row.get("antenna_violations_route", "")),
+        ("Max slew violations", row.get("max_slew_violation_count", "")),
+        ("Max cap violations", row.get("max_cap_violation_count", "")),
         ("Worst IR drop", row.get("ir_drop_worst_V", "")),
+        ("IR status", row.get("ir_status", "")),
     ]
     signoff_items.extend(
         pick_raw_metric_items(
@@ -1623,7 +1716,7 @@ def build_site(
   const allRows = Array.from(tbody.querySelectorAll("tr"));
   let currentKey = "";
   let currentDir = "asc";
-  const statusRank = {"PASS": 0, "TIMING_FAIL": 1, "SIGNOFF_FAIL": 2, "SIGNOFF_AND_TIMING_FAIL": 3, "FLOW_FAIL": 4};
+  const statusRank = {"SIGNOFF_PASS": 0, "FLOW_COMPLETED_ELECTRICAL_FAIL": 1, "FLOW_COMPLETED_SIGNOFF_FAIL": 2, "FLOW_COMPLETED_TIMING_FAIL": 3, "FLOW_COMPLETED_TIMING_AND_SIGNOFF_FAIL": 4, "METRICS_MISSING": 5, "FLOW_FAIL": 6};
   function getRowValue(row, key, type) {
     const raw = (row.dataset[key] || "").trim();
     if (type === "number") {
@@ -1743,10 +1836,10 @@ def build_site(
       <section class="card span-5">
         <h2>Selection Criteria</h2>
         <ol>
-          <li>Clean signoff plus non-negative setup timing wins.</li>
-          <li>If no full PASS exists, clean signoff wins over signoff violations.</li>
-          <li>Among comparable runs, lower requested clock period is preferred.</li>
-          <li>Setup WNS/TNS are used as tie-breakers.</li>
+          <li>Only SIGNOFF_PASS can be selected as the true best clock.</li>
+          <li>SIGNOFF_PASS requires worst-corner setup/hold closure, zero setup/hold violations, zero slew/cap violations, and clean DRC/LVS/antenna.</li>
+          <li>If no SIGNOFF_PASS exists, the explorer shows the least-bad completed run for inspection only.</li>
+          <li>Among comparable runs, lower requested clock period is preferred, then timing margins are used as tie-breakers.</li>
         </ol>
       </section>
 
@@ -1762,8 +1855,8 @@ def build_site(
         <h2>Run Overview</h2>
         <div class="kpi-grid">
           <div class="stat"><div class="label">Total runs</div><div class="value">{len(ordered)}</div></div>
-          <div class="stat"><div class="label">PASS runs</div><div class="value">{sum(1 for r in ordered if r.get('status') == 'PASS')}</div></div>
-          <div class="stat"><div class="label">Non-pass runs</div><div class="value">{sum(1 for r in ordered if r.get('status') != 'PASS')}</div></div>
+          <div class="stat"><div class="label">SIGNOFF_PASS runs</div><div class="value">{sum(1 for r in ordered if r.get('status') == 'SIGNOFF_PASS')}</div></div>
+          <div class="stat"><div class="label">Non-pass runs</div><div class="value">{sum(1 for r in ordered if r.get('status') != 'SIGNOFF_PASS')}</div></div>
           <div class="stat"><div class="label">Best clock</div><div class="value">{html.escape(str(best.get('clock_ns', '')))}</div></div>
         </div>
       </section>
@@ -1775,10 +1868,12 @@ def build_site(
         <label>Status
           <select id="statusFilter">
             <option value="">All</option>
-            <option value="PASS">PASS</option>
-            <option value="TIMING_FAIL">TIMING_FAIL</option>
-            <option value="SIGNOFF_FAIL">SIGNOFF_FAIL</option>
-            <option value="SIGNOFF_AND_TIMING_FAIL">SIGNOFF_AND_TIMING_FAIL</option>
+            <option value="SIGNOFF_PASS">SIGNOFF_PASS</option>
+            <option value="FLOW_COMPLETED_TIMING_FAIL">FLOW_COMPLETED_TIMING_FAIL</option>
+            <option value="FLOW_COMPLETED_ELECTRICAL_FAIL">FLOW_COMPLETED_ELECTRICAL_FAIL</option>
+            <option value="FLOW_COMPLETED_SIGNOFF_FAIL">FLOW_COMPLETED_SIGNOFF_FAIL</option>
+            <option value="FLOW_COMPLETED_TIMING_AND_SIGNOFF_FAIL">FLOW_COMPLETED_TIMING_AND_SIGNOFF_FAIL</option>
+            <option value="METRICS_MISSING">METRICS_MISSING</option>
             <option value="FLOW_FAIL">FLOW_FAIL</option>
           </select>
         </label>

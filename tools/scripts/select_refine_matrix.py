@@ -8,8 +8,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 
-PASS_STATUSES = {"PASS"}
-FLOW_FAIL_STATUSES = {"FLOW_FAIL", "INCOMPLETE"}
+PASS_STATUS = "SIGNOFF_PASS"
+PASS_STATUSES = {PASS_STATUS}
+FLOWLIKE_STATUSES = {"FLOW_FAIL", "METRICS_MISSING", "INCOMPLETE"}
+CLASSIFIED_FAIL_STATUSES = {
+    "FLOW_COMPLETED_TIMING_FAIL",
+    "FLOW_COMPLETED_ELECTRICAL_FAIL",
+    "FLOW_COMPLETED_SIGNOFF_FAIL",
+    "FLOW_COMPLETED_TIMING_AND_SIGNOFF_FAIL",
+}
 
 
 def to_float(v: Any) -> Optional[float]:
@@ -35,25 +42,51 @@ def read_csv_row(path: Path) -> Optional[Dict[str, str]]:
 
 def classify_status(row: Dict[str, str]) -> str:
     raw_status = str(row.get("status", "")).strip().upper()
-    if raw_status in FLOW_FAIL_STATUSES:
-        return "FLOW_FAIL"
+    if raw_status in {PASS_STATUS, *FLOWLIKE_STATUSES, *CLASSIFIED_FAIL_STATUSES}:
+        return raw_status
 
-    swns = to_float(row.get("setup_wns_ns"))
-    stns = to_float(row.get("setup_tns_ns"))
+    required = (
+        "setup_wns_ns",
+        "setup_tns_ns",
+        "hold_wns_ns",
+        "hold_tns_ns",
+        "setup_vio_count",
+        "hold_vio_count",
+        "max_slew_violation_count",
+        "max_cap_violation_count",
+        "drc_errors",
+        "lvs_errors",
+        "antenna_violations",
+    )
+    if any(to_float(row.get(key)) is None for key in required):
+        return "METRICS_MISSING"
+
+    setup_wns = to_float(row.get("setup_wns_ns"))
+    setup_tns = to_float(row.get("setup_tns_ns"))
+    hold_wns = to_float(row.get("hold_wns_ns"))
+    hold_tns = to_float(row.get("hold_tns_ns"))
+    setup_vio = to_float(row.get("setup_vio_count"))
+    hold_vio = to_float(row.get("hold_vio_count"))
+    max_slew = to_float(row.get("max_slew_violation_count"))
+    max_cap = to_float(row.get("max_cap_violation_count"))
     drc = to_float(row.get("drc_errors"))
     lvs = to_float(row.get("lvs_errors"))
     ant = to_float(row.get("antenna_violations"))
 
-    timing_ok = swns is not None and stns is not None and swns >= 0.0 and stns >= 0.0
-    signoff_ok = all(v in (None, 0.0) for v in (drc, lvs, ant))
+    timing_setup_pass = setup_wns >= 0.0 and setup_tns >= 0.0 and setup_vio == 0.0
+    timing_hold_pass = hold_wns >= 0.0 and hold_tns >= 0.0 and hold_vio == 0.0
+    electrical_pass = max_slew == 0.0 and max_cap == 0.0
+    physical_pass = drc == 0.0 and lvs == 0.0 and ant == 0.0
 
-    if signoff_ok and timing_ok:
-        return "PASS"
-    if signoff_ok and not timing_ok:
-        return "TIMING_FAIL"
-    if (not signoff_ok) and timing_ok:
-        return "SIGNOFF_FAIL"
-    return "SIGNOFF_AND_TIMING_FAIL"
+    if timing_setup_pass and timing_hold_pass and electrical_pass and physical_pass:
+        return PASS_STATUS
+    if (not timing_setup_pass or not timing_hold_pass) and (not electrical_pass or not physical_pass):
+        return "FLOW_COMPLETED_TIMING_AND_SIGNOFF_FAIL"
+    if not timing_setup_pass or not timing_hold_pass:
+        return "FLOW_COMPLETED_TIMING_FAIL"
+    if not electrical_pass:
+        return "FLOW_COMPLETED_ELECTRICAL_FAIL"
+    return "FLOW_COMPLETED_SIGNOFF_FAIL"
 
 
 def collect_rows(artifacts_root: Path) -> List[Dict[str, Any]]:
@@ -146,20 +179,18 @@ def extend_upward(highest_tested: float, step_ns: float, max_clock_ns: float, ex
 def analyze(rows: List[Dict[str, Any]]) -> Tuple[List[float], List[float], Optional[float], Optional[float]]:
     existing = sorted({row["clock_ns"] for row in rows})
     passes = sorted(row["clock_ns"] for row in rows if row["status"] in PASS_STATUSES)
-    non_flow = sorted(row["clock_ns"] for row in rows if row["status"] != "FLOW_FAIL")
+    non_flow = sorted(row["clock_ns"] for row in rows if row["status"] not in FLOWLIKE_STATUSES)
 
     lowest_pass = min(passes) if passes else None
     highest_fail_below_pass = None
     if lowest_pass is not None:
-        fails_below = [
+        classified_fails = [
             row["clock_ns"]
             for row in rows
-            if row["status"] != "PASS"
-            and row["status"] != "FLOW_FAIL"
-            and row["clock_ns"] < lowest_pass
+            if row["status"] in CLASSIFIED_FAIL_STATUSES and row["clock_ns"] < lowest_pass
         ]
-        if fails_below:
-            highest_fail_below_pass = max(fails_below)
+        if classified_fails:
+            highest_fail_below_pass = max(classified_fails)
 
     return existing, non_flow, lowest_pass, highest_fail_below_pass
 
@@ -185,7 +216,7 @@ def main() -> None:
     existing_set = {round(v, 6) for v in existing}
 
     if not non_flow:
-        write_output([], "All observed results are FLOW_FAIL, so refinement stops instead of expanding upward.", args.github_output)
+        write_output([], "All observed results are FLOW_FAIL or METRICS_MISSING, so refinement stops instead of expanding upward.", args.github_output)
         return
 
     if args.mode == "extend":
@@ -201,23 +232,23 @@ def main() -> None:
 
         if lowest_pass is not None:
             matrix = extend_downward(lowest_pass, args.step_ns, args.min_clock_ns, existing_set, args.batch_size)
-            write_output(matrix, f"All usable points still pass down to {fmt(lowest_pass)} ns, so extend downward at the same {fmt(args.step_ns)} ns step.", args.github_output)
+            write_output(matrix, f"All true signoff passes still hold down to {fmt(lowest_pass)} ns, so extend downward at the same {fmt(args.step_ns)} ns step.", args.github_output)
             return
 
         highest_tested = max(non_flow)
         if highest_tested >= args.max_clock_ns:
-            write_output([], f"No passing point found and the highest tested usable point {fmt(highest_tested)} ns already reached the variant cap {fmt(args.max_clock_ns)} ns.", args.github_output)
+            write_output([], f"No SIGNOFF_PASS point found and the highest tested classified point {fmt(highest_tested)} ns already reached the variant cap {fmt(args.max_clock_ns)} ns.", args.github_output)
             return
 
         matrix = extend_upward(highest_tested, args.step_ns, args.max_clock_ns, existing_set, args.batch_size)
-        write_output(matrix, f"No passing point found yet, so extend upward at the same {fmt(args.step_ns)} ns step from {fmt(highest_tested)} ns toward the cap.", args.github_output)
+        write_output(matrix, f"No SIGNOFF_PASS point found yet, so extend upward at the same {fmt(args.step_ns)} ns step from {fmt(highest_tested)} ns toward the cap.", args.github_output)
         return
 
     if lowest_pass is None or highest_fail_below_pass is None:
         if lowest_pass is not None:
-            write_output([], f"Refine stage at {fmt(args.step_ns)} ns is skipped because there is no fail below the current lowest pass {fmt(lowest_pass)} ns yet.", args.github_output)
+            write_output([], f"Refine stage at {fmt(args.step_ns)} ns is skipped because there is no classified fail below the current lowest SIGNOFF_PASS {fmt(lowest_pass)} ns yet.", args.github_output)
         else:
-            write_output([], f"Refine stage at {fmt(args.step_ns)} ns is skipped because no passing point exists yet.", args.github_output)
+            write_output([], f"Refine stage at {fmt(args.step_ns)} ns is skipped because no SIGNOFF_PASS point exists yet.", args.github_output)
         return
 
     interval = lowest_pass - highest_fail_below_pass

@@ -23,6 +23,10 @@ CSV_FIELDS = [
     "setup_tns_ns",
     "hold_wns_ns",
     "hold_tns_ns",
+    "setup_vio_count",
+    "hold_vio_count",
+    "max_slew_violation_count",
+    "max_cap_violation_count",
     "core_area_um2",
     "die_area_um2",
     "instance_count",
@@ -34,17 +38,22 @@ CSV_FIELDS = [
     "power_switching_W",
     "power_leakage_W",
     "power_source",
+    "power_status",
     "drc_errors",
+    "drc_errors_route",
     "drc_errors_klayout",
     "drc_errors_magic",
     "lvs_errors",
     "antenna_violations",
+    "antenna_violations_route",
     "antenna_violating_nets",
     "antenna_violating_pins",
     "ir_drop_worst_V",
+    "ir_status",
     "power_fair_sta_rpt",
     "status",
 ]
+
 
 HISTORY_FIELDS = [
     "attempt",
@@ -55,6 +64,10 @@ HISTORY_FIELDS = [
     "setup_tns_ns",
     "hold_wns_ns",
     "hold_tns_ns",
+    "setup_vio_count",
+    "hold_vio_count",
+    "max_slew_violation_count",
+    "max_cap_violation_count",
     "drc_errors",
     "lvs_errors",
     "antenna_violations",
@@ -62,6 +75,7 @@ HISTORY_FIELDS = [
     "run_dir",
     "attempt_dir",
 ]
+
 
 
 def load_yaml(path: Path) -> Dict[str, Any]:
@@ -331,45 +345,100 @@ def write_attempt_manifest(
     (attempt_dir / "attempt_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
 
+def required_metric_fields() -> Tuple[str, ...]:
+    return (
+        "setup_wns_ns",
+        "setup_tns_ns",
+        "hold_wns_ns",
+        "hold_tns_ns",
+        "setup_vio_count",
+        "hold_vio_count",
+        "max_slew_violation_count",
+        "max_cap_violation_count",
+        "drc_errors",
+        "lvs_errors",
+        "antenna_violations",
+    )
+
+
+def missing_required_metrics(metrics_row: Dict[str, str]) -> List[str]:
+    return [field for field in required_metric_fields() if to_float(metrics_row.get(field)) is None]
+
+
 def has_valid_timing_metrics(metrics_row: Dict[str, str]) -> bool:
-    swns = to_float(metrics_row.get("setup_wns_ns"))
-    stns = to_float(metrics_row.get("setup_tns_ns"))
-    return swns is not None and stns is not None
+    required = (
+        "setup_wns_ns",
+        "setup_tns_ns",
+        "hold_wns_ns",
+        "hold_tns_ns",
+        "setup_vio_count",
+        "hold_vio_count",
+    )
+    return all(to_float(metrics_row.get(field)) is not None for field in required)
 
 
 def classify_metrics_row(metrics_row: Dict[str, str]) -> Tuple[str, str]:
-    reasons: List[str] = []
+    missing = missing_required_metrics(metrics_row)
+    if missing:
+        preview = ", ".join(missing[:6])
+        suffix = "..." if len(missing) > 6 else ""
+        return "METRICS_MISSING", f"Final metrics incomplete; missing {preview}{suffix}."
 
-    swns = to_float(metrics_row.get("setup_wns_ns"))
-    stns = to_float(metrics_row.get("setup_tns_ns"))
+    setup_wns = to_float(metrics_row.get("setup_wns_ns"))
+    setup_tns = to_float(metrics_row.get("setup_tns_ns"))
+    hold_wns = to_float(metrics_row.get("hold_wns_ns"))
+    hold_tns = to_float(metrics_row.get("hold_tns_ns"))
+    setup_vio = to_float(metrics_row.get("setup_vio_count"))
+    hold_vio = to_float(metrics_row.get("hold_vio_count"))
+    max_slew = to_float(metrics_row.get("max_slew_violation_count"))
+    max_cap = to_float(metrics_row.get("max_cap_violation_count"))
     drc = to_float(metrics_row.get("drc_errors"))
     lvs = to_float(metrics_row.get("lvs_errors"))
     ant = to_float(metrics_row.get("antenna_violations"))
 
-    timing_ok = swns is not None and stns is not None and swns >= 0.0 and stns >= 0.0
-    signoff_ok = all(v in (None, 0.0) for v in (drc, lvs, ant))
+    timing_setup_pass = setup_wns >= 0.0 and setup_tns >= 0.0 and setup_vio == 0.0
+    timing_hold_pass = hold_wns >= 0.0 and hold_tns >= 0.0 and hold_vio == 0.0
+    electrical_pass = max_slew == 0.0 and max_cap == 0.0
+    physical_signoff_pass = drc == 0.0 and lvs == 0.0 and ant == 0.0
 
-    if drc not in (None, 0.0):
-        reasons.append(f"DRC={int(drc) if drc.is_integer() else drc}")
-    if lvs not in (None, 0.0):
-        reasons.append(f"LVS={int(lvs) if lvs.is_integer() else lvs}")
-    if ant not in (None, 0.0):
-        reasons.append(f"Antenna={int(ant) if ant.is_integer() else ant}")
-    if swns is None or swns < 0.0:
-        reasons.append(f"setup WNS={swns}")
-    if stns is None or stns < 0.0:
-        reasons.append(f"setup TNS={stns}")
+    reasons: List[str] = []
+    if not timing_setup_pass:
+        reasons.append(
+            f"setup WNS={metrics_row.get('setup_wns_ns', '')}, "
+            f"TNS={metrics_row.get('setup_tns_ns', '')}, "
+            f"vio={metrics_row.get('setup_vio_count', '')}"
+        )
+    if not timing_hold_pass:
+        reasons.append(
+            f"hold WNS={metrics_row.get('hold_wns_ns', '')}, "
+            f"TNS={metrics_row.get('hold_tns_ns', '')}, "
+            f"vio={metrics_row.get('hold_vio_count', '')}"
+        )
+    if not electrical_pass:
+        reasons.append(
+            f"max slew violations={metrics_row.get('max_slew_violation_count', '')}; "
+            f"max cap violations={metrics_row.get('max_cap_violation_count', '')}"
+        )
+    if not physical_signoff_pass:
+        reasons.append(
+            f"DRC={metrics_row.get('drc_errors', '')}; "
+            f"LVS={metrics_row.get('lvs_errors', '')}; "
+            f"Antenna={metrics_row.get('antenna_violations', '')}"
+        )
 
-    if signoff_ok and timing_ok:
-        return "PASS", "Clean signoff and non-negative setup timing."
-    if signoff_ok and not timing_ok:
-        return "TIMING_FAIL", "; ".join(reasons) if reasons else "Timing failed."
-    if (not signoff_ok) and timing_ok:
-        return "SIGNOFF_FAIL", "; ".join(reasons) if reasons else "Signoff failed."
-    return "SIGNOFF_AND_TIMING_FAIL", "; ".join(reasons) if reasons else "Timing and signoff failed."
+    if timing_setup_pass and timing_hold_pass and electrical_pass and physical_signoff_pass:
+        return "SIGNOFF_PASS", "Worst-corner timing and signoff checks passed."
+    if (not timing_setup_pass or not timing_hold_pass) and (not electrical_pass or not physical_signoff_pass):
+        return "FLOW_COMPLETED_TIMING_AND_SIGNOFF_FAIL", "; ".join(reasons)
+    if not timing_setup_pass or not timing_hold_pass:
+        return "FLOW_COMPLETED_TIMING_FAIL", "; ".join(reasons)
+    if not electrical_pass:
+        return "FLOW_COMPLETED_ELECTRICAL_FAIL", "; ".join(reasons)
+    return "FLOW_COMPLETED_SIGNOFF_FAIL", "; ".join(reasons)
 
 
 def classify_attempt(
+
     *,
     config_generated: bool,
     config_generation_rc: int,
@@ -396,13 +465,13 @@ def classify_attempt(
     if openlane_rc != 0 and not timing_present:
         return "FLOW_FAIL", f"OpenLane exited with code {openlane_rc} and no valid timing metrics were produced."
 
-    if raw_status in {"INCOMPLETE", "FLOW_FAIL"}:
+    if raw_status == "FLOW_FAIL":
         return "FLOW_FAIL", f"Metrics were incomplete for run dir {run_dir} (rc={openlane_rc})."
 
     status, reason = classify_metrics_row(metrics_row)
 
-    if status == "PASS" and not timing_present:
-        return "FLOW_FAIL", "Run was marked PASS-like but valid setup timing metrics are missing."
+    if status == "SIGNOFF_PASS" and not timing_present:
+        return "FLOW_FAIL", "Run was marked SIGNOFF_PASS-like but valid setup/hold timing metrics are missing."
 
     if openlane_rc != 0:
         return status, f"{reason}; OpenLane rc={openlane_rc}"
@@ -425,13 +494,13 @@ def write_history_files(out_root: Path, history: List[Dict[str, Any]]) -> None:
     lines = [
         "## Autoflow attempts",
         "",
-        "| Attempt | Clock (ns) | Status | Setup WNS | Setup TNS | DRC | LVS | Antenna | RC | Remarks |",
-        "|---:|---:|---|---:|---:|---:|---:|---:|---:|---|",
+        "| Attempt | Clock (ns) | Status | Setup WNS | Setup TNS | Setup Vio | Hold Vio | DRC | LVS | Antenna | RC | Remarks |",
+        "|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for row in history:
         lines.append(
             f"| {row.get('attempt','')} | {row.get('clock_ns','')} | {row.get('status','')} | "
-            f"{row.get('setup_wns_ns','')} | {row.get('setup_tns_ns','')} | {row.get('drc_errors','')} | "
+            f"{row.get('setup_wns_ns','')} | {row.get('setup_tns_ns','')} | {row.get('setup_vio_count','')} | {row.get('hold_vio_count','')} | {row.get('drc_errors','')} | "
             f"{row.get('lvs_errors','')} | {row.get('antenna_violations','')} | {row.get('openlane_rc','')} | "
             f"{row.get('selection_reason','')} |"
         )
@@ -684,8 +753,8 @@ def main() -> None:
     (out_root / "_autoflow_session.json").write_text(json.dumps(session_meta, indent=2), encoding="utf-8")
 
     summary_path = resolve_summary_path()
-    append_summary(summary_path, "| Attempt | Clock (ns) | Status | Setup WNS | Setup TNS | DRC | LVS | Antenna | RC | Remarks |")
-    append_summary(summary_path, "|---:|---:|---|---:|---:|---:|---:|---:|---:|---|")
+    append_summary(summary_path, "| Attempt | Clock (ns) | Status | Setup WNS | Setup TNS | Setup Vio | Hold Vio | DRC | LVS | Antenna | RC | Remarks |")
+    append_summary(summary_path, "|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---|")
 
     history: List[Dict[str, Any]] = []
     pass_clocks: List[float] = []
@@ -875,6 +944,10 @@ def main() -> None:
                 "setup_tns_ns": metrics_row.get("setup_tns_ns", ""),
                 "hold_wns_ns": metrics_row.get("hold_wns_ns", ""),
                 "hold_tns_ns": metrics_row.get("hold_tns_ns", ""),
+                "setup_vio_count": metrics_row.get("setup_vio_count", ""),
+                "hold_vio_count": metrics_row.get("hold_vio_count", ""),
+                "max_slew_violation_count": metrics_row.get("max_slew_violation_count", ""),
+                "max_cap_violation_count": metrics_row.get("max_cap_violation_count", ""),
                 "drc_errors": metrics_row.get("drc_errors", ""),
                 "lvs_errors": metrics_row.get("lvs_errors", ""),
                 "antenna_violations": metrics_row.get("antenna_violations", ""),
@@ -901,6 +974,7 @@ def main() -> None:
             print(
                 f"Attempt {attempt} | {rounded_current} ns | {status} | "
                 f"WNS={history_row['setup_wns_ns']} | TNS={history_row['setup_tns_ns']} | "
+                f"SVIO={history_row['setup_vio_count']} | HVIO={history_row['hold_vio_count']} | "
                 f"DRC={history_row['drc_errors']} | LVS={history_row['lvs_errors']} | "
                 f"ANT={history_row['antenna_violations']} | RC={history_row['openlane_rc']} | {reason}",
                 flush=True,
@@ -908,11 +982,11 @@ def main() -> None:
             append_summary(
                 summary_path,
                 f"| {attempt} | {rounded_current} | {status} | {history_row['setup_wns_ns']} | "
-                f"{history_row['setup_tns_ns']} | {history_row['drc_errors']} | {history_row['lvs_errors']} | "
+                f"{history_row['setup_tns_ns']} | {history_row['setup_vio_count']} | {history_row['hold_vio_count']} | {history_row['drc_errors']} | {history_row['lvs_errors']} | "
                 f"{history_row['antenna_violations']} | {history_row['openlane_rc']} | {reason} |",
             )
 
-            if status == "PASS":
+            if status == "SIGNOFF_PASS":
                 pass_clocks.append(rounded_current)
             else:
                 fail_clocks.append(rounded_current)
@@ -938,7 +1012,7 @@ def main() -> None:
     if not history:
         raise SystemExit("Autoflow produced no attempts")
 
-    passing = [row for row in history if row["status"] == "PASS"]
+    passing = [row for row in history if row["status"] == "SIGNOFF_PASS"]
     best = min(passing, key=lambda row: float(row["clock_ns"])) if passing else history[-1]
 
     (out_root / "_autoflow_best.json").write_text(json.dumps(best, indent=2), encoding="utf-8")

@@ -8,6 +8,16 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 
+PASS_STATUS = "SIGNOFF_PASS"
+NONFLOW_FAIL_STATUSES = {
+    "FLOW_COMPLETED_TIMING_FAIL",
+    "FLOW_COMPLETED_ELECTRICAL_FAIL",
+    "FLOW_COMPLETED_SIGNOFF_FAIL",
+    "FLOW_COMPLETED_TIMING_AND_SIGNOFF_FAIL",
+}
+FLOWLIKE_STATUSES = {"FLOW_FAIL", "METRICS_MISSING", "INCOMPLETE"}
+
+
 def to_float(value: Any) -> Optional[float]:
     try:
         if value in (None, "", "None"):
@@ -31,41 +41,68 @@ def read_csv_row(path: Path) -> Optional[Dict[str, str]]:
     return rows[0] if rows else None
 
 
-def signoff_clean(row: Dict[str, str]) -> bool:
-    for key in ("drc_errors", "lvs_errors", "antenna_violations"):
-        value = to_float(row.get(key))
-        if value is not None and value != 0.0:
-            return False
-    return True
-
-
-def timing_ok(row: Dict[str, str]) -> bool:
-    swns = to_float(row.get("setup_wns_ns"))
-    stns = to_float(row.get("setup_tns_ns"))
-    return swns is not None and stns is not None and swns >= 0.0 and stns >= 0.0
-
-
 def classify_status(row: Dict[str, str]) -> str:
     raw_status = str(row.get("status", "")).strip().upper()
-    if raw_status in {"FLOW_FAIL", "INCOMPLETE"}:
-        return "FLOW_FAIL"
+    if raw_status in {PASS_STATUS, *NONFLOW_FAIL_STATUSES, *FLOWLIKE_STATUSES}:
+        return raw_status
 
-    swns = to_float(row.get("setup_wns_ns"))
-    stns = to_float(row.get("setup_tns_ns"))
-    if swns is None or stns is None:
-        return "FLOW_FAIL"
+    required = (
+        "setup_wns_ns",
+        "setup_tns_ns",
+        "hold_wns_ns",
+        "hold_tns_ns",
+        "setup_vio_count",
+        "hold_vio_count",
+        "max_slew_violation_count",
+        "max_cap_violation_count",
+        "drc_errors",
+        "lvs_errors",
+        "antenna_violations",
+    )
+    missing = [key for key in required if to_float(row.get(key)) is None]
+    if missing:
+        return "METRICS_MISSING"
 
-    if signoff_clean(row) and timing_ok(row):
-        return "PASS"
-    return "USABLE_FAIL"
+    setup_wns = to_float(row.get("setup_wns_ns"))
+    setup_tns = to_float(row.get("setup_tns_ns"))
+    hold_wns = to_float(row.get("hold_wns_ns"))
+    hold_tns = to_float(row.get("hold_tns_ns"))
+    setup_vio = to_float(row.get("setup_vio_count"))
+    hold_vio = to_float(row.get("hold_vio_count"))
+    max_slew = to_float(row.get("max_slew_violation_count"))
+    max_cap = to_float(row.get("max_cap_violation_count"))
+    drc = to_float(row.get("drc_errors"))
+    lvs = to_float(row.get("lvs_errors"))
+    ant = to_float(row.get("antenna_violations"))
+
+    timing_setup_pass = setup_wns >= 0.0 and setup_tns >= 0.0 and setup_vio == 0.0
+    timing_hold_pass = hold_wns >= 0.0 and hold_tns >= 0.0 and hold_vio == 0.0
+    electrical_pass = max_slew == 0.0 and max_cap == 0.0
+    physical_pass = drc == 0.0 and lvs == 0.0 and ant == 0.0
+
+    if timing_setup_pass and timing_hold_pass and electrical_pass and physical_pass:
+        return PASS_STATUS
+    if (not timing_setup_pass or not timing_hold_pass) and (not electrical_pass or not physical_pass):
+        return "FLOW_COMPLETED_TIMING_AND_SIGNOFF_FAIL"
+    if not timing_setup_pass or not timing_hold_pass:
+        return "FLOW_COMPLETED_TIMING_FAIL"
+    if not electrical_pass:
+        return "FLOW_COMPLETED_ELECTRICAL_FAIL"
+    return "FLOW_COMPLETED_SIGNOFF_FAIL"
 
 
 def status_rank(status: str) -> int:
-    if status == "PASS":
-        return 0
-    if status == "USABLE_FAIL":
-        return 1
-    return 2
+    order = {
+        PASS_STATUS: 0,
+        "FLOW_COMPLETED_ELECTRICAL_FAIL": 1,
+        "FLOW_COMPLETED_SIGNOFF_FAIL": 2,
+        "FLOW_COMPLETED_TIMING_FAIL": 3,
+        "FLOW_COMPLETED_TIMING_AND_SIGNOFF_FAIL": 4,
+        "METRICS_MISSING": 5,
+        "FLOW_FAIL": 6,
+        "INCOMPLETE": 6,
+    }
+    return order.get(status, 99)
 
 
 def collect_by_clock(artifacts_root: Path) -> Dict[float, str]:
@@ -90,25 +127,35 @@ def collect_by_clock(artifacts_root: Path) -> Dict[float, str]:
 
 
 def compute_bracket(best_by_clock: Dict[float, str]) -> Tuple[Optional[float], Optional[float], str]:
-    pass_clocks = sorted(clock for clock, status in best_by_clock.items() if status == "PASS")
+    pass_clocks = sorted(clock for clock, status in best_by_clock.items() if status == PASS_STATUS)
     if not pass_clocks:
         return None, None, "NONE"
 
     upper_pass = min(pass_clocks)
 
-    usable_fails = sorted(
+    classified_fails = sorted(
         clock for clock, status in best_by_clock.items()
-        if status == "USABLE_FAIL" and clock < upper_pass
+        if status in NONFLOW_FAIL_STATUSES and clock < upper_pass
     )
-    if usable_fails:
-        return upper_pass, max(usable_fails), "USABLE_FAIL"
+    if classified_fails:
+        lower_clock = max(classified_fails)
+        return upper_pass, lower_clock, best_by_clock[lower_clock]
+
+    metrics_missing = sorted(
+        clock for clock, status in best_by_clock.items()
+        if status == "METRICS_MISSING" and clock < upper_pass
+    )
+    if metrics_missing:
+        lower_clock = max(metrics_missing)
+        return upper_pass, lower_clock, "METRICS_MISSING"
 
     flow_fails = sorted(
         clock for clock, status in best_by_clock.items()
-        if status == "FLOW_FAIL" and clock < upper_pass
+        if status in {"FLOW_FAIL", "INCOMPLETE"} and clock < upper_pass
     )
     if flow_fails:
-        return upper_pass, max(flow_fails), "FLOW_FAIL"
+        lower_clock = max(flow_fails)
+        return upper_pass, lower_clock, "FLOW_FAIL"
 
     return upper_pass, None, "NONE"
 
@@ -166,8 +213,8 @@ def write_bracket_summaries(
     matrix: List[float],
     best_by_clock: Dict[float, str],
 ) -> None:
-    pass_clocks = sorted(clock for clock, status in best_by_clock.items() if status == "PASS")
-    fail_clocks = sorted(clock for clock, status in best_by_clock.items() if status != "PASS")
+    pass_clocks = sorted(clock for clock, status in best_by_clock.items() if status == PASS_STATUS)
+    fail_clocks = sorted(clock for clock, status in best_by_clock.items() if status != PASS_STATUS)
     bracket_width = round(upper_pass - lower_fail, 6)
     matrix_payload = [
         int(v) if float(v).is_integer() else round(v, 6)
@@ -186,8 +233,8 @@ def write_bracket_summaries(
         "pass_clocks": pass_clocks,
         "fail_clocks": fail_clocks,
         "reason": (
-            f"{fmt_num(upper_pass)} ns is the fastest PASS found so far and "
-            f"{fmt_num(lower_fail)} ns is the nearest {lower_fail_kind} below it."
+            f"{fmt_num(upper_pass)} ns is the fastest SIGNOFF_PASS found so far and "
+            f"{fmt_num(lower_fail)} ns is the nearest non-pass point below it ({lower_fail_kind})."
         ),
     }
 
@@ -206,11 +253,11 @@ def write_bracket_summaries(
             "",
             "## Stage completed",
             f"- Stage: {stage_label}",
-            f"- Lower-fail classification priority used: {lower_fail_kind}",
+            f"- Lower-fail classification used: {lower_fail_kind}",
             "",
             "## Results",
-            f"- PASS clocks: {pass_str}",
-            f"- FAIL clocks: {fail_str}",
+            f"- SIGNOFF_PASS clocks: {pass_str}",
+            f"- Non-pass clocks: {fail_str}",
             "",
             "## Selected bracket",
             f"- upper_pass = {fmt_num(upper_pass)} ns",
@@ -223,8 +270,8 @@ def write_bracket_summaries(
             f"- Planned clocks: {planned_str}",
             "",
             "## Reasoning",
-            f"{fmt_num(upper_pass)} ns is the fastest passing point found so far.",
-            f"{fmt_num(lower_fail)} ns is the nearest failing point below it.",
+            f"{fmt_num(upper_pass)} ns is the fastest signoff-clean point found so far.",
+            f"{fmt_num(lower_fail)} ns is the nearest non-pass point below it.",
             f"Therefore the optimum boundary lies inside ({fmt_num(lower_fail)}, {fmt_num(upper_pass)}].",
         ]
         summary_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -232,7 +279,7 @@ def write_bracket_summaries(
 
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="Select the current fastest PASS and highest FAIL-below-PASS bracket from downloaded artifacts."
+        description="Select the current fastest SIGNOFF_PASS and highest non-pass-below-pass bracket from downloaded artifacts."
     )
     ap.add_argument("--artifacts-root", type=Path, required=True)
     ap.add_argument("--next-step-ns", type=float, default=None, help="If provided, emit a downward matrix between the bracket endpoints.")
@@ -250,12 +297,12 @@ def main() -> None:
     upper_pass, lower_fail, lower_fail_kind = compute_bracket(best_by_clock)
 
     if upper_pass is None:
-        raise SystemExit("No PASS result was found. Increase the clock cap from variant.yaml or inspect FLOW_FAIL causes.")
+        raise SystemExit("No SIGNOFF_PASS result was found. Increase the clock cap from variant.yaml or inspect the failing timing/signoff metrics.")
 
     if lower_fail is None:
         raise SystemExit(
-            f"No failing point was found below the fastest PASS {fmt_num(upper_pass)} ns. "
-            f"Lower the floor or inspect whether 0 ns is still passing."
+            f"No non-pass point was found below the fastest SIGNOFF_PASS {fmt_num(upper_pass)} ns. "
+            f"Lower the floor or inspect whether 0 ns is still signoff-clean."
         )
 
     matrix: List[float] = []
