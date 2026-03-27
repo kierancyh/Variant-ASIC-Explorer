@@ -44,7 +44,7 @@ module tb_crns_top_mrc;
 
     // VCD dump for workflow precheck / Surfer
     initial begin
-        $dumpfile("sim/waves/tb_crns_top_mrc.vcd");
+        $dumpfile("rtl_precheck.vcd");
         $dumpvars(0, tb_crns_top_mrc);
     end
 
