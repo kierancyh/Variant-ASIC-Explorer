@@ -1637,6 +1637,10 @@ def build_site(
         n = to_float(value)
         return "" if n is None else str(n)
 
+    def fmt_num_6(value: Any) -> str:
+        n = to_float(value)
+        return "" if n is None else f"{n:.6f}"
+
     rows_html: List[str] = []
     for idx, row in enumerate(ordered):
         run_text = f"{row.get('_variant', '')} / {row.get('_run_dir', '')}"
@@ -1686,8 +1690,8 @@ def build_site(
                 </a>
               </td>
               <td data-sort="{html.escape(str(row.get('clock_ns', '')))}">{html.escape(str(row.get('clock_ns', '')))}</td>
-              <td data-sort="{html.escape(str(row.get('setup_wns_ns', '')))}">{html.escape(str(row.get('setup_wns_ns', '')))}</td>
-              <td data-sort="{html.escape(str(row.get('setup_tns_ns', '')))}">{html.escape(str(row.get('setup_tns_ns', '')))}</td>
+              <td data-sort="{sort_num_value(row.get('setup_wns_ns'))}">{fmt_num_6(row.get('setup_wns_ns'))}</td>
+              <td data-sort="{sort_num_value(row.get('setup_tns_ns'))}">{fmt_num_6(row.get('setup_tns_ns'))}</td>
               <td data-sort="{html.escape(str(row.get('core_area_um2', '')))}">{html.escape(str(row.get('core_area_um2', '')))}</td>
               <td data-sort="{sort_num_value(row.get('power_total_W'))}">{power_total_display}</td>
               <td data-sort="{html.escape(str(row.get('drc_errors', '')))}">{html.escape(str(row.get('drc_errors', '')))}</td>
