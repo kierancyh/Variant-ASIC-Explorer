@@ -63,9 +63,8 @@ module crns_slice #(
         y_next = tmp[WIDTH-1:0];
     end
 
-    always @(posedge clk or negedge rst_n) begin
+    always @(posedge clk) begin
         if (!rst_n) begin
-            y        <= '0;
             start_d  <= 1'b0;
             ALU_Done <= 1'b0;
         end else begin

@@ -58,17 +58,11 @@ module crns_top_crt #(
     reg signed [WIDTH_IN-1:0] A_reg, B_reg;
     reg [1:0]                 OpSel_reg;
 
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            A_reg     <= {WIDTH_IN{1'b0}};
-            B_reg     <= {WIDTH_IN{1'b0}};
-            OpSel_reg <= 2'b00;
-        end else begin
-            if (Load_IN) begin
-                A_reg     <= A_in;
-                B_reg     <= B_in;
-                OpSel_reg <= Op_Sel;
-            end
+    always @(posedge clk) begin
+        if (Load_IN) begin
+            A_reg     <= A_in;
+            B_reg     <= B_in;
+            OpSel_reg <= Op_Sel;
         end
     end
 
@@ -252,13 +246,9 @@ module crns_top_crt #(
     // Final output. CRT path is already centered-native.
     reg signed [WIDTH_IN-1:0] X_reg;
 
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            X_reg <= {WIDTH_IN{1'b0}};
-        end else begin
-            if (Out_EN) begin
-                X_reg <= X_crt;
-            end
+    always @(posedge clk) begin
+        if (Out_EN) begin
+            X_reg <= X_crt;
         end
     end
 

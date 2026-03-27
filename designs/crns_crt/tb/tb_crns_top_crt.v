@@ -44,7 +44,7 @@ module tb_crns_top_crt;
 
     // VCD dump for workflow precheck / Surfer
     initial begin
-        $dumpfile("rtl_precheck.vcd");
+        $dumpfile("sim/waves/tb_crns_top_crt.vcd");
         $dumpvars(0, tb_crns_top_crt);
     end
 
@@ -74,10 +74,10 @@ module tb_crns_top_crt;
         @(posedge Done);
         #1;
 
-        $display("[%0t] TEST %s | CRT | op=%b, A=%0d, B=%0d, X_out=%0d, expected=%0d",
-                 $time, name, op, a, b, X_out, expected);
+        $display("[%0t] TEST %s | op=%b, A=%0d, B=%0d, X_out=%0d, expected=%0d",
+         $time, name, op, $signed(a), $signed(b), $signed(X_out), $signed(expected));
 
-        if (X_out !== expected) begin
+        if ($signed(X_out) !== $signed(expected)) begin
             $display("  -> FAIL");
         end else begin
             $display("  -> PASS");

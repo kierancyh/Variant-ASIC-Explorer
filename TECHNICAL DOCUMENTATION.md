@@ -399,7 +399,9 @@ This stage performs the finest intended sweep at `0.125 ns` resolution.
 
 ### 9.13 `compare-runs`
 
-This stage downloads all artifacts, classifies the runs, builds summary outputs, chooses the best run according to explorer logic, and generates the static Run Explorer site.
+This stage downloads all artifacts, classifies the runs using extracted final timing and signoff evidence, builds summary outputs, chooses the best run according to the strict explorer rule, and generates the static Run Explorer site.
+
+In particular, the best run is selected only from `SIGNOFF_PASS` results, while completed but failing runs remain visible for debugging and comparison.
 
 ### 9.14 `deploy-run-explorer`
 
@@ -564,48 +566,58 @@ Refinement is driven by observed pass/fail evidence. That is more honest than si
 
 ## 15. Run Classification and Status Model
 
-The explorer uses status classes that are intended to be academically honest.
+TThe explorer uses status classes that are intended to be academically honest and consistent with extracted final metrics.
 
-### `PASS`
-The run completed cleanly and timing/signoff evidence supports acceptance.
+### `SIGNOFF_PASS`
 
-### `TIMING_FAIL`
-Timing evidence exists, but setup timing is not met.
+The run completed and the required exported timing, electrical, and physical signoff evidence supports acceptance.
 
-### `SIGNOFF_FAIL`
-Timing may be acceptable, but signoff checks such as DRC, LVS, or antenna still fail.
+### `FLOW_COMPLETED_TIMING_FAIL`
 
-### `SIGNOFF_AND_TIMING_FAIL`
-Both timing and signoff problems are present.
+The backend completed, but worst-case setup and/or hold timing still failed.
+
+### `FLOW_COMPLETED_ELECTRICAL_FAIL`
+
+The backend completed, but electrical integrity checks such as max slew or max capacitance still failed.
+
+### `FLOW_COMPLETED_SIGNOFF_FAIL`
+
+The backend completed, but physical/signoff checks such as DRC, LVS, or antenna still failed.
+
+### `FLOW_COMPLETED_TIMING_AND_SIGNOFF_FAIL`
+
+The backend completed, but both timing and signoff evidence still failed.
+
+### `METRICS_MISSING`
+
+The backend completed, but required final metrics were missing or incomplete, so safe signoff classification could not be determined.
 
 ### `FLOW_FAIL`
+
 Reserved for runtime, tooling, configuration, or evidence-integrity failures such as:
 
-- Missing usable run directory
-- Missing timing metrics
-- Incomplete artifact state
-- Backend failure before valid evidence is produced
+- missing usable run directory,
+- missing final metrics files,
+- incomplete artifact state,
+- backend failure before valid evidence is produced.
 
-### `SKIP`
-Used in prechecks when a check was deliberately disabled.
-
-This model matters. A configuration/runtime failure should not be misreported as though the design simply “failed timing”.
+This model matters because a completed-but-failing implementation result should not be confused with a runtime failure, and missing evidence should not be silently treated as clean.
 
 ---
 
 ## 16. Best-Run Selection Logic
 
-The selected best run is **not** just the lowest requested clock period.
+The selected best run is not just the lowest requested clock period.
 
-The intended preference order is:
+The intended rule is:
 
-1. Clean signoff with non-negative setup timing
-2. If no full pass exists, signoff-clean runs ahead of signoff-violating ones
-3. Lower requested clock period among otherwise comparable runs
-4. Setup WNS/TNS as tie-breakers
+1. Only runs classified as `SIGNOFF_PASS` are eligible to be selected as the true best run.
+2. Among those runs, the lower requested clock period is preferred.
+3. Setup and hold WNS/TNS may be used only as tie-breakers among otherwise valid signoff passes.
 
-This is important because it keeps the selected result aligned with engineering integrity rather than chasing the most aggressive clock value at any cost.
+If no `SIGNOFF_PASS` run exists, the flow should report that no signoff-clean timing point was found.
 
+A completed but failing run may still be surfaced for inspection, but it must not be presented as the best passing timing point.
 ---
 
 ## 17. Artifact Philosophy
@@ -682,12 +694,13 @@ The explorer is meant to be a practical engineering dashboard rather than a deco
 
 The homepage is intended to present:
 
-- Eun overview
+- Run overview
 - Summary settings
-- Precheck visibility
 - All-runs comparison table
+- Honest status classification
+- Best-run selection based only on true signoff passes
 
-The comparison table is where timing points are compared clearly across status, timing, physical, power, and artifact availability.
+The comparison table is where timing points are compared clearly across status, timing, electrical integrity, physical signoff, power, and artifact availability.
 
 ### Per-run page responsibilities
 
@@ -696,8 +709,8 @@ Each run page is intended to show:
 - Clean run metadata
 - Grouped metrics by category
 - Useful buttons and output links
-- Waveform access where applicable
-- Failure diagnostic section when needed
+- Failure diagnostic detail when a run is not clean
+- Additional integrity evidence such as setup/hold violation counts, max slew, max capacitance, route DRC, route antenna, and power / IR validity where available
 
 ### External tools
 
@@ -811,36 +824,29 @@ This keeps the workflow focused and reduces accidental misuse.
 
 ## 23. How to Interpret Results
 
-### If prechecks pass but backend fails
+### If backend fails
 
-That usually means the RTL/testbench relationship is at least sane, but the ASIC flow still encountered implementation, timing, or backend issues.
+That usually means the repository selected the design correctly, but the ASIC flow still encountered a tooling, configuration, or backend execution problem before valid final evidence was produced.
 
-### If RTL precheck fails
+### If timing fails
 
-Start with the basics:
+That is a real implementation result, not a repo failure. It means worst-case setup and/or hold timing did not close at that timing point.
 
-- Wrong testbench top
-- Missing testbench files
-- Compile errors
-- Simulation runtime errors
-- Missing VCD generation
+### If electrical checks fail
 
-### If Yosys precheck fails
+That usually means checks such as max slew or max capacitance still violated limits. This often points to load, buffering, fanout, or routing-quality issues rather than clock period alone.
 
-Look for:
+### If signoff checks fail
 
-- Wrong top-module naming
-- Incomplete source coverage
-- Duplicate module definitions
-- Structural elaboration issues
+That means physical closure is still incomplete. Typical examples include DRC, LVS, or antenna violations.
 
-### If timing fails but signoff is clean
+### If metrics are missing
 
-It is is a real timing result, not a repo failure. It means the clock is probably too aggressive for the design at that point.
+That means the run may have completed, but final evidence was incomplete. It should be treated as incomplete, not silently counted as a pass.
 
-### If flow fails before metrics exist
+### If no signoff-clean point exists
 
-Treat as a flow/config/runtime issue first, not as a meaningful timing datapoint.
+The correct engineering conclusion is that no true passing timing point was found in the explored region, even if some runs completed and produced useful partial evidence.
 
 ---
 

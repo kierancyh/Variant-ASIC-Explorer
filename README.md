@@ -144,24 +144,13 @@ Once pushed, GitHub Actions will run the flow.
 
 ## What CI does for you
 
-At a high level, the flow is:
+At a high level, the flow resolves the active variant, performs staged timing sweeps, compares the collected runs, classifies each run using extracted timing and signoff evidence, and publishes the Run Explorer.
 
-```text
-plan
--> rtl-precheck
--> yosys-precheck
--> coarse-sweep
--> select-coarse-bracket
--> mid-refine-sweep
--> select-mid-bracket
--> refine-sweep-1
--> select-refine-1
--> refine-sweep-2
--> select-refine-2
--> refine-sweep-3
--> compare-runs
--> deploy-run-explorer
-```
+The flow distinguishes between:
+- Full signoff-clean runs
+- Runs that completed but still failed timing
+- Runs that completed but still failed electrical or physical checks
+- Runs where final evidence is incomplete
 
 ### Definitions
 
@@ -188,13 +177,44 @@ The homepage is designed to answer the big questions quickly:
 
 The per-run pages give you more detail, including grouped metrics and useful output links.
 
+### Status meanings
+
+- `SIGNOFF_PASS`  
+  The run completed and all required exported timing and signoff checks are clean.
+
+- `FLOW_COMPLETED_TIMING_FAIL`  
+  The flow completed, but worst-case setup and/or hold timing did not close.
+
+- `FLOW_COMPLETED_ELECTRICAL_FAIL`  
+  The flow completed, but electrical checks such as max slew or max capacitance still failed.
+
+- `FLOW_COMPLETED_SIGNOFF_FAIL`  
+  The flow completed, but physical/signoff checks such as DRC, LVS, or antenna still failed.
+
+- `FLOW_COMPLETED_TIMING_AND_SIGNOFF_FAIL`  
+  The flow completed, but both timing and signoff evidence still failed.
+
+- `METRICS_MISSING`  
+  The flow completed, but required final metrics were incomplete, so signoff status could not be determined safely.
+
+- `FLOW_FAIL`  
+  The run did not produce enough usable backend evidence for normal classification.
+
+### Best-run rule
+
+The selected best run is chosen only from `SIGNOFF_PASS` results.
+
+If no signoff-clean run exists, the explorer may still show the least-bad completed run for inspection, but it should not be treated as a true passing timing point.
+
+The per-run pages give you more detail, including grouped metrics, useful output links, and failure evidence when a run is not clean.
+
 ### Metric Definitions
 
-- **WNS (ns)** — worst negative slack
-- **TNS (ns)** — total negative slack
-- **Core Area (μm²)** — physical core area
-- **Total Power (W)** — reported total power
-- **IR Drop (V)** — voltage drop estimate
+- **WNS (ns)** — Worst negative slack
+- **TNS (ns)** — Total negative slack
+- **Core Area (μm²)** — Physical core area
+- **Total Power (W)** — Reported total power
+- **IR Drop (V)** — Voltage drop estimate
 
 ---
 

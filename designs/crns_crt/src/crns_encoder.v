@@ -58,29 +58,21 @@ module crns_encoder #(
         end
     endfunction
 
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            Encode_Done <= 1'b0;
-            r0 <= '0;
-            r1 <= '0;
-            r2 <= '0;
-            r3 <= '0;
-        end else begin
-            Encode_Done <= 1'b0;
+    always @(posedge clk) begin
+        Encode_Done <= 1'b0;
 
-            if (Encode_EN) begin
-                tmp0 = CRNS_EN ? norm_bal(x, M0) : norm_std(x, M0);
-                tmp1 = CRNS_EN ? norm_bal(x, M1) : norm_std(x, M1);
-                tmp2 = CRNS_EN ? norm_bal(x, M2) : norm_std(x, M2);
-                tmp3 = CRNS_EN ? norm_bal(x, M3) : norm_std(x, M3);
+        if (Encode_EN) begin
+            tmp0 = CRNS_EN ? norm_bal(x, M0) : norm_std(x, M0);
+            tmp1 = CRNS_EN ? norm_bal(x, M1) : norm_std(x, M1);
+            tmp2 = CRNS_EN ? norm_bal(x, M2) : norm_std(x, M2);
+            tmp3 = CRNS_EN ? norm_bal(x, M3) : norm_std(x, M3);
 
-                r0 <= tmp0[W0-1:0];
-                r1 <= tmp1[W1-1:0];
-                r2 <= tmp2[W2-1:0];
-                r3 <= tmp3[W3-1:0];
+            r0 <= tmp0[W0-1:0];
+            r1 <= tmp1[W1-1:0];
+            r2 <= tmp2[W2-1:0];
+            r3 <= tmp3[W3-1:0];
 
-                Encode_Done <= 1'b1;
-            end
+            Encode_Done <= 1'b1;
         end
     end
 
