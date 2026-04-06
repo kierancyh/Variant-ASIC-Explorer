@@ -35,60 +35,52 @@ module crns_crt_recon #(
     localparam integer INV2   = 2;
     localparam integer INV3   = 2;
 
-    integer x0_mod, x1_mod, x2_mod, x3_mod;
-    integer term0, term1, term2, term3;
-    integer total;
-    integer total_mod;
-    integer total_centered;
+    reg [1:0]  x0_mod;
+    reg [2:0]  x1_mod;
+    reg [2:0]  x2_mod;
+    reg [3:0]  x3_mod;
+    reg [9:0]  term0;
+    reg [9:0]  term1;
+    reg [10:0] term2;
+    reg [11:0] term3;
+    reg [12:0] total;
+    reg [10:0] total_mod;
+    reg signed [10:0] total_centered;
     reg signed [OUT_WIDTH-1:0] X_next;
     reg start_d;
 
+    function integer norm_mod;
+        input integer x;
+        input integer m;
+        integer t;
+        begin
+            t = x % m;
+            if (t < 0)
+                t = t + m;
+            norm_mod = t;
+        end
+    endfunction
+
     always @* begin
-        x0_mod         = 0;
-        x1_mod         = 0;
-        x2_mod         = 0;
-        x3_mod         = 0;
-        term0          = 0;
-        term1          = 0;
-        term2          = 0;
-        term3          = 0;
-        total          = 0;
-        total_mod      = 0;
-        total_centered = 0;
-        X_next         = {OUT_WIDTH{1'b0}};
+        x0_mod         = norm_mod(r0, MOD0);
+        x1_mod         = norm_mod(r1, MOD1);
+        x2_mod         = norm_mod(r2, MOD2);
+        x3_mod         = norm_mod(r3, MOD3);
 
-        x0_mod = r0;
-        if (x0_mod < 0) x0_mod = x0_mod + MOD0;
-        if (x0_mod >= MOD0) x0_mod = x0_mod % MOD0;
+        term0          = x0_mod * M0 * INV0;
+        term1          = x1_mod * M1 * INV1;
+        term2          = x2_mod * M2 * INV2;
+        term3          = x3_mod * M3 * INV3;
 
-        x1_mod = r1;
-        if (x1_mod < 0) x1_mod = x1_mod + MOD1;
-        if (x1_mod >= MOD1) x1_mod = x1_mod % MOD1;
-
-        x2_mod = r2;
-        if (x2_mod < 0) x2_mod = x2_mod + MOD2;
-        if (x2_mod >= MOD2) x2_mod = x2_mod % MOD2;
-
-        x3_mod = r3;
-        if (x3_mod < 0) x3_mod = x3_mod + MOD3;
-        if (x3_mod >= MOD3) x3_mod = x3_mod % MOD3;
-
-        term0 = x0_mod * M0 * INV0;
-        term1 = x1_mod * M1 * INV1;
-        term2 = x2_mod * M2 * INV2;
-        term3 = x3_mod * M3 * INV3;
-
-        total = term0 + term1 + term2 + term3;
-        total_mod = total % M;
-        if (total_mod < 0)
-            total_mod = total_mod + M;
+        total          = term0 + term1 + term2 + term3;
+        total_mod      = norm_mod(total, M);
 
         if (total_mod > HALF_M)
-            total_centered = total_mod - M;
+            total_centered = $signed({1'b0, total_mod}) - 12'sd1155;
         else
-            total_centered = total_mod;
+            total_centered = $signed({1'b0, total_mod});
 
-        X_next = total_centered;
+        X_next         = {{(OUT_WIDTH-11){total_centered[10]}}, total_centered};
     end
 
     always @(posedge clk) begin

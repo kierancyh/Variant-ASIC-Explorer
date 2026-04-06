@@ -57,14 +57,15 @@ module crns_mrc_recon #(
     wire start_pulse = MRC_Start & ~start_d;
 
     // Latched normalized residues (standard representatives, internal only)
-    integer r0_mod_r, r1_mod_r, r2_mod_r, r3_mod_r;
+    reg [1:0] r0_mod_r;
+    reg [2:0] r1_mod_r;
+    reg [2:0] r2_mod_r;
+    reg [3:0] r3_mod_r;
 
-    // Intermediate registers
-    integer X1_r, X2_r, X3_r;
-    integer t2, t3, t4;
-    integer X4;
-    integer total_mod;
-    integer total_centered;
+    // Intermediate stage registers
+    reg [1:0] X1_r;  // 0..2
+    reg [3:0] X2_r;  // 0..14
+    reg [6:0] X3_r;  // 0..104
 
     // Integer normalizer: maps any integer into [0 .. m-1]
     function integer norm_mod;
@@ -79,76 +80,79 @@ module crns_mrc_recon #(
         end
     endfunction
 
-always @(posedge clk) begin
-    if (!rst_n) begin
-        state    <= S_IDLE;
-        start_d  <= 1'b0;
-        MRC_Done <= 1'b0;
-    end else begin
-        start_d  <= MRC_Start;
-        MRC_Done <= 1'b0; // one-cycle pulse only in S_DONE
+    // Stage-local combinational math derived from the narrow stage registers.
+    wire [2:0] t2_w;
+    wire [3:0] X2_next_w;
+    wire [2:0] t3_w;
+    wire [6:0] X3_next_w;
+    wire [3:0] t4_w;
+    wire [10:0] X4_w;
+    wire [10:0] total_mod_w;
+    wire signed [10:0] total_centered_w;
 
-        case (state)
-            S_IDLE: begin
-                if (start_pulse) begin
-                    r0_mod_r <= norm_mod(r0, MOD0);
-                    r1_mod_r <= norm_mod(r1, MOD1);
-                    r2_mod_r <= norm_mod(r2, MOD2);
-                    r3_mod_r <= norm_mod(r3, MOD3);
-                    state    <= S_S1;
+    assign t2_w           = norm_mod(norm_mod(r1_mod_r - norm_mod(X1_r, MOD1), MOD1) * INV_12, MOD1);
+    assign X2_next_w      = X1_r + (t2_w * MPREV1);
+
+    assign t3_w           = norm_mod(norm_mod(r2_mod_r - norm_mod(X2_r, MOD2), MOD2) * INV_123, MOD2);
+    assign X3_next_w      = X2_r + (t3_w * MPREV2);
+
+    assign t4_w           = norm_mod(norm_mod(r3_mod_r - norm_mod(X3_r, MOD3), MOD3) * INV_1234, MOD3);
+    assign X4_w           = X3_r + (t4_w * MPREV3);
+    assign total_mod_w    = norm_mod(X4_w, M_TOTAL);
+    assign total_centered_w = (total_mod_w > HALF_M)
+                            ? ($signed({1'b0, total_mod_w}) - 12'sd1155)
+                            :  $signed({1'b0, total_mod_w});
+
+    always @(posedge clk) begin
+        if (!rst_n) begin
+            state    <= S_IDLE;
+            start_d  <= 1'b0;
+            MRC_Done <= 1'b0;
+        end else begin
+            start_d  <= MRC_Start;
+            MRC_Done <= 1'b0; // one-cycle pulse only in S_DONE
+
+            case (state)
+                S_IDLE: begin
+                    if (start_pulse) begin
+                        r0_mod_r <= norm_mod(r0, MOD0);
+                        r1_mod_r <= norm_mod(r1, MOD1);
+                        r2_mod_r <= norm_mod(r2, MOD2);
+                        r3_mod_r <= norm_mod(r3, MOD3);
+                        state    <= S_S1;
+                    end
                 end
-            end
 
-            S_S1: begin
-                X1_r  <= r0_mod_r;
-                state <= S_S2;
-            end
+                S_S1: begin
+                    X1_r  <= r0_mod_r;
+                    state <= S_S2;
+                end
 
-            S_S2: begin
-                t2 = r1_mod_r - norm_mod(X1_r, MOD1);
-                t2 = norm_mod(t2, MOD1);
-                t2 = norm_mod(t2 * INV_12, MOD1);
+                S_S2: begin
+                    X2_r  <= X2_next_w;
+                    state <= S_S3;
+                end
 
-                X2_r  <= X1_r + t2 * MPREV1;
-                state <= S_S3;
-            end
+                S_S3: begin
+                    X3_r  <= X3_next_w;
+                    state <= S_S4;
+                end
 
-            S_S3: begin
-                t3 = r2_mod_r - norm_mod(X2_r, MOD2);
-                t3 = norm_mod(t3, MOD2);
-                t3 = norm_mod(t3 * INV_123, MOD2);
+                S_S4: begin
+                    X_out <= {{(OUT_WIDTH-11){total_centered_w[10]}}, total_centered_w};
+                    state <= S_DONE;
+                end
 
-                X3_r  <= X2_r + t3 * MPREV2;
-                state <= S_S4;
-            end
+                S_DONE: begin
+                    MRC_Done <= 1'b1;
+                    state    <= S_IDLE;
+                end
 
-            S_S4: begin
-                t4 = r3_mod_r - norm_mod(X3_r, MOD3);
-                t4 = norm_mod(t4, MOD3);
-                t4 = norm_mod(t4 * INV_1234, MOD3);
-
-                X4 = X3_r + t4 * MPREV3;
-                total_mod = norm_mod(X4, M_TOTAL);
-
-                if (total_mod > HALF_M)
-                    total_centered = total_mod - M_TOTAL;
-                else
-                    total_centered = total_mod;
-
-                X_out <= total_centered;
-                state <= S_DONE;
-            end
-
-            S_DONE: begin
-                MRC_Done <= 1'b1;
-                state    <= S_IDLE;
-            end
-
-            default: begin
-                state <= S_IDLE;
-            end
-        endcase
+                default: begin
+                    state <= S_IDLE;
+                end
+            endcase
+        end
     end
-end
 
 endmodule
