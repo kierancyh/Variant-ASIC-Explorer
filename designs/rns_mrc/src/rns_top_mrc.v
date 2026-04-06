@@ -5,63 +5,91 @@
 // Used for synthesis / area & timing of MRC architecture.
 
 module rns_top_mrc #(
-    parameter WIDTH_IN  = 16,
+    parameter WIDTH_IN  = 16,  // bit-width of A_in, B_in, X_out
+    // Moduli and residue widths for Option A
     parameter M0 = 3,
     parameter M1 = 5,
     parameter M2 = 7,
     parameter M3 = 11,
-    parameter W0 = 2,
-    parameter W1 = 3,
-    parameter W2 = 3,
-    parameter W3 = 4
+    parameter W0 = 2,          // ceil(log2(3))
+    parameter W1 = 3,          // ceil(log2(5))
+    parameter W2 = 3,          // ceil(log2(7))
+    parameter W3 = 4           // ceil(log2(11))
 )(
+    // Clock & Reset
     input  wire                 clk,
     input  wire                 rst_n,
-    input  wire                 Start,
-    input  wire [1:0]           Op_Sel,
+
+    // External control
+    input  wire                 Start,        // Start operation
+
+    // Operation selection & operands
+    input  wire [1:0]           Op_Sel,       // 00=ADD, 01=SUB, 10=MUL
     input  wire [WIDTH_IN-1:0]  A_in,
     input  wire [WIDTH_IN-1:0]  B_in,
-    output wire                 Done,
-    output wire [WIDTH_IN-1:0]  X_out
+
+    // Outputs
+    output wire                 Done,         // From CU
+    output wire [WIDTH_IN-1:0]  X_out         // Final reconstructed result
 );
 
+    localparam [2:0] S_IDLE = 3'd0;
+
+    // Control Wires
     wire Load_IN;
     wire Encode_EN;
     wire ALU_EN;
-    wire CRT_Start;
+    wire CRT_Start;       // unused but kept for CU port compatibility
     wire MRC_Start;
     wire Out_EN;
 
     wire Encode_Done_all;
     wire ALU_Done_all;
-    wire CRT_Done;
+    wire CRT_Done;        // tied low (no CRT block)
     wire MRC_Done;
-    assign CRT_Done = 1'b0;
 
+    // Debug: CU state (used here only for accept_start capture)
     wire [2:0] CU_state_dbg;
+
+    // Two-stage external input capture:
+    // 1) request regs sample external inputs once when Start is accepted in IDLE
+    // 2) active datapath regs load from request regs on Load_IN
+    reg [WIDTH_IN-1:0] A_req, B_req;
+    reg [1:0]          OpSel_req;
 
     reg [WIDTH_IN-1:0] A_reg, B_reg;
     reg [1:0]          OpSel_reg;
 
+    wire accept_start = Start && (CU_state_dbg == S_IDLE);
+
     always @(posedge clk) begin
+        if (accept_start) begin
+            A_req     <= A_in;
+            B_req     <= B_in;
+            OpSel_req <= Op_Sel;
+        end
+
         if (Load_IN) begin
-            A_reg     <= A_in;
-            B_reg     <= B_in;
-            OpSel_reg <= Op_Sel;
+            A_reg     <= A_req;
+            B_reg     <= B_req;
+            OpSel_reg <= OpSel_req;
         end
     end
 
+    // Control Unit (Recon_Mode fixed to 1 = MRC)
     rns_cu u_cu (
         .clk         (clk),
         .rst_n       (rst_n),
         .Start       (Start),
-        .Recon_Mode  (1'b1),
+        .Recon_Mode  (1'b1),          // force MRC
         .Done        (Done),
         .CU_state_dbg(CU_state_dbg),
+
         .Encode_Done (Encode_Done_all),
         .ALU_Done    (ALU_Done_all),
         .CRT_Done    (CRT_Done),
         .MRC_Done    (MRC_Done),
+
         .Load_IN     (Load_IN),
         .Encode_EN   (Encode_EN),
         .ALU_EN      (ALU_EN),
@@ -70,18 +98,22 @@ module rns_top_mrc #(
         .Out_EN      (Out_EN)
     );
 
+    // Encoders: A_reg and B_reg -> Residues
+    // Residues for A
     wire [W0-1:0] a_r0;
     wire [W1-1:0] a_r1;
     wire [W2-1:0] a_r2;
     wire [W3-1:0] a_r3;
     wire          Encode_Done_A;
 
+    // Residues for B
     wire [W0-1:0] b_r0;
     wire [W1-1:0] b_r1;
     wire [W2-1:0] b_r2;
     wire [W3-1:0] b_r3;
     wire          Encode_Done_B;
 
+    // Encoder for A
     rns_encoder #(
         .WIDTH_IN (WIDTH_IN),
         .M0       (M0),
@@ -104,6 +136,7 @@ module rns_top_mrc #(
         .r3          (a_r3)
     );
 
+    // Encoder for B
     rns_encoder #(
         .WIDTH_IN (WIDTH_IN),
         .M0       (M0),
@@ -126,8 +159,10 @@ module rns_top_mrc #(
         .r3          (b_r3)
     );
 
+    // Both encoders must finish
     assign Encode_Done_all = Encode_Done_A & Encode_Done_B;
 
+    // Modular ALU Slices (per modulus)
     wire [W0-1:0] z_r0;
     wire [W1-1:0] z_r1;
     wire [W2-1:0] z_r2;
@@ -138,6 +173,7 @@ module rns_top_mrc #(
     wire slice2_done;
     wire slice3_done;
 
+    // Slice for modulus M0 = 3
     rns_slice #(
         .MODULUS (M0),
         .WIDTH   (W0)
@@ -152,6 +188,7 @@ module rns_top_mrc #(
         .ALU_Done (slice0_done)
     );
 
+    // Slice for modulus M1 = 5
     rns_slice #(
         .MODULUS (M1),
         .WIDTH   (W1)
@@ -166,6 +203,7 @@ module rns_top_mrc #(
         .ALU_Done (slice1_done)
     );
 
+    // Slice for modulus M2 = 7
     rns_slice #(
         .MODULUS (M2),
         .WIDTH   (W2)
@@ -180,6 +218,7 @@ module rns_top_mrc #(
         .ALU_Done (slice2_done)
     );
 
+    // Slice for modulus M3 = 11
     rns_slice #(
         .MODULUS (M3),
         .WIDTH   (W3)
@@ -194,8 +233,10 @@ module rns_top_mrc #(
         .ALU_Done (slice3_done)
     );
 
+    // All slices must finish
     assign ALU_Done_all = slice0_done & slice1_done & slice2_done & slice3_done;
 
+    // MRC Reconstruction
     wire [WIDTH_IN-1:0] X_mrc;
 
     rns_mrc_recon #(
@@ -216,6 +257,7 @@ module rns_top_mrc #(
         .MRC_Done  (MRC_Done)
     );
 
+    // Output register (no async reset; control-only reset style)
     reg [WIDTH_IN-1:0] X_reg;
 
     always @(posedge clk) begin

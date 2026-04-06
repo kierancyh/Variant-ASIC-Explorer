@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-module crns_top_mrc #(
+module crns_top #(
     parameter WIDTH_IN  = 16,
 
     // Moduli and residue widths
@@ -15,25 +15,30 @@ module crns_top_mrc #(
 
     // CRNS controls
     parameter CRNS_EN         = 1,
-    parameter CENTERED_OUT_EN = 1   // retained for compatibility; MRC output is already centered
+    parameter CENTERED_OUT_EN = 1
 )(
     input  wire                        clk,
     input  wire                        rst_n,
-    input  wire                        Start,
 
+    // External control
+    input  wire                        Start,
+    input  wire                        Recon_Mode,   // 0 = CRT, 1 = MRC
+
+    // Operation selection & operands
     input  wire [1:0]                  Op_Sel,       // 00=ADD, 01=SUB, 10=MUL
     input  wire signed [WIDTH_IN-1:0]  A_in,
     input  wire signed [WIDTH_IN-1:0]  B_in,
 
+    // Outputs
     output wire                        Done,
     output wire signed [WIDTH_IN-1:0]  X_out
 );
 
-    // Control Wires
+    // Control wires between Control Unit and Data Path
     wire Load_IN;
     wire Encode_EN;
     wire ALU_EN;
-    wire CRT_Start;      // unused, kept for CU port compatibility
+    wire CRT_Start;
     wire MRC_Start;
     wire Out_EN;
 
@@ -41,45 +46,28 @@ module crns_top_mrc #(
     wire ALU_Done_all;
     wire CRT_Done;
     wire MRC_Done;
-    assign CRT_Done = 1'b0;
 
     // Debug: CU state
     wire [2:0] CU_state_dbg;
 
-    // Input request + active registers
-    // First fix only: sample external request inputs once when Start is accepted,
-    // then move them into the active datapath registers on Load_IN.
-    // This avoids driving Op_Sel directly into the Load_IN-controlled capture muxes.
-    localparam [2:0] S_IDLE = 3'd0;
-
-    reg signed [WIDTH_IN-1:0] A_req, B_req;
-    reg [1:0]                 OpSel_req;
-
+    // Input Registers
     reg signed [WIDTH_IN-1:0] A_reg, B_reg;
     reg [1:0]                 OpSel_reg;
 
-    wire accept_start = Start && (CU_state_dbg == S_IDLE);
-
     always @(posedge clk) begin
-        if (accept_start) begin
-            A_req     <= A_in;
-            B_req     <= B_in;
-            OpSel_req <= Op_Sel;
-        end
-
         if (Load_IN) begin
-            A_reg     <= A_req;
-            B_reg     <= B_req;
-            OpSel_reg <= OpSel_req;
+            A_reg     <= A_in;
+            B_reg     <= B_in;
+            OpSel_reg <= Op_Sel;
         end
     end
 
-    // Control Unit (Recon_Mode fixed to 1 = MRC)
+    // Control Unit
     crns_cu u_cu (
         .clk         (clk),
         .rst_n       (rst_n),
         .Start       (Start),
-        .Recon_Mode  (1'b1),
+        .Recon_Mode  (Recon_Mode),
         .Done        (Done),
         .CU_state_dbg(CU_state_dbg),
 
@@ -157,7 +145,7 @@ module crns_top_mrc #(
 
     assign Encode_Done_all = Encode_Done_A & Encode_Done_B;
 
-    // Modular ALU Slices (centered CRNS arithmetic)
+    // Modular ALU slices
     wire signed [W0-1:0] z_r0;
     wire signed [W1-1:0] z_r1;
     wire signed [W2-1:0] z_r2;
@@ -230,9 +218,31 @@ module crns_top_mrc #(
 
     assign ALU_Done_all = slice0_done & slice1_done & slice2_done & slice3_done;
 
-    // MRC Reconstruction ONLY (Option 2 centered-native path)
+    // Reconstruction Block
+    // CRT path is retained exactly as the known-good baseline.
+    wire signed [WIDTH_IN-1:0] X_crt;
     wire signed [WIDTH_IN-1:0] X_mrc;
 
+    // CRT reconstructor (already Option 2 / centered-native)
+    crns_crt_recon #(
+        .W0        (W0),
+        .W1        (W1),
+        .W2        (W2),
+        .W3        (W3),
+        .OUT_WIDTH (WIDTH_IN)
+    ) u_crt (
+        .clk       (clk),
+        .rst_n     (rst_n),
+        .CRT_Start (CRT_Start),
+        .r0        (z_r0),
+        .r1        (z_r1),
+        .r2        (z_r2),
+        .r3        (z_r3),
+        .X_out     (X_crt),
+        .CRT_Done  (CRT_Done)
+    );
+
+    // MRC reconstructor (now also centered-native)
     crns_mrc_recon #(
         .W0        (W0),
         .W1        (W1),
@@ -251,12 +261,16 @@ module crns_top_mrc #(
         .MRC_Done  (MRC_Done)
     );
 
-    // Final output. MRC path is already centered-native.
+    // Final output selection.
+    // Both CRT and MRC paths are centered-native now.
+    wire signed [WIDTH_IN-1:0] X_sel_final;
+    assign X_sel_final = (Recon_Mode == 1'b0) ? X_crt : X_mrc;
+
     reg signed [WIDTH_IN-1:0] X_reg;
 
     always @(posedge clk) begin
         if (Out_EN) begin
-            X_reg <= X_mrc;
+            X_reg <= X_sel_final;
         end
     end
 
