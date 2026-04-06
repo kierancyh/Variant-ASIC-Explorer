@@ -6,7 +6,7 @@ top_module: crns_top_mrc
 clock:
   port: clk
   mode: auto
-  max_ns_cap: 1000
+  max_ns_cap: 200
 
 sources:
   - src/**/*.v
