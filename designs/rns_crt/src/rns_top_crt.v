@@ -1,25 +1,10 @@
-// Top-Level RNS ALU (Option A: moduli 3,5,7,11)
-
-// External Interface:
-//   - clk, rst_n
-//   - Start       : start operation
-//   - Recon_Mode  : 0 = CRT, 1 = MRC
-//   - Op_Sel[1:0] : 00=ADD, 01=SUB, 10=MUL
-//   - A_in, B_in  : input operands (unsigned)
-//   - Done        : operation complete
-//   - X_out       : reconstructed integer result
-
-// Internally instantiates:
-//   - rns_cu          : Control Unit FSM
-//   - input regs      : A_reg, B_reg, OpSel_reg
-//   - 2x rns_encoder  : forward converters for A and B
-//   - 4x rns_slice    : modular ALUs (mod 3,5,7,11)
-//   - rns_crt_recon   : CRT-based reconstruction
-//   - rns_mrc_recon   : MRC-based reconstruction
-
 `timescale 1ns/1ps
 
-module rns_top #(
+// CRT-only Top-Level RNS ALU
+// Same datapath as rns_top, but only CRT reconstruction is present.
+// Used for synthesis / area & timing of CRT architecture.
+
+module rns_top_crt #(
     parameter WIDTH_IN  = 16,  // bit-width of A_in, B_in, X_out
     // Moduli and residue widths for Option A
     parameter M0 = 3,
@@ -37,7 +22,6 @@ module rns_top #(
 
     // External control
     input  wire                 Start,        // Start operation
-    input  wire                 Recon_Mode,   // 0 = CRT, 1 = MRC
 
     // Operation selection & operands
     input  wire [1:0]           Op_Sel,       // 00=ADD, 01=SUB, 10=MUL
@@ -51,7 +35,7 @@ module rns_top #(
 
     localparam [2:0] S_IDLE = 3'd0;
 
-    // Control wires between Control Unit and Data Path
+    // Control Wires
     wire Load_IN;
     wire Encode_EN;
     wire ALU_EN;
@@ -62,9 +46,9 @@ module rns_top #(
     wire Encode_Done_all;
     wire ALU_Done_all;
     wire CRT_Done;
-    wire MRC_Done;
+    wire MRC_Done;       // tied low (no MRC block)
 
-    // Debug: CU state
+    // Debug: CU state (used here only for accept_start capture)
     wire [2:0] CU_state_dbg;
 
     // Two-stage external input capture:
@@ -92,12 +76,12 @@ module rns_top #(
         end
     end
 
-    // Control Unit
+    // Control Unit (Recon_Mode fixed to 0 = CRT)
     rns_cu u_cu (
         .clk         (clk),
         .rst_n       (rst_n),
         .Start       (Start),
-        .Recon_Mode  (Recon_Mode),
+        .Recon_Mode  (1'b0),          // force CRT
         .Done        (Done),
         .CU_state_dbg(CU_state_dbg),
 
@@ -114,7 +98,7 @@ module rns_top #(
         .Out_EN      (Out_EN)
     );
 
-    // Encoders: A_reg and B_reg -> residues
+    // Encoders: A_reg and B_reg -> Residues
     // Residues for A
     wire [W0-1:0] a_r0;
     wire [W1-1:0] a_r1;
@@ -141,15 +125,15 @@ module rns_top #(
         .W2       (W2),
         .W3       (W3)
     ) u_enc_a (
-        .clk        (clk),
-        .rst_n      (rst_n),
-        .Encode_EN  (Encode_EN),
-        .x          (A_reg),
-        .Encode_Done(Encode_Done_A),
-        .r0         (a_r0),
-        .r1         (a_r1),
-        .r2         (a_r2),
-        .r3         (a_r3)
+        .clk         (clk),
+        .rst_n       (rst_n),
+        .Encode_EN   (Encode_EN),
+        .x           (A_reg),
+        .Encode_Done (Encode_Done_A),
+        .r0          (a_r0),
+        .r1          (a_r1),
+        .r2          (a_r2),
+        .r3          (a_r3)
     );
 
     // Encoder for B
@@ -164,21 +148,21 @@ module rns_top #(
         .W2       (W2),
         .W3       (W3)
     ) u_enc_b (
-        .clk        (clk),
-        .rst_n      (rst_n),
-        .Encode_EN  (Encode_EN),
-        .x          (B_reg),
-        .Encode_Done(Encode_Done_B),
-        .r0         (b_r0),
-        .r1         (b_r1),
-        .r2         (b_r2),
-        .r3         (b_r3)
+        .clk         (clk),
+        .rst_n       (rst_n),
+        .Encode_EN   (Encode_EN),
+        .x           (B_reg),
+        .Encode_Done (Encode_Done_B),
+        .r0          (b_r0),
+        .r1          (b_r1),
+        .r2          (b_r2),
+        .r3          (b_r3)
     );
 
     // Both encoders must finish
     assign Encode_Done_all = Encode_Done_A & Encode_Done_B;
 
-    // Modular ALU slices (per modulus)
+    // Modular ALU Slices (per modulus)
     wire [W0-1:0] z_r0;
     wire [W1-1:0] z_r1;
     wire [W2-1:0] z_r2;
@@ -252,11 +236,9 @@ module rns_top #(
     // All slices must finish
     assign ALU_Done_all = slice0_done & slice1_done & slice2_done & slice3_done;
 
-    // Reconstruction Block (CRT and MRC)
+    // CRT Reconstruction ONLY
     wire [WIDTH_IN-1:0] X_crt;
-    wire [WIDTH_IN-1:0] X_mrc;
 
-    // CRT reconstructor
     rns_crt_recon #(
         .W0        (W0),
         .W1        (W1),
@@ -275,35 +257,12 @@ module rns_top #(
         .CRT_Done  (CRT_Done)
     );
 
-    // MRC reconstructor
-    rns_mrc_recon #(
-        .W0        (W0),
-        .W1        (W1),
-        .W2        (W2),
-        .W3        (W3),
-        .OUT_WIDTH (WIDTH_IN)
-    ) u_mrc (
-        .clk       (clk),
-        .rst_n     (rst_n),
-        .MRC_Start (MRC_Start),
-        .r0        (z_r0),
-        .r1        (z_r1),
-        .r2        (z_r2),
-        .r3        (z_r3),
-        .X_out     (X_mrc),
-        .MRC_Done  (MRC_Done)
-    );
-
-    // Final output register (no async reset; control-only reset style)
+    // Output register (no async reset; control-only reset style)
     reg [WIDTH_IN-1:0] X_reg;
 
     always @(posedge clk) begin
-        if (Out_EN) begin
-            if (Recon_Mode == 1'b0)
-                X_reg <= X_crt;
-            else
-                X_reg <= X_mrc;
-        end
+        if (Out_EN)
+            X_reg <= X_crt;
     end
 
     assign X_out = X_reg;
