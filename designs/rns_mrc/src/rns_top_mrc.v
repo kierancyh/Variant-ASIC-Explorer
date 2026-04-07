@@ -48,6 +48,8 @@ module rns_top_mrc #(
     wire CRT_Done;        // tied low (no CRT block)
     wire MRC_Done;
 
+    assign CRT_Done = 1'b0;
+
     // Debug: CU state (used here only for accept_start capture)
     wire [2:0] CU_state_dbg;
 
@@ -257,11 +259,13 @@ module rns_top_mrc #(
         .MRC_Done  (MRC_Done)
     );
 
-    // Output register (no async reset; control-only reset style)
+    // Output Register
     reg [WIDTH_IN-1:0] X_reg;
 
-    always @(posedge clk) begin
-        if (Out_EN)
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            X_reg <= {WIDTH_IN{1'b0}};
+        else if (Out_EN)
             X_reg <= X_mrc;
     end
 
