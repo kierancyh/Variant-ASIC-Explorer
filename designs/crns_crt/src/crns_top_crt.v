@@ -53,32 +53,15 @@ module crns_top_crt #(
 
     // Debug: CU state
     wire [2:0] CU_state_dbg;
-
-    // Input request + active registers
-    // First fix only: sample external request inputs once when Start is accepted,
-    // then move them into the active datapath registers on Load_IN.
-    // This avoids driving Op_Sel directly into the Load_IN-controlled capture muxes.
-    localparam [2:0] S_IDLE = 3'd0;
-
-    reg signed [WIDTH_IN-1:0] A_req, B_req;
-    reg [1:0]                 OpSel_req;
-
+    // Input Registers (A, B, OpSel)
     reg signed [WIDTH_IN-1:0] A_reg, B_reg;
     reg [1:0]                 OpSel_reg;
 
-    wire accept_start = Start && (CU_state_dbg == S_IDLE);
-
     always @(posedge clk) begin
-        if (accept_start) begin
-            A_req     <= A_in;
-            B_req     <= B_in;
-            OpSel_req <= Op_Sel;
-        end
-
         if (Load_IN) begin
-            A_reg     <= A_req;
-            B_reg     <= B_req;
-            OpSel_reg <= OpSel_req;
+            A_reg     <= A_in;
+            B_reg     <= B_in;
+            OpSel_reg <= Op_Sel;
         end
     end
 
