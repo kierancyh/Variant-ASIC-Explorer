@@ -1,41 +1,32 @@
 `timescale 1ns/1ps
 
 // CRT-only Top-Level RNS ALU
-// Same datapath as rns_top, but only CRT reconstruction is present.
-// Used for synthesis / area & timing of CRT architecture.
+// Structurally aligned to CRNS wrapper style:
+// - direct Load_IN capture
+// - no datapath async reset
+// - unused MRC_Done tied low
 
 module rns_top_crt #(
-    parameter WIDTH_IN  = 16,  // bit-width of A_in, B_in, X_out
-    // Moduli and residue widths for Option A
+    parameter WIDTH_IN  = 16,
     parameter M0 = 3,
     parameter M1 = 5,
     parameter M2 = 7,
     parameter M3 = 11,
-    parameter W0 = 2,          // ceil(log2(3))
-    parameter W1 = 3,          // ceil(log2(5))
-    parameter W2 = 3,          // ceil(log2(7))
-    parameter W3 = 4           // ceil(log2(11))
+    parameter W0 = 2,
+    parameter W1 = 3,
+    parameter W2 = 3,
+    parameter W3 = 4
 )(
-    // Clock & Reset
     input  wire                 clk,
     input  wire                 rst_n,
-
-    // External control
-    input  wire                 Start,        // Start operation
-
-    // Operation selection & operands
-    input  wire [1:0]           Op_Sel,       // 00=ADD, 01=SUB, 10=MUL
+    input  wire                 Start,
+    input  wire [1:0]           Op_Sel,
     input  wire [WIDTH_IN-1:0]  A_in,
     input  wire [WIDTH_IN-1:0]  B_in,
-
-    // Outputs
-    output wire                 Done,         // From CU
-    output wire [WIDTH_IN-1:0]  X_out         // Final reconstructed result
+    output wire                 Done,
+    output wire [WIDTH_IN-1:0]  X_out
 );
 
-    localparam [2:0] S_IDLE = 3'd0;
-
-    // Control Wires
     wire Load_IN;
     wire Encode_EN;
     wire ALU_EN;
@@ -46,52 +37,33 @@ module rns_top_crt #(
     wire Encode_Done_all;
     wire ALU_Done_all;
     wire CRT_Done;
-    wire MRC_Done;       // tied low (no MRC block)
-
+    wire MRC_Done;
     assign MRC_Done = 1'b0;
 
-    // Debug: CU state (used here only for accept_start capture)
     wire [2:0] CU_state_dbg;
-
-    // Two-stage external input capture:
-    // 1) request regs sample external inputs once when Start is accepted in IDLE
-    // 2) active datapath regs load from request regs on Load_IN
-    reg [WIDTH_IN-1:0] A_req, B_req;
-    reg [1:0]          OpSel_req;
 
     reg [WIDTH_IN-1:0] A_reg, B_reg;
     reg [1:0]          OpSel_reg;
 
-    wire accept_start = Start && (CU_state_dbg == S_IDLE);
-
     always @(posedge clk) begin
-        if (accept_start) begin
-            A_req     <= A_in;
-            B_req     <= B_in;
-            OpSel_req <= Op_Sel;
-        end
-
         if (Load_IN) begin
-            A_reg     <= A_req;
-            B_reg     <= B_req;
-            OpSel_reg <= OpSel_req;
+            A_reg     <= A_in;
+            B_reg     <= B_in;
+            OpSel_reg <= Op_Sel;
         end
     end
 
-    // Control Unit (Recon_Mode fixed to 0 = CRT)
     rns_cu u_cu (
         .clk         (clk),
         .rst_n       (rst_n),
         .Start       (Start),
-        .Recon_Mode  (1'b0),          // force CRT
+        .Recon_Mode  (1'b0),
         .Done        (Done),
         .CU_state_dbg(CU_state_dbg),
-
         .Encode_Done (Encode_Done_all),
         .ALU_Done    (ALU_Done_all),
         .CRT_Done    (CRT_Done),
         .MRC_Done    (MRC_Done),
-
         .Load_IN     (Load_IN),
         .Encode_EN   (Encode_EN),
         .ALU_EN      (ALU_EN),
@@ -100,22 +72,18 @@ module rns_top_crt #(
         .Out_EN      (Out_EN)
     );
 
-    // Encoders: A_reg and B_reg -> Residues
-    // Residues for A
     wire [W0-1:0] a_r0;
     wire [W1-1:0] a_r1;
     wire [W2-1:0] a_r2;
     wire [W3-1:0] a_r3;
     wire          Encode_Done_A;
 
-    // Residues for B
     wire [W0-1:0] b_r0;
     wire [W1-1:0] b_r1;
     wire [W2-1:0] b_r2;
     wire [W3-1:0] b_r3;
     wire          Encode_Done_B;
 
-    // Encoder for A
     rns_encoder #(
         .WIDTH_IN (WIDTH_IN),
         .M0       (M0),
@@ -138,7 +106,6 @@ module rns_top_crt #(
         .r3          (a_r3)
     );
 
-    // Encoder for B
     rns_encoder #(
         .WIDTH_IN (WIDTH_IN),
         .M0       (M0),
@@ -161,10 +128,8 @@ module rns_top_crt #(
         .r3          (b_r3)
     );
 
-    // Both encoders must finish
     assign Encode_Done_all = Encode_Done_A & Encode_Done_B;
 
-    // Modular ALU Slices (per modulus)
     wire [W0-1:0] z_r0;
     wire [W1-1:0] z_r1;
     wire [W2-1:0] z_r2;
@@ -175,70 +140,21 @@ module rns_top_crt #(
     wire slice2_done;
     wire slice3_done;
 
-    // Slice for modulus M0 = 3
-    rns_slice #(
-        .MODULUS (M0),
-        .WIDTH   (W0)
-    ) u_slice0 (
-        .clk      (clk),
-        .rst_n    (rst_n),
-        .ALU_EN   (ALU_EN),
-        .op_sel   (OpSel_reg),
-        .a        (a_r0),
-        .b        (b_r0),
-        .y        (z_r0),
-        .ALU_Done (slice0_done)
+    rns_slice #(.MODULUS(M0), .WIDTH(W0)) u_slice0 (
+        .clk(clk), .rst_n(rst_n), .ALU_EN(ALU_EN), .op_sel(OpSel_reg), .a(a_r0), .b(b_r0), .y(z_r0), .ALU_Done(slice0_done)
+    );
+    rns_slice #(.MODULUS(M1), .WIDTH(W1)) u_slice1 (
+        .clk(clk), .rst_n(rst_n), .ALU_EN(ALU_EN), .op_sel(OpSel_reg), .a(a_r1), .b(b_r1), .y(z_r1), .ALU_Done(slice1_done)
+    );
+    rns_slice #(.MODULUS(M2), .WIDTH(W2)) u_slice2 (
+        .clk(clk), .rst_n(rst_n), .ALU_EN(ALU_EN), .op_sel(OpSel_reg), .a(a_r2), .b(b_r2), .y(z_r2), .ALU_Done(slice2_done)
+    );
+    rns_slice #(.MODULUS(M3), .WIDTH(W3)) u_slice3 (
+        .clk(clk), .rst_n(rst_n), .ALU_EN(ALU_EN), .op_sel(OpSel_reg), .a(a_r3), .b(b_r3), .y(z_r3), .ALU_Done(slice3_done)
     );
 
-    // Slice for modulus M1 = 5
-    rns_slice #(
-        .MODULUS (M1),
-        .WIDTH   (W1)
-    ) u_slice1 (
-        .clk      (clk),
-        .rst_n    (rst_n),
-        .ALU_EN   (ALU_EN),
-        .op_sel   (OpSel_reg),
-        .a        (a_r1),
-        .b        (b_r1),
-        .y        (z_r1),
-        .ALU_Done (slice1_done)
-    );
-
-    // Slice for modulus M2 = 7
-    rns_slice #(
-        .MODULUS (M2),
-        .WIDTH   (W2)
-    ) u_slice2 (
-        .clk      (clk),
-        .rst_n    (rst_n),
-        .ALU_EN   (ALU_EN),
-        .op_sel   (OpSel_reg),
-        .a        (a_r2),
-        .b        (b_r2),
-        .y        (z_r2),
-        .ALU_Done (slice2_done)
-    );
-
-    // Slice for modulus M3 = 11
-    rns_slice #(
-        .MODULUS (M3),
-        .WIDTH   (W3)
-    ) u_slice3 (
-        .clk      (clk),
-        .rst_n    (rst_n),
-        .ALU_EN   (ALU_EN),
-        .op_sel   (OpSel_reg),
-        .a        (a_r3),
-        .b        (b_r3),
-        .y        (z_r3),
-        .ALU_Done (slice3_done)
-    );
-
-    // All slices must finish
     assign ALU_Done_all = slice0_done & slice1_done & slice2_done & slice3_done;
 
-    // CRT Reconstruction ONLY
     wire [WIDTH_IN-1:0] X_crt;
 
     rns_crt_recon #(
@@ -259,13 +175,10 @@ module rns_top_crt #(
         .CRT_Done  (CRT_Done)
     );
 
-    // Output Register z
     reg [WIDTH_IN-1:0] X_reg;
 
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n)
-            X_reg <= {WIDTH_IN{1'b0}};
-        else if (Out_EN)
+    always @(posedge clk) begin
+        if (Out_EN)
             X_reg <= X_crt;
     end
 

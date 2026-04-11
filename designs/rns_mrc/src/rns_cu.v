@@ -54,7 +54,7 @@ module rns_cu (
     reg [2:0] state, next_state;
 
     // State Register
-    always @(posedge clk or negedge rst_n) begin
+    always @(posedge clk) begin
         if (!rst_n)
             state <= S_IDLE;
         else
