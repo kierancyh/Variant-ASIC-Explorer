@@ -86,12 +86,11 @@ jobs:
             --variant "${{ github.event.inputs.safe_variant || '' }}" \
             --out resolved_meta.json \
             --github-output "$GITHUB_OUTPUT"
-      - name: Derive Pages namespace
+      - name: Derive site key
         id: namespace
         run: |
           set -euo pipefail
-          site_key="$(basename "${{ steps.meta.outputs.variant_path }}")"
-          echo "site_key=${site_key}" >> "$GITHUB_OUTPUT"
+          echo "site_key=$(basename "${{ steps.meta.outputs.variant_path }}")" >> "$GITHUB_OUTPUT"
       - name: Build coarse matrix
         id: coarse
         run: |
@@ -114,7 +113,7 @@ jobs:
             echo ""
             echo "- Variant: ${{ steps.meta.outputs.safe_variant }}"
             echo "- Variant path: ${{ steps.meta.outputs.variant_path }}"
-            echo "- Pages namespace: ${{ steps.namespace.outputs.site_key }}"
+            echo "- Site key: ${{ steps.namespace.outputs.site_key }}"
             echo "- Top module: ${{ steps.meta.outputs.top_module }}"
             echo "- Testbench top: ${{ steps.meta.outputs.tb_top }}"
             echo "- OpenLane image: ${OPENLANE_IMAGE}"
@@ -732,13 +731,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: Download built site
         uses: actions/download-artifact@v4
         with:
           name: run-explorer-site
           path: incoming_site
-
       - name: Normalize downloaded site layout
         run: |
           set -euo pipefail
@@ -750,14 +747,12 @@ jobs:
             mv incoming_site_normalized incoming_site
           fi
           test -f incoming_site/index.html
-
       - name: Prepare gh-pages worktree
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SITE_KEY: ${{ needs.plan.outputs.site_key }}
         run: |
           set -euo pipefail
-
           if git show-ref --quiet refs/remotes/origin/gh-pages; then
             git worktree add gh-pages origin/gh-pages
           else
@@ -768,7 +763,6 @@ jobs:
             git -C gh-pages remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" || true
             git -C gh-pages push origin HEAD:gh-pages
           fi
-
           if git -C gh-pages remote get-url origin >/dev/null 2>&1; then
             git -C gh-pages remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           else
@@ -776,31 +770,35 @@ jobs:
           fi
 
           namespace_root="gh-pages/${SITE_KEY}"
+          runs_root="${namespace_root}/runs"
           latest_dir="${namespace_root}/latest"
-          run_dir="${namespace_root}/runs/${GITHUB_RUN_ID}"
+          current_run_dir="${runs_root}/${GITHUB_RUN_ID}"
 
-          mkdir -p "${namespace_root}/runs"
-          rm -rf "${latest_dir}" "${run_dir}"
-          mkdir -p "${latest_dir}" "${run_dir}"
+          mkdir -p "${runs_root}"
+          rm -rf "${current_run_dir}" "${latest_dir}"
+          mkdir -p "${current_run_dir}" "${latest_dir}"
 
+          cp -a incoming_site/. "${current_run_dir}/"
           cp -a incoming_site/. "${latest_dir}/"
-          cp -a incoming_site/. "${run_dir}/"
-
-          # Keep the current run full, but make older snapshots lightweight.
-          # This preserves Pages history while preventing old GDS/OpenLane bundles
-          # from pushing the site over GitHub Pages limits.
-          find "${namespace_root}/runs" -mindepth 1 -maxdepth 1 -type d ! -name "${GITHUB_RUN_ID}" | while read -r old_run; do
-            rm -rf "${old_run}/final/gds" "${old_run}/openlane_run"
-            find "${old_run}" -type f \( -name "*.gds" -o -name "*.gds.gz" \) -delete || true
-          done
 
           python - <<'PY'
           from pathlib import Path
           import os
+          import shutil
 
-          repo_name = os.environ["GITHUB_REPOSITORY"].split("/")[-1]
           site_key = os.environ["SITE_KEY"]
           run_id = os.environ["GITHUB_RUN_ID"]
+          namespace_root = Path("gh-pages") / site_key
+          runs_root = namespace_root / "runs"
+          runs_root.mkdir(parents=True, exist_ok=True)
+
+          run_dirs = [p for p in runs_root.iterdir() if p.is_dir()]
+          run_dirs.sort(key=lambda p: int(p.name) if p.name.isdigit() else -1, reverse=True)
+
+          for stale in run_dirs[5:]:
+              shutil.rmtree(stale)
+
+          repo_name = os.environ["GITHUB_REPOSITORY"].split("/")[-1]
 
           root_index = [
               "<!doctype html>",
@@ -812,8 +810,8 @@ jobs:
               "</head>",
               "<body>",
               f"  <h1>{repo_name} - ASIC Flow Run Explorer</h1>",
-              f'  <p>Latest published namespace: <a href="{site_key}/latest/">{site_key}/latest/</a></p>',
-              f'  <p>Run snapshots for this namespace: <a href="{site_key}/runs/">{site_key}/runs/</a></p>',
+              f'  <p><a href="{site_key}/latest/">{site_key}/latest/</a></p>',
+              f'  <p><a href="{site_key}/runs/">{site_key}/runs/</a></p>',
               "</body>",
               "</html>",
           ]
@@ -834,20 +832,23 @@ jobs:
               "</html>",
           ]
 
-          runs_index = [
+          kept = [p.name for p in sorted(runs_root.iterdir(), key=lambda p: int(p.name) if p.name.isdigit() else -1, reverse=True) if p.is_dir()]
+          runs_lines = [
               f"# {site_key} Run Snapshots",
               "",
               f"Latest run snapshot: [{run_id}]({run_id}/)",
               "",
-              "Historical snapshots may be trimmed of heavy GDS/OpenLane payloads to keep Pages deployable.",
-          ]
+              "Kept runs:",
+              "",
+          ] + [f"- [{name}]({name}/)" for name in kept]
 
           Path("gh-pages/index.html").write_text("\n".join(root_index) + "\n", encoding="utf-8")
-          Path(f"gh-pages/{site_key}/index.html").write_text("\n".join(namespace_index) + "\n", encoding="utf-8")
-          Path(f"gh-pages/{site_key}/runs/index.html").write_text("\n".join(runs_index) + "\n", encoding="utf-8")
+          (namespace_root / "index.html").write_text("\n".join(namespace_index) + "\n", encoding="utf-8")
+          (runs_root / "index.html").write_text("\n".join(runs_lines) + "\n", encoding="utf-8")
           PY
-
       - name: Publish gh-pages branch
+        env:
+          SITE_KEY: ${{ needs.plan.outputs.site_key }}
         run: |
           set -euo pipefail
           cd gh-pages
@@ -860,9 +861,6 @@ jobs:
             git commit -m "Publish explorer for ${SITE_KEY} run ${GITHUB_RUN_ID}"
             git push origin HEAD:gh-pages
           fi
-        env:
-          SITE_KEY: ${{ needs.plan.outputs.site_key }}
-
       - name: Workflow Summary
         run: |
           {
