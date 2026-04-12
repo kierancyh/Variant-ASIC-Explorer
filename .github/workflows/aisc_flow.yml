@@ -695,7 +695,7 @@ jobs:
             --best-json best.json \
             --best-bundle-dir best-layout-bundle \
             --site-dir incoming_site \
-            --site-subdir "" \
+            --site-subdir "${{ needs.plan.outputs.site_key }}" \
             --repo-slug "${{ github.repository }}" \
             --run-id "${{ github.run_id }}" \
             --summary-synth-strategy "${{ needs.plan.outputs.summary_synth_strategy }}" \
@@ -867,5 +867,4 @@ jobs:
             echo "## Published Run Explorer"
             echo ""
             echo "- [Open Latest Explorer](https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/${{ needs.plan.outputs.site_key }}/latest/)"
-            echo "- [Open Run Snapshot](https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/${{ needs.plan.outputs.site_key }}/runs/${{ github.run_id }}/)"
           } >> "$GITHUB_STEP_SUMMARY"
