@@ -1,48 +1,33 @@
 `timescale 1ns/1ps
 module crns_top_crt #(
-    parameter WIDTH_IN  = 16,  // bit-width of A_in, B_in, X_out
-
-    // Moduli and residue widths
+    parameter WIDTH_IN  = 16,
     parameter M0 = 3,
     parameter M1 = 5,
     parameter M2 = 7,
     parameter M3 = 11,
-
-    parameter W0 = 2,          // ceil(log2(3))
-    parameter W1 = 3,          // ceil(log2(5))
-    parameter W2 = 3,          // ceil(log2(7))
-    parameter W3 = 4,          // ceil(log2(11))
-
-    // CRNS controls
+    parameter W0 = 2,
+    parameter W1 = 3,
+    parameter W2 = 3,
+    parameter W3 = 4,
     parameter CRNS_EN         = 1,
     parameter CENTERED_OUT_EN = 1
 )(
-    // Clock & Reset
     input  wire                        clk,
     input  wire                        rst_n,
-
-    // External control
     input  wire                        Start,
-
-    // Operation selection & operands
-    input  wire [1:0]                  Op_Sel,       // 00=ADD, 01=SUB, 10=MUL
+    input  wire [1:0]                  Op_Sel,
     input  wire signed [WIDTH_IN-1:0]  A_in,
     input  wire signed [WIDTH_IN-1:0]  B_in,
-
-    // Outputs
     output wire                        Done,
     output wire signed [WIDTH_IN-1:0]  X_out
 );
 
-    localparam integer M_TOTAL      = M0 * M1 * M2 * M3;
-    localparam integer HALF_M_TOTAL = M_TOTAL / 2;
-
-    // Control Wires
+    // Control wires
     wire Load_IN;
     wire Encode_EN;
     wire ALU_EN;
     wire CRT_Start;
-    wire MRC_Start;      // unused, kept for CU port compatibility
+    wire MRC_Start;   // unused, kept for CU port compatibility
     wire Out_EN;
 
     wire Encode_Done_all;
@@ -51,21 +36,41 @@ module crns_top_crt #(
     wire MRC_Done;
     assign MRC_Done = 1'b0;
 
-    // Debug: CU state
     wire [2:0] CU_state_dbg;
-    // Input Registers (A, B, OpSel)
+
+    // ------------------------------------------------------------------
+    // Input hardening
+    // ------------------------------------------------------------------
+    // Problem observed in signoff-failing dedicated CRT runs:
+    // direct external-input -> Load_IN mux -> active register paths create
+    // long antenna-sensitive nets, especially on Op_Sel[0] and some B_in bits.
+    //
+    // To harden this, always sample external inputs into a small shadow bank.
+    // Then Load_IN copies only local registered values into the active datapath
+    // registers. This keeps the external pins off the Load_IN-controlled muxes.
+    // ------------------------------------------------------------------
+    reg signed [WIDTH_IN-1:0] A_req, B_req;
+    reg [1:0]                 OpSel_req;
+
     reg signed [WIDTH_IN-1:0] A_reg, B_reg;
     reg [1:0]                 OpSel_reg;
 
+    // Shadow bank: samples external inputs every cycle.
+    always @(posedge clk) begin
+        A_req     <= A_in;
+        B_req     <= B_in;
+        OpSel_req <= Op_Sel;
+    end
+
+    // Active bank: loaded only when the CU asserts Load_IN.
     always @(posedge clk) begin
         if (Load_IN) begin
-            A_reg     <= A_in;
-            B_reg     <= B_in;
-            OpSel_reg <= Op_Sel;
+            A_reg     <= A_req;
+            B_reg     <= B_req;
+            OpSel_reg <= OpSel_req;
         end
     end
 
-    // Control Unit (Recon_Mode fixed to 0 = CRT)
     crns_cu u_cu (
         .clk         (clk),
         .rst_n       (rst_n),
@@ -73,12 +78,10 @@ module crns_top_crt #(
         .Recon_Mode  (1'b0),
         .Done        (Done),
         .CU_state_dbg(CU_state_dbg),
-
         .Encode_Done (Encode_Done_all),
         .ALU_Done    (ALU_Done_all),
         .CRT_Done    (CRT_Done),
         .MRC_Done    (MRC_Done),
-
         .Load_IN     (Load_IN),
         .Encode_EN   (Encode_EN),
         .ALU_EN      (ALU_EN),
@@ -148,7 +151,7 @@ module crns_top_crt #(
 
     assign Encode_Done_all = Encode_Done_A & Encode_Done_B;
 
-    // Modular ALU Slices (centered crns arithmetic)
+    // Modular ALU slices
     wire signed [W0-1:0] z_r0;
     wire signed [W1-1:0] z_r1;
     wire signed [W2-1:0] z_r2;
@@ -159,69 +162,22 @@ module crns_top_crt #(
     wire slice2_done;
     wire slice3_done;
 
-    crns_slice #(
-        .MODULUS (M0),
-        .WIDTH   (W0),
-        .CRNS_EN (CRNS_EN)
-    ) u_slice0 (
-        .clk      (clk),
-        .rst_n    (rst_n),
-        .ALU_EN   (ALU_EN),
-        .op_sel   (OpSel_reg),
-        .a        (a_r0),
-        .b        (b_r0),
-        .y        (z_r0),
-        .ALU_Done (slice0_done)
+    crns_slice #(.MODULUS(M0), .WIDTH(W0), .CRNS_EN(CRNS_EN)) u_slice0 (
+        .clk(clk), .rst_n(rst_n), .ALU_EN(ALU_EN), .op_sel(OpSel_reg), .a(a_r0), .b(b_r0), .y(z_r0), .ALU_Done(slice0_done)
     );
-
-    crns_slice #(
-        .MODULUS (M1),
-        .WIDTH   (W1),
-        .CRNS_EN (CRNS_EN)
-    ) u_slice1 (
-        .clk      (clk),
-        .rst_n    (rst_n),
-        .ALU_EN   (ALU_EN),
-        .op_sel   (OpSel_reg),
-        .a        (a_r1),
-        .b        (b_r1),
-        .y        (z_r1),
-        .ALU_Done (slice1_done)
+    crns_slice #(.MODULUS(M1), .WIDTH(W1), .CRNS_EN(CRNS_EN)) u_slice1 (
+        .clk(clk), .rst_n(rst_n), .ALU_EN(ALU_EN), .op_sel(OpSel_reg), .a(a_r1), .b(b_r1), .y(z_r1), .ALU_Done(slice1_done)
     );
-
-    crns_slice #(
-        .MODULUS (M2),
-        .WIDTH   (W2),
-        .CRNS_EN (CRNS_EN)
-    ) u_slice2 (
-        .clk      (clk),
-        .rst_n    (rst_n),
-        .ALU_EN   (ALU_EN),
-        .op_sel   (OpSel_reg),
-        .a        (a_r2),
-        .b        (b_r2),
-        .y        (z_r2),
-        .ALU_Done (slice2_done)
+    crns_slice #(.MODULUS(M2), .WIDTH(W2), .CRNS_EN(CRNS_EN)) u_slice2 (
+        .clk(clk), .rst_n(rst_n), .ALU_EN(ALU_EN), .op_sel(OpSel_reg), .a(a_r2), .b(b_r2), .y(z_r2), .ALU_Done(slice2_done)
     );
-
-    crns_slice #(
-        .MODULUS (M3),
-        .WIDTH   (W3),
-        .CRNS_EN (CRNS_EN)
-    ) u_slice3 (
-        .clk      (clk),
-        .rst_n    (rst_n),
-        .ALU_EN   (ALU_EN),
-        .op_sel   (OpSel_reg),
-        .a        (a_r3),
-        .b        (b_r3),
-        .y        (z_r3),
-        .ALU_Done (slice3_done)
+    crns_slice #(.MODULUS(M3), .WIDTH(W3), .CRNS_EN(CRNS_EN)) u_slice3 (
+        .clk(clk), .rst_n(rst_n), .ALU_EN(ALU_EN), .op_sel(OpSel_reg), .a(a_r3), .b(b_r3), .y(z_r3), .ALU_Done(slice3_done)
     );
 
     assign ALU_Done_all = slice0_done & slice1_done & slice2_done & slice3_done;
 
-    // CRT Reconstruction ONLY (Option 2 centered-native path)
+    // CRT reconstruction only
     wire signed [WIDTH_IN-1:0] X_crt;
 
     crns_crt_recon #(
@@ -242,13 +198,11 @@ module crns_top_crt #(
         .CRT_Done  (CRT_Done)
     );
 
-    // Final output. CRT path is already centered-native.
     reg signed [WIDTH_IN-1:0] X_reg;
 
     always @(posedge clk) begin
-        if (Out_EN) begin
+        if (Out_EN)
             X_reg <= X_crt;
-        end
     end
 
     assign X_out = X_reg;
