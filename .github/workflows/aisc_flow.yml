@@ -49,6 +49,7 @@ jobs:
     outputs:
       safe_variant: ${{ steps.meta.outputs.safe_variant }}
       variant_path: ${{ steps.meta.outputs.variant_path }}
+      site_key: ${{ steps.namespace.outputs.site_key }}
       top_module: ${{ steps.meta.outputs.top_module }}
       tb_top: ${{ steps.meta.outputs.tb_top }}
       vcd_name: ${{ steps.meta.outputs.vcd_name }}
@@ -85,6 +86,12 @@ jobs:
             --variant "${{ github.event.inputs.safe_variant || '' }}" \
             --out resolved_meta.json \
             --github-output "$GITHUB_OUTPUT"
+      - name: Derive Pages namespace
+        id: namespace
+        run: |
+          set -euo pipefail
+          site_key="$(basename "${{ steps.meta.outputs.variant_path }}")"
+          echo "site_key=${site_key}" >> "$GITHUB_OUTPUT"
       - name: Build coarse matrix
         id: coarse
         run: |
@@ -106,6 +113,8 @@ jobs:
             echo "## Flow Plan"
             echo ""
             echo "- Variant: ${{ steps.meta.outputs.safe_variant }}"
+            echo "- Variant path: ${{ steps.meta.outputs.variant_path }}"
+            echo "- Pages namespace: ${{ steps.namespace.outputs.site_key }}"
             echo "- Top module: ${{ steps.meta.outputs.top_module }}"
             echo "- Testbench top: ${{ steps.meta.outputs.tb_top }}"
             echo "- OpenLane image: ${OPENLANE_IMAGE}"
@@ -717,17 +726,19 @@ jobs:
   deploy-run-explorer:
     name: Deploy Run Explorer
     runs-on: ubuntu-latest
-    needs: [compare-runs]
+    needs: [plan, compare-runs]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - name: Download built site
         uses: actions/download-artifact@v4
         with:
           name: run-explorer-site
           path: incoming_site
+
       - name: Normalize downloaded site layout
         run: |
           set -euo pipefail
@@ -739,11 +750,14 @@ jobs:
             mv incoming_site_normalized incoming_site
           fi
           test -f incoming_site/index.html
+
       - name: Prepare gh-pages worktree
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SITE_KEY: ${{ needs.plan.outputs.site_key }}
         run: |
           set -euo pipefail
+
           if git show-ref --quiet refs/remotes/origin/gh-pages; then
             git worktree add gh-pages origin/gh-pages
           else
@@ -754,45 +768,85 @@ jobs:
             git -C gh-pages remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" || true
             git -C gh-pages push origin HEAD:gh-pages
           fi
+
           if git -C gh-pages remote get-url origin >/dev/null 2>&1; then
             git -C gh-pages remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           else
             git -C gh-pages remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           fi
-          mkdir -p "gh-pages/runs/${GITHUB_RUN_ID}"
-          rm -rf "gh-pages/runs/${GITHUB_RUN_ID}" "gh-pages/latest"
-          mkdir -p "gh-pages/runs/${GITHUB_RUN_ID}" "gh-pages/latest"
-          cp -a incoming_site/. "gh-pages/runs/${GITHUB_RUN_ID}/"
-          cp -a incoming_site/. "gh-pages/latest/"
+
+          namespace_root="gh-pages/${SITE_KEY}"
+          latest_dir="${namespace_root}/latest"
+          run_dir="${namespace_root}/runs/${GITHUB_RUN_ID}"
+
+          mkdir -p "${namespace_root}/runs"
+          rm -rf "${latest_dir}" "${run_dir}"
+          mkdir -p "${latest_dir}" "${run_dir}"
+
+          cp -a incoming_site/. "${latest_dir}/"
+          cp -a incoming_site/. "${run_dir}/"
+
+          # Keep the current run full, but make older snapshots lightweight.
+          # This preserves Pages history while preventing old GDS/OpenLane bundles
+          # from pushing the site over GitHub Pages limits.
+          find "${namespace_root}/runs" -mindepth 1 -maxdepth 1 -type d ! -name "${GITHUB_RUN_ID}" | while read -r old_run; do
+            rm -rf "${old_run}/final/gds" "${old_run}/openlane_run"
+            find "${old_run}" -type f \( -name "*.gds" -o -name "*.gds.gz" \) -delete || true
+          done
+
           python - <<'PY'
           from pathlib import Path
           import os
+
+          repo_name = os.environ["GITHUB_REPOSITORY"].split("/")[-1]
+          site_key = os.environ["SITE_KEY"]
           run_id = os.environ["GITHUB_RUN_ID"]
-          index_lines = [
+
+          root_index = [
+              "<!doctype html>",
+              '<html lang="en">',
+              "<head>",
+              '  <meta charset="utf-8">',
+              '  <meta name="viewport" content="width=device-width, initial-scale=1">',
+              f"  <title>{repo_name} - ASIC Flow Run Explorer</title>",
+              "</head>",
+              "<body>",
+              f"  <h1>{repo_name} - ASIC Flow Run Explorer</h1>",
+              f'  <p>Latest published namespace: <a href="{site_key}/latest/">{site_key}/latest/</a></p>',
+              f'  <p>Run snapshots for this namespace: <a href="{site_key}/runs/">{site_key}/runs/</a></p>',
+              "</body>",
+              "</html>",
+          ]
+
+          namespace_index = [
               "<!doctype html>",
               '<html lang="en">',
               "<head>",
               '  <meta charset="utf-8">',
               '  <meta http-equiv="refresh" content="0; url=latest/">',
               '  <meta name="viewport" content="width=device-width, initial-scale=1">',
-              '  <title>ASIC Flow Run Explorer</title>',
+              f"  <title>{site_key} - ASIC Flow Run Explorer</title>",
               "</head>",
               "<body>",
-              '  Redirecting to <a href="latest/">latest explorer</a>...',
+              f'  Redirecting to <a href="latest/">{site_key} latest explorer</a>...',
               f'  <p>Per-run snapshots are available under <a href="runs/{run_id}/">runs/{run_id}/</a>.</p>',
               "</body>",
               "</html>",
           ]
-          runs_lines = [
-              "# ASIC Flow Run Snapshots",
+
+          runs_index = [
+              f"# {site_key} Run Snapshots",
               "",
               f"Latest run snapshot: [{run_id}]({run_id}/)",
               "",
-              "Browse folders in this branch for older snapshots.",
+              "Historical snapshots may be trimmed of heavy GDS/OpenLane payloads to keep Pages deployable.",
           ]
-          Path("gh-pages/index.html").write_text("\n".join(index_lines) + "\n", encoding="utf-8")
-          Path("gh-pages/runs/index.html").write_text("\n".join(runs_lines) + "\n", encoding="utf-8")
+
+          Path("gh-pages/index.html").write_text("\n".join(root_index) + "\n", encoding="utf-8")
+          Path(f"gh-pages/{site_key}/index.html").write_text("\n".join(namespace_index) + "\n", encoding="utf-8")
+          Path(f"gh-pages/{site_key}/runs/index.html").write_text("\n".join(runs_index) + "\n", encoding="utf-8")
           PY
+
       - name: Publish gh-pages branch
         run: |
           set -euo pipefail
@@ -803,13 +857,17 @@ jobs:
           if git diff --cached --quiet; then
             echo "No gh-pages changes to publish."
           else
-            git commit -m "Publish explorer for run ${GITHUB_RUN_ID}"
+            git commit -m "Publish explorer for ${SITE_KEY} run ${GITHUB_RUN_ID}"
             git push origin HEAD:gh-pages
           fi
+        env:
+          SITE_KEY: ${{ needs.plan.outputs.site_key }}
+
       - name: Workflow Summary
         run: |
           {
             echo "## Published Run Explorer"
             echo ""
-            echo "- [Open Explorer](https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/runs/${{ github.run_id }}/)"
+            echo "- [Open Latest Explorer](https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/${{ needs.plan.outputs.site_key }}/latest/)"
+            echo "- [Open Run Snapshot](https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/${{ needs.plan.outputs.site_key }}/runs/${{ github.run_id }}/)"
           } >> "$GITHUB_STEP_SUMMARY"
