@@ -163,13 +163,17 @@ def explain_row(row: Dict[str, str]) -> str:
     physical_pass = drc is not None and lvs is not None and ant is not None and drc == 0.0 and lvs == 0.0 and ant == 0.0
 
     if not timing_setup_pass:
-        reasons.append(f"setup WNS={row.get('setup_wns_ns', '')}, TNS={row.get('setup_tns_ns', '')}, vio={row.get('setup_vio_count', '')}")
+        reasons.append(
+            f"setup WNS={row.get('setup_wns_ns', '')}, TNS={row.get('setup_tns_ns', '')}, vio={row.get('setup_vio_count', '')}")
     if not timing_hold_pass:
-        reasons.append(f"hold WNS={row.get('hold_wns_ns', '')}, TNS={row.get('hold_tns_ns', '')}, vio={row.get('hold_vio_count', '')}")
+        reasons.append(
+            f"hold WNS={row.get('hold_wns_ns', '')}, TNS={row.get('hold_tns_ns', '')}, vio={row.get('hold_vio_count', '')}")
     if not electrical_pass:
-        reasons.append(f"max slew violations={row.get('max_slew_violation_count', '')}; max cap violations={row.get('max_cap_violation_count', '')}")
+        reasons.append(
+            f"max slew violations={row.get('max_slew_violation_count', '')}; max cap violations={row.get('max_cap_violation_count', '')}")
     if not physical_pass:
-        reasons.append(f"DRC={row.get('drc_errors', '')}; LVS={row.get('lvs_errors', '')}; Antenna={row.get('antenna_violations', '')}")
+        reasons.append(
+            f"DRC={row.get('drc_errors', '')}; LVS={row.get('lvs_errors', '')}; Antenna={row.get('antenna_violations', '')}")
     return "; ".join(reasons) if reasons else status
 
 
@@ -264,6 +268,7 @@ def first_render_path(base_dir: Path) -> Optional[Path]:
 def raw_row_key(raw_key: str) -> str:
     return f"_raw__{raw_key}"
 
+
 def raw_metric_value(row: Dict[str, Any], raw_key: str) -> Any:
     return row.get(raw_row_key(raw_key), "")
 
@@ -303,19 +308,19 @@ def iter_raw_metrics(row: Dict[str, Any]) -> List[Tuple[str, Any]]:
             continue
         if value in ("", None, "None"):
             continue
-        raw_key = key[len("_raw__") :]
+        raw_key = key[len("_raw__"):]
         items.append((raw_key, value))
     items.sort(key=lambda item: raw_metric_sort_priority(item[0]))
     return items
 
 
 def pick_raw_metric_items(
-    row: Dict[str, Any],
-    prefixes: Tuple[str, ...],
-    consumed: Set[str],
-    *,
-    limit: int = 8,
-    catch_all: bool = False,
+        row: Dict[str, Any],
+        prefixes: Tuple[str, ...],
+        consumed: Set[str],
+        *,
+        limit: int = 8,
+        catch_all: bool = False,
 ) -> List[Tuple[str, Any]]:
     selected: List[Tuple[str, Any]] = []
     for raw_key, value in iter_raw_metrics(row):
@@ -329,7 +334,6 @@ def pick_raw_metric_items(
         if len(selected) >= limit:
             break
     return selected
-
 
 
 def collect_rows(artifacts_root: Path) -> List[Dict[str, str]]:
@@ -391,6 +395,7 @@ def find_first(root: Path, patterns: Sequence[str]) -> Optional[Path]:
             return matches[0]
     return None
 
+
 def collect_precheck(artifacts_root: Path) -> Dict[str, Any]:
     rtl_status: Dict[str, Any] = {}
     yosys_status: Dict[str, Any] = {}
@@ -447,10 +452,11 @@ def collect_precheck(artifacts_root: Path) -> Dict[str, Any]:
         data["yosys_meta"] = ""
 
     data["gate_ok"] = (
-        bool(data["icarus"].get("passed") or data["icarus"].get("status") == "SKIP")
-        and bool(data["yosys"].get("passed") or data["yosys"].get("status") == "SKIP")
+            bool(data["icarus"].get("passed") or data["icarus"].get("status") == "SKIP")
+            and bool(data["yosys"].get("passed") or data["yosys"].get("status") == "SKIP")
     )
     return data
+
 
 def sanitize_site_component(value: str) -> str:
     safe = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "").strip())
@@ -533,10 +539,10 @@ def publish_precheck_site_artifacts(precheck: Dict[str, Any], snapshot_root: Pat
     if rtl_root and rtl_root.exists():
         rtl_site = snapshot_root / "precheck" / "rtl"
         for name in (
-            "status.json",
-            "precheck_meta.json",
-            "compile.log",
-            "run.log",
+                "status.json",
+                "precheck_meta.json",
+                "compile.log",
+                "run.log",
         ):
             copy_file_if_exists(rtl_root / name, rtl_site / name)
         vcd_name = Path(str(precheck.get("vcd_name") or "rtl_precheck.vcd")).name
@@ -553,11 +559,11 @@ def publish_precheck_site_artifacts(precheck: Dict[str, Any], snapshot_root: Pat
     if yosys_root and yosys_root.exists():
         yosys_site = snapshot_root / "precheck" / "yosys"
         for name in (
-            "status.json",
-            "precheck_meta.json",
-            "yosys.log",
-            "stat.txt",
-            "stat.json",
+                "status.json",
+                "precheck_meta.json",
+                "yosys.log",
+                "stat.txt",
+                "stat.json",
         ):
             copy_file_if_exists(yosys_root / name, yosys_site / name)
         if precheck.get("top_module"):
@@ -638,7 +644,7 @@ def write_summary_md(path: Path, rows: List[Dict[str, str]], precheck: Dict[str,
         ]
         for row in sorted(rows, key=best_sort_key):
             lines.append(
-                f"| {row.get('_variant','')} | {row.get('_stage_label','')} | {row.get('clock_ns','')} | {row.get('status','')} | {row.get('selection_reason','').replace('|','/')} |"
+                f"| {row.get('_variant', '')} | {row.get('_stage_label', '')} | {row.get('clock_ns', '')} | {row.get('status', '')} | {row.get('selection_reason', '').replace('|', '/')} |"
             )
         lines.append("")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -657,17 +663,17 @@ def package_best_bundle(best_bundle_dir: Path, best: Dict[str, Any], precheck: D
     if best:
         base_dir = Path(best["_base_dir"])
         for name in (
-            "metrics.csv",
-            "metrics.md",
-            "metrics_raw.json",
-            "run_meta.json",
-            "attempt_started.txt",
-            "attempt_manifest.json",
-            "viewer.html",
-            "index.html",
-            "README.txt",
-            "failure_summary.md",
-            "failure_summary.json",
+                "metrics.csv",
+                "metrics.md",
+                "metrics_raw.json",
+                "run_meta.json",
+                "attempt_started.txt",
+                "attempt_manifest.json",
+                "viewer.html",
+                "index.html",
+                "README.txt",
+                "failure_summary.md",
+                "failure_summary.json",
         ):
             src = base_dir / name
             if src.exists():
@@ -710,6 +716,7 @@ def badge_html(status: str) -> str:
     }.get(s, "flow")
     return f'<span class="badge {cls}">{html.escape(s or "UNKNOWN")}</span>'
 
+
 def value_or_dash(v: Any) -> str:
     if isinstance(v, bool):
         s = "yes" if v else "no"
@@ -734,7 +741,6 @@ def metric_group_html(title: str, items: List[Tuple[str, Any]]) -> str:
         f"<tr><th>Field</th><th>Value</th></tr>{kv_rows(items)}</table></div>"
         f"</section>"
     )
-
 
 
 def write_redirect_page(path: Path, target: str, title: str, description: str) -> None:
@@ -776,6 +782,7 @@ def pages_base_url(repo_slug: str) -> str:
 
 def build_surfer_url(vcd_url: str) -> str:
     return f"{SURFER_WEB_APP_URL}?load_url={urllib.parse.quote(vcd_url, safe='')}"
+
 
 def build_theme_widget(button_id: str, panel_id: str) -> str:
     return f"""
@@ -904,11 +911,14 @@ def build_theme_script(button_id: str, panel_id: str, storage_key: str) -> str:
 </script>
 """
 
+
 def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> None:
     metrics_path = Path(row.get("_site_metrics_path") or (Path(row["_base_dir"]) / "metrics.csv"))
     metrics_href = rel_href(metrics_path, run_dir)
-    failure_summary_href = rel_href(Path(row["_site_failure_summary_path"]), run_dir) if row.get("_site_failure_summary_path") else ""
-    raw_metrics_href = rel_href(Path(row["_site_metrics_raw_path"]), run_dir) if row.get("_site_metrics_raw_path") else ""
+    failure_summary_href = rel_href(Path(row["_site_failure_summary_path"]), run_dir) if row.get(
+        "_site_failure_summary_path") else ""
+    raw_metrics_href = rel_href(Path(row["_site_metrics_raw_path"]), run_dir) if row.get(
+        "_site_metrics_raw_path") else ""
     meta_href = rel_href(Path(row["_site_run_meta_path"]), run_dir) if row.get("_site_run_meta_path") else ""
     snapshot_root = run_dir.parents[1]
     back_href = rel_href(snapshot_root / "index.html", run_dir)
@@ -1002,7 +1012,8 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
             ("Primary reason", failure_summary.get("reason", row.get("_failure_reason", ""))),
             ("Likely failing phase", failure_summary.get("likely_failure_phase", row.get("_failure_phase", ""))),
             ("OpenLane return code", failure_summary.get("openlane_rc", row.get("_failure_openlane_rc", ""))),
-            ("Config generation return code", failure_summary.get("config_generation_rc", row.get("_failure_config_rc", ""))),
+            ("Config generation return code",
+             failure_summary.get("config_generation_rc", row.get("_failure_config_rc", ""))),
             ("Config generated", checks.get("config_generated", "")),
             ("OpenLane invoked", checks.get("openlane_invoked", "")),
             ("Run directory found", checks.get("run_dir_found", "")),
@@ -1045,7 +1056,7 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{html.escape(row.get('_variant',''))} / {html.escape(row.get('_run_dir',''))}</title>
+  <title>{html.escape(row.get('_variant', ''))} / {html.escape(row.get('_run_dir', ''))}</title>
   <link rel="stylesheet" href="{css_href}">
 </head>
 <body>
@@ -1054,8 +1065,8 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
       <div class="hero-head">
         <div class="hero-copy">
           <p class="eyebrow">Per-run details</p>
-          <h1>{html.escape(row.get('_variant',''))} / {html.escape(row.get('_run_dir',''))}</h1>
-          <p class="muted">{badge_html(row.get('status',''))} &nbsp; Remarks: {html.escape(row.get('selection_reason',''))}</p>
+          <h1>{html.escape(row.get('_variant', ''))} / {html.escape(row.get('_run_dir', ''))}</h1>
+          <p class="muted">{badge_html(row.get('status', ''))} &nbsp; Remarks: {html.escape(row.get('selection_reason', ''))}</p>
         </div>
         <div class="actions">{''.join(actions)}</div>
       </div>
@@ -1094,22 +1105,20 @@ def write_run_page(run_dir: Path, row: Dict[str, str], snapshot_prefix: str) -> 
 
 
 def build_site(
-    site_root: Path,
-    rows: List[Dict[str, str]],
-    precheck: Dict[str, Any],
-    explorer_settings: Optional[Dict[str, str]] = None,
-    *,
-    repo_slug: str = "",
-    run_id: str = "",
-    site_subdir: str = "",
+        site_root: Path,
+        rows: List[Dict[str, str]],
+        precheck: Dict[str, Any],
+        explorer_settings: Optional[Dict[str, str]] = None,
+        *,
+        repo_slug: str = "",
+        run_id: str = "",
+        site_subdir: str = "",
 ) -> None:
     site_root.mkdir(parents=True, exist_ok=True)
     explorer_settings = explorer_settings or {}
     normalized_site_subdir = normalize_site_subdir(site_subdir)
-    snapshot_root = site_root / normalized_site_subdir if normalized_site_subdir else site_root
+    snapshot_root = site_root
     snapshot_root.mkdir(parents=True, exist_ok=True)
-    if normalized_site_subdir:
-        write_redirect_page(site_root / "index.html", f"{normalized_site_subdir}/index.html", "ASIC Flow Run Explorer", "Static explorer snapshot")
     (site_root / ".nojekyll").write_text("\n", encoding="utf-8")
 
     assets_dir = snapshot_root / "assets"
@@ -1249,12 +1258,12 @@ def build_site(
       align-items:stretch;
       gap:6px;
     }
-    
+
     .inline-actions .btn{
       width:100%;
       justify-content:center;
     }
-    
+
     .muted{color:var(--muted)}
     .tag{
       display:inline-flex;
@@ -1266,7 +1275,7 @@ def build_site(
       background:rgba(139,94,60,.12);
       color:var(--accent)
     }
-    
+
     .table-card{padding:0;overflow:hidden}
     .section-gap-lg{margin-top:26px}
 
@@ -1418,7 +1427,7 @@ def build_site(
       border-radius:16px;
       background:#fff
     }
-    
+
     .theme-control{position:relative;z-index:40}
     .theme-launch{
       display:inline-flex;
@@ -1510,7 +1519,7 @@ def build_site(
 
     for row in ordered:
         base_dir = Path(row["_base_dir"])
-        row_dir_name = sanitize_site_component(f"{row.get('_variant','variant')}-{row.get('_run_dir','run')}")
+        row_dir_name = sanitize_site_component(f"{row.get('_variant', 'variant')}-{row.get('_run_dir', 'run')}")
         row_site_dir = runs_root / row_dir_name
         site_artifact_dir = row_site_dir / "artifact"
         published = publish_run_site_artifact(base_dir, row, site_artifact_dir)
@@ -1532,13 +1541,19 @@ def build_site(
 
     pages_base = pages_base_url(repo_slug)
     published_snapshot_prefix = pages_base.rstrip("/") if pages_base else ""
+
+    if published_snapshot_prefix and normalized_site_subdir:
+        published_snapshot_prefix = (
+                published_snapshot_prefix
+                + "/"
+                + urllib.parse.quote(normalized_site_subdir, safe="/")
+        )
+
     if published_snapshot_prefix and run_id:
         published_snapshot_prefix = (
             f"{published_snapshot_prefix}/runs/"
             f"{urllib.parse.quote(str(run_id), safe='')}"
         )
-    elif normalized_site_subdir and published_snapshot_prefix:
-        published_snapshot_prefix = published_snapshot_prefix + "/" + urllib.parse.quote(normalized_site_subdir, safe="/")
 
     local_vcd_href = ""
     published_vcd = ""
@@ -1588,7 +1603,8 @@ def build_site(
         f"<li><strong>Post-GRT resizer timing:</strong> {html.escape(pretty_setting(explorer_settings.get('post_grt_resizer_timing')))}</li>",
     ])
 
-    stage_values = sorted({str(row.get("_stage_label", "")).strip() for row in ordered if str(row.get("_stage_label", "")).strip()})
+    stage_values = sorted(
+        {str(row.get("_stage_label", "")).strip() for row in ordered if str(row.get("_stage_label", "")).strip()})
 
     def pretty_stage_label(stage: str) -> str:
         mapping = {
@@ -1610,7 +1626,8 @@ def build_site(
     )
 
     waveform_actions: List[str] = []
-    waveform_actions.append(f'<a class="btn" href="{html.escape(surfer_url)}" target="_blank" rel="noopener noreferrer">Surfer Waveform Viewer</a>')
+    waveform_actions.append(
+        f'<a class="btn" href="{html.escape(surfer_url)}" target="_blank" rel="noopener noreferrer">Surfer Waveform Viewer</a>')
     if local_vcd_href:
         waveform_actions.append(f'<a class="btn secondary" href="{local_vcd_href}">Download VCD</a>')
     if run_log_href:
@@ -1620,7 +1637,8 @@ def build_site(
     if yosys_stat_href:
         waveform_actions.append(f'<a class="btn secondary" href="{yosys_stat_href}">Yosys Statistics</a>')
     if yosys_netlist_href:
-        waveform_actions.append(f'<a class="btn secondary" href="{yosys_netlist_href}">Download Synthesized Netlist</a>')
+        waveform_actions.append(
+            f'<a class="btn secondary" href="{yosys_netlist_href}">Download Synthesized Netlist</a>')
 
     waveform_embed_html = ""
     if published_vcd:
@@ -1798,18 +1816,18 @@ def build_site(
     theme_script = build_theme_script(
         "indexAppearanceButton", "indexThemeWidget", "asic-flow-theme"
     )
-    
+
     site_manifest = {
         "repo_slug": repo_slug,
         "run_id": run_id,
         "site_subdir": normalized_site_subdir,
-        "entrypoint": f"{normalized_site_subdir + '/' if normalized_site_subdir else ''}index.html",
-        "snapshot_root": str(snapshot_root.relative_to(site_root)) if snapshot_root != site_root else ".",
+        "entrypoint": "index.html",
+        "snapshot_root": ".",
     }
     (site_root / "site_manifest.json").write_text(json.dumps(site_manifest, indent=2), encoding="utf-8")
 
     selection_block = (
-        f'<section class="card span-7"><h2>Best Run</h2><p><strong>Run:</strong> {html.escape(str(best.get("_variant","")))} / {html.escape(str(best.get("_run_dir","")))}</p><p><strong>Clock:</strong> {html.escape(str(best.get("clock_ns","")))} ns</p><p><strong>Status:</strong> {badge_html(best.get("status",""))}</p><p><strong>Remarks:</strong> {html.escape(str(best.get("selection_reason","")))}</p></section>'
+        f'<section class="card span-7"><h2>Best Run</h2><p><strong>Run:</strong> {html.escape(str(best.get("_variant", "")))} / {html.escape(str(best.get("_run_dir", "")))}</p><p><strong>Clock:</strong> {html.escape(str(best.get("clock_ns", "")))} ns</p><p><strong>Status:</strong> {badge_html(best.get("status", ""))}</p><p><strong>Remarks:</strong> {html.escape(str(best.get("selection_reason", "")))}</p></section>'
         if best else '<section class="card span-7"><h2>Best Run</h2><p class="muted">No ASIC run rows were collected for this snapshot.</p></section>'
     )
 
@@ -1926,6 +1944,7 @@ def build_site(
 </html>"""
     (snapshot_root / "index.html").write_text(index_html, encoding="utf-8")
 
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--artifacts-root", type=Path, required=True)
@@ -1965,6 +1984,7 @@ def main() -> None:
         run_id=args.run_id,
         site_subdir=args.site_subdir,
     )
+
 
 if __name__ == "__main__":
     main()
