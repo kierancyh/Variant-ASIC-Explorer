@@ -18,7 +18,7 @@ precheck:
     testbench_sources:
       - tb/**/*.v
       - tb/**/*.sv
-    vcd_name: rtl_precheck.vcd
+    vcd_name: crt_rtl_precheck.vcd
     stop_on_fail: true
 
   yosys:
