@@ -9,202 +9,173 @@ module rrns_corrector_crt #(
     parameter OUT_WIDTH = 16
 )(
     input  wire signed [OUT_WIDTH-1:0] X_base,
-
     input  wire signed [W0-1:0]        r0,
     input  wire signed [W1-1:0]        r1,
     input  wire signed [W2-1:0]        r2,
     input  wire signed [W3-1:0]        r3,
-    input  wire signed [W4-1:0]        r4, // mod 13
-    input  wire signed [W5-1:0]        r5, // mod 17
-
+    input  wire signed [W4-1:0]        r4,
+    input  wire signed [W5-1:0]        r5,
     output reg  signed [OUT_WIDTH-1:0] X_corr,
     output reg                         Error_Detected,
     output reg                         Corrected,
     output reg                         Valid
 );
 
-    localparam integer M_BASE      = 1155;
-    localparam integer HALF_BASE   = M_BASE / 2;   // 577
-    localparam integer RED0_MOD    = 13;
-    localparam integer RED1_MOD    = 17;
+    localparam signed [OUT_WIDTH-1:0] HALF_BASE  = 16'sd577;
+    localparam signed [17:0] MOD_5005 = 18'sd5005;
+    localparam signed [17:0] MOD_3003 = 18'sd3003;
+    localparam signed [17:0] MOD_2145 = 18'sd2145;
+    localparam signed [17:0] MOD_1365 = 18'sd1365;
+    localparam signed [17:0] MOD_6545 = 18'sd6545;
+    localparam signed [17:0] MOD_3927 = 18'sd3927;
+    localparam signed [17:0] MOD_2805 = 18'sd2805;
+    localparam signed [17:0] MOD_1785 = 18'sd1785;
 
-    integer n0, n1, n2, n3, n4, n5;
-    integer x_base_int;
+    reg [4:0] n0, n1, n2, n3, n4, n5;
+    reg       chk13, chk17;
+    reg       ok0_13, ok1_13, ok2_13, ok3_13;
+    reg       ok0_17, ok1_17, ok2_17, ok3_17;
+    reg [2:0] count13, count17;
 
-    integer cand0_13, cand1_13, cand2_13, cand3_13;
-    integer cand0_17, cand1_17, cand2_17, cand3_17;
+    reg signed [OUT_WIDTH-1:0] cand0_13, cand1_13, cand2_13, cand3_13;
+    reg signed [OUT_WIDTH-1:0] cand0_17, cand1_17, cand2_17, cand3_17;
+    reg signed [OUT_WIDTH-1:0] sel13, sel17;
+    reg signed [17:0] sum0_13, sum1_13, sum2_13, sum3_13;
+    reg signed [17:0] sum0_17, sum1_17, sum2_17, sum3_17;
+    reg signed [5:0]  s0, s1, s2, s3, s4, s5;
 
-    reg chk13;
-    reg chk17;
-
-    reg ok0_13, ok1_13, ok2_13, ok3_13;
-    reg ok0_17, ok1_17, ok2_17, ok3_17;
-
-    integer count13, count17;
-    integer sel13, sel17;
-    integer chosen;
-
-    function integer norm_mod;
-        input integer x;
-        input integer m;
-        integer t;
+    function [4:0] norm_mod13_s16;
+        input signed [OUT_WIDTH-1:0] x;
+        reg signed [OUT_WIDTH-1:0] t;
         begin
-            t = x % m;
+            t = x % 16'sd13;
             if (t < 0)
-                t = t + m;
-            norm_mod = t;
+                t = t + 16'sd13;
+            norm_mod13_s16 = t[4:0];
         end
     endfunction
 
-    function integer center_with_modulus;
-        input integer x;
-        input integer p;
-        integer t;
+    function [4:0] norm_mod17_s16;
+        input signed [OUT_WIDTH-1:0] x;
+        reg signed [OUT_WIDTH-1:0] t;
         begin
-            t = norm_mod(x, p);
-            if (t > (p / 2))
-                center_with_modulus = t - p;
+            t = x % 16'sd17;
+            if (t < 0)
+                t = t + 16'sd17;
+            norm_mod17_s16 = t[4:0];
+        end
+    endfunction
+
+    function signed [OUT_WIDTH-1:0] center_mod_s18;
+        input signed [17:0] x;
+        input signed [17:0] p;
+        reg signed [17:0] t;
+        begin
+            t = x % p;
+            if (t < 0)
+                t = t + p;
+            if (t > (p >>> 1))
+                center_mod_s18 = t - p;
             else
-                center_with_modulus = t;
+                center_mod_s18 = t;
         end
     endfunction
 
-    function integer in_base_range;
-        input integer x;
+    function in_base_range_s16;
+        input signed [OUT_WIDTH-1:0] x;
         begin
-            in_base_range = (x >= -HALF_BASE) && (x <= HALF_BASE);
-        end
-    endfunction
-
-    function integer red_ok;
-        input integer x;
-        input integer r;
-        input integer m;
-        begin
-            red_ok = (norm_mod(x, m) == norm_mod(r, m));
+            in_base_range_s16 = (x >= -HALF_BASE) && (x <= HALF_BASE);
         end
     endfunction
 
     always @* begin
-        n0 = norm_mod(r0, 3);
-        n1 = norm_mod(r1, 5);
-        n2 = norm_mod(r2, 7);
-        n3 = norm_mod(r3, 11);
-        n4 = norm_mod(r4, 13);
-        n5 = norm_mod(r5, 17);
+        s0 = {{(6-W0){r0[W0-1]}}, r0};
+        s1 = {{(6-W1){r1[W1-1]}}, r1};
+        s2 = {{(6-W2){r2[W2-1]}}, r2};
+        s3 = {{(6-W3){r3[W3-1]}}, r3};
+        s4 = {{(6-W4){r4[W4-1]}}, r4};
+        s5 = {{(6-W5){r5[W5-1]}}, r5};
 
-        x_base_int = X_base;
+        n0 = (s0 < 0) ? (s0 + 6'sd3)  : s0[4:0];
+        n1 = (s1 < 0) ? (s1 + 6'sd5)  : s1[4:0];
+        n2 = (s2 < 0) ? (s2 + 6'sd7)  : s2[4:0];
+        n3 = (s3 < 0) ? (s3 + 6'sd11) : s3[4:0];
+        n4 = (s4 < 0) ? (s4 + 6'sd13) : s4[4:0];
+        n5 = (s5 < 0) ? (s5 + 6'sd17) : s5[4:0];
 
-        // Base-result checks against both redundant lanes
-        chk13 = red_ok(x_base_int, n4, 13);
-        chk17 = red_ok(x_base_int, n5, 17);
+        chk13 = (norm_mod13_s16(X_base) == n4);
+        chk17 = (norm_mod17_s16(X_base) == n5);
 
-        // ------------------------------------------------------------
-        // Leave-one-base-out candidates using mod13 as included lane
-        // and mod17 as independent checker
-        // ------------------------------------------------------------
-        cand0_13 = center_with_modulus(
-            (n1*1001*1 + n2*715*1 + n3*455*3 + n4*385*5), 5005
-        ); // [5,7,11,13]
+        sum0_13 = $signed({1'b0,n1}) * 18'sd1001 + $signed({1'b0,n2}) * 18'sd715 + $signed({1'b0,n3}) * 18'sd1365 + $signed({1'b0,n4}) * 18'sd1925;
+        sum1_13 = $signed({1'b0,n0}) * 18'sd2002 + $signed({1'b0,n2}) * 18'sd1716 + $signed({1'b0,n3}) * 18'sd1365 + $signed({1'b0,n4}) * 18'sd924;
+        sum2_13 = $signed({1'b0,n0}) * 18'sd715  + $signed({1'b0,n1}) * 18'sd1716 + $signed({1'b0,n3}) * 18'sd1365 + $signed({1'b0,n4}) * 18'sd495;
+        sum3_13 = $signed({1'b0,n0}) * 18'sd910  + $signed({1'b0,n1}) * 18'sd546  + $signed({1'b0,n2}) * 18'sd1170 + $signed({1'b0,n4}) * 18'sd105;
 
-        cand1_13 = center_with_modulus(
-            (n0*1001*2 + n2*429*4 + n3*273*5 + n4*231*4), 3003
-        ); // [3,7,11,13]
+        sum0_17 = $signed({1'b0,n1}) * 18'sd5236 + $signed({1'b0,n2}) * 18'sd1870 + $signed({1'b0,n3}) * 18'sd595  + $signed({1'b0,n5}) * 18'sd5390;
+        sum1_17 = $signed({1'b0,n0}) * 18'sd1309 + $signed({1'b0,n2}) * 18'sd561  + $signed({1'b0,n3}) * 18'sd3213 + $signed({1'b0,n5}) * 18'sd2772;
+        sum2_17 = $signed({1'b0,n0}) * 18'sd1870 + $signed({1'b0,n1}) * 18'sd561  + $signed({1'b0,n3}) * 18'sd1530 + $signed({1'b0,n5}) * 18'sd1650;
+        sum3_17 = $signed({1'b0,n0}) * 18'sd595  + $signed({1'b0,n1}) * 18'sd1071 + $signed({1'b0,n2}) * 18'sd1275 + $signed({1'b0,n5}) * 18'sd630;
 
-        cand2_13 = center_with_modulus(
-            (n0*715*1 + n1*429*4 + n3*195*7 + n4*165*3), 2145
-        ); // [3,5,11,13]
+        cand0_13 = center_mod_s18(sum0_13, MOD_5005);
+        cand1_13 = center_mod_s18(sum1_13, MOD_3003);
+        cand2_13 = center_mod_s18(sum2_13, MOD_2145);
+        cand3_13 = center_mod_s18(sum3_13, MOD_1365);
 
-        cand3_13 = center_with_modulus(
-            (n0*455*2 + n1*273*2 + n2*195*6 + n4*105*1), 1365
-        ); // [3,5,7,13]
+        cand0_17 = center_mod_s18(sum0_17, MOD_6545);
+        cand1_17 = center_mod_s18(sum1_17, MOD_3927);
+        cand2_17 = center_mod_s18(sum2_17, MOD_2805);
+        cand3_17 = center_mod_s18(sum3_17, MOD_1785);
 
-        // ------------------------------------------------------------
-        // Leave-one-base-out candidates using mod17 as included lane
-        // and mod13 as independent checker
-        // ------------------------------------------------------------
-        cand0_17 = center_with_modulus(
-            (n1*1309*4 + n2*935*2 + n3*595*1 + n5*385*14), 6545
-        ); // [5,7,11,17]
+        ok0_13 = (norm_mod17_s16(cand0_13) == n5) && in_base_range_s16(cand0_13);
+        ok1_13 = (norm_mod17_s16(cand1_13) == n5) && in_base_range_s16(cand1_13);
+        ok2_13 = (norm_mod17_s16(cand2_13) == n5) && in_base_range_s16(cand2_13);
+        ok3_13 = (norm_mod17_s16(cand3_13) == n5) && in_base_range_s16(cand3_13);
 
-        cand1_17 = center_with_modulus(
-            (n0*1309*1 + n2*561*1 + n3*357*9 + n5*231*12), 3927
-        ); // [3,7,11,17]
+        ok0_17 = (norm_mod13_s16(cand0_17) == n4) && in_base_range_s16(cand0_17);
+        ok1_17 = (norm_mod13_s16(cand1_17) == n4) && in_base_range_s16(cand1_17);
+        ok2_17 = (norm_mod13_s16(cand2_17) == n4) && in_base_range_s16(cand2_17);
+        ok3_17 = (norm_mod13_s16(cand3_17) == n4) && in_base_range_s16(cand3_17);
 
-        cand2_17 = center_with_modulus(
-            (n0*935*2 + n1*561*1 + n3*255*6 + n5*165*10), 2805
-        ); // [3,5,11,17]
+        count13 = {2'b00, ok0_13} + {2'b00, ok1_13} + {2'b00, ok2_13} + {2'b00, ok3_13};
+        count17 = {2'b00, ok0_17} + {2'b00, ok1_17} + {2'b00, ok2_17} + {2'b00, ok3_17};
 
-        cand3_17 = center_with_modulus(
-            (n0*595*1 + n1*357*3 + n2*255*5 + n5*105*6), 1785
-        ); // [3,5,7,17]
-
-        // Candidate validity:
-        // - must match the independent redundant lane
-        // - must lie in the legitimate centered base range
-        ok0_13 = red_ok(cand0_13, n5, 17) && in_base_range(cand0_13);
-        ok1_13 = red_ok(cand1_13, n5, 17) && in_base_range(cand1_13);
-        ok2_13 = red_ok(cand2_13, n5, 17) && in_base_range(cand2_13);
-        ok3_13 = red_ok(cand3_13, n5, 17) && in_base_range(cand3_13);
-
-        ok0_17 = red_ok(cand0_17, n4, 13) && in_base_range(cand0_17);
-        ok1_17 = red_ok(cand1_17, n4, 13) && in_base_range(cand1_17);
-        ok2_17 = red_ok(cand2_17, n4, 13) && in_base_range(cand2_17);
-        ok3_17 = red_ok(cand3_17, n4, 13) && in_base_range(cand3_17);
-
-        count13 = ok0_13 + ok1_13 + ok2_13 + ok3_13;
-        count17 = ok0_17 + ok1_17 + ok2_17 + ok3_17;
-
-        sel13 = 0;
+        sel13 = 16'sd0;
         if (ok0_13) sel13 = cand0_13;
-        if (ok1_13) sel13 = cand1_13;
-        if (ok2_13) sel13 = cand2_13;
-        if (ok3_13) sel13 = cand3_13;
+        else if (ok1_13) sel13 = cand1_13;
+        else if (ok2_13) sel13 = cand2_13;
+        else if (ok3_13) sel13 = cand3_13;
 
-        sel17 = 0;
+        sel17 = 16'sd0;
         if (ok0_17) sel17 = cand0_17;
-        if (ok1_17) sel17 = cand1_17;
-        if (ok2_17) sel17 = cand2_17;
-        if (ok3_17) sel17 = cand3_17;
+        else if (ok1_17) sel17 = cand1_17;
+        else if (ok2_17) sel17 = cand2_17;
+        else if (ok3_17) sel17 = cand3_17;
 
-        // Defaults
         X_corr         = X_base;
         Error_Detected = 1'b0;
         Corrected      = 1'b0;
         Valid          = 1'b1;
-        chosen         = x_base_int;
 
-        // ------------------------------------------------------------
-        // Decision logic
-        // ------------------------------------------------------------
         if (chk13 && chk17) begin
-            // Clean result
             X_corr         = X_base;
             Error_Detected = 1'b0;
             Corrected      = 1'b0;
             Valid          = 1'b1;
-
         end else if (chk13 && !chk17) begin
-            // Likely redundant-lane fault on mod17, but still allow
-            // base-lane correction if a unique candidate exists.
             Error_Detected = 1'b1;
-
-            if ((count13 == 1) && (sel13 != x_base_int)) begin
-                X_corr    = sel13[OUT_WIDTH-1:0];
+            if ((count13 == 3'd1) && (sel13 != X_base)) begin
+                X_corr    = sel13;
                 Corrected = 1'b1;
                 Valid     = 1'b1;
             end else begin
                 X_corr    = X_base;
-                Corrected = 1'b1; // handled as tolerated redundant-lane fault
+                Corrected = 1'b1;
                 Valid     = 1'b1;
             end
-
         end else if (!chk13 && chk17) begin
-            // Symmetric redundant-lane fault on mod13 path
             Error_Detected = 1'b1;
-
-            if ((count17 == 1) && (sel17 != x_base_int)) begin
-                X_corr    = sel17[OUT_WIDTH-1:0];
+            if ((count17 == 3'd1) && (sel17 != X_base)) begin
+                X_corr    = sel17;
                 Corrected = 1'b1;
                 Valid     = 1'b1;
             end else begin
@@ -212,15 +183,11 @@ module rrns_corrector_crt #(
                 Corrected = 1'b1;
                 Valid     = 1'b1;
             end
-
         end else begin
-            // Both redundant checks failed:
-            // likely base-lane fault, try unique correction.
             Error_Detected = 1'b1;
-
-            if ((count13 == 1) && (count17 == 1)) begin
+            if ((count13 == 3'd1) && (count17 == 3'd1)) begin
                 if (sel13 == sel17) begin
-                    X_corr    = sel13[OUT_WIDTH-1:0];
+                    X_corr    = sel13;
                     Corrected = 1'b1;
                     Valid     = 1'b1;
                 end else begin
@@ -228,16 +195,15 @@ module rrns_corrector_crt #(
                     Corrected = 1'b0;
                     Valid     = 1'b0;
                 end
-            end else if (count13 == 1) begin
-                X_corr    = sel13[OUT_WIDTH-1:0];
+            end else if (count13 == 3'd1) begin
+                X_corr    = sel13;
                 Corrected = 1'b1;
                 Valid     = 1'b1;
-            end else if (count17 == 1) begin
-                X_corr    = sel17[OUT_WIDTH-1:0];
+            end else if (count17 == 3'd1) begin
+                X_corr    = sel17;
                 Corrected = 1'b1;
                 Valid     = 1'b1;
             end else begin
-                // overflow / ambiguous / uncorrectable
                 X_corr    = X_base;
                 Corrected = 1'b0;
                 Valid     = 1'b0;
