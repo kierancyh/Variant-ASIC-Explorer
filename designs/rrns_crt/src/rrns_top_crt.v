@@ -34,42 +34,30 @@ module rrns_top_crt #(
     wire ALU_EN;
     wire CRT_Start;
     wire MRC_Start;
-    wire Corr_Start;
     wire Out_EN;
 
     wire Encode_Done_all;
     wire ALU_Done_all;
     wire CRT_Done;
     wire MRC_Done;
-    wire Corr_Done;
     assign MRC_Done = 1'b0;
 
     wire [2:0] CU_state_dbg;
 
     reg signed [WIDTH_IN-1:0] A_req, B_req;
     reg [1:0]                 OpSel_req;
+
     reg signed [WIDTH_IN-1:0] A_reg, B_reg;
     reg [1:0]                 OpSel_reg;
 
-    // Only sample external pins when a new transaction is accepted.
     always @(posedge clk) begin
-        if (!rst_n) begin
-            A_req     <= '0;
-            B_req     <= '0;
-            OpSel_req <= 2'b00;
-        end else if (Start && (CU_state_dbg == 3'd0)) begin
-            A_req     <= A_in;
-            B_req     <= B_in;
-            OpSel_req <= Op_Sel;
-        end
+        A_req     <= A_in;
+        B_req     <= B_in;
+        OpSel_req <= Op_Sel;
     end
 
     always @(posedge clk) begin
-        if (!rst_n) begin
-            A_reg     <= '0;
-            B_reg     <= '0;
-            OpSel_reg <= 2'b00;
-        end else if (Load_IN) begin
+        if (Load_IN) begin
             A_reg     <= A_req;
             B_reg     <= B_req;
             OpSel_reg <= OpSel_req;
@@ -87,16 +75,19 @@ module rrns_top_crt #(
         .ALU_Done    (ALU_Done_all),
         .CRT_Done    (CRT_Done),
         .MRC_Done    (MRC_Done),
-        .Corr_Done   (Corr_Done),
         .Load_IN     (Load_IN),
         .Encode_EN   (Encode_EN),
         .ALU_EN      (ALU_EN),
         .CRT_Start   (CRT_Start),
         .MRC_Start   (MRC_Start),
-        .Corr_Start  (Corr_Start),
         .Out_EN      (Out_EN)
     );
 
+    // ------------------------------------------------------------
+    // Encoders -> 6 RRNS residues
+    // Base      : [3,5,7,11]
+    // Redundant : [13,17]
+    // ------------------------------------------------------------
     wire signed [W0-1:0] a_r0;
     wire signed [W1-1:0] a_r1;
     wire signed [W2-1:0] a_r2;
@@ -137,12 +128,16 @@ module rrns_top_crt #(
 
     assign Encode_Done_all = Encode_Done_A & Encode_Done_B;
 
+    // ------------------------------------------------------------
+    // Arithmetic slices across all 6 lanes
+    // ------------------------------------------------------------
     wire signed [W0-1:0] z_r0;
     wire signed [W1-1:0] z_r1;
     wire signed [W2-1:0] z_r2;
     wire signed [W3-1:0] z_r3;
     wire signed [W4-1:0] z_r4;
     wire signed [W5-1:0] z_r5;
+
     wire slice0_done, slice1_done, slice2_done, slice3_done, slice4_done, slice5_done;
 
     rrns_slice #(.MODULUS(M0), .WIDTH(W0), .CRNS_EN(CRNS_EN)) u_slice0 (
@@ -170,21 +165,32 @@ module rrns_top_crt #(
         .a(a_r5), .b(b_r5), .y(z_r5), .ALU_Done(slice5_done)
     );
 
-    assign ALU_Done_all = slice0_done & slice1_done & slice2_done &
-                          slice3_done & slice4_done & slice5_done;
+    assign ALU_Done_all =
+        slice0_done & slice1_done & slice2_done &
+        slice3_done & slice4_done & slice5_done;
 
+    // ------------------------------------------------------------
+    // Base CRT reconstruction from [3,5,7,11]
+    // ------------------------------------------------------------
     wire signed [WIDTH_IN-1:0] X_base;
+
     rrns_crt_recon #(
         .W0(W0), .W1(W1), .W2(W2), .W3(W3), .OUT_WIDTH(WIDTH_IN)
     ) u_crt (
         .clk(clk),
         .rst_n(rst_n),
         .CRT_Start(CRT_Start),
-        .r0(z_r0), .r1(z_r1), .r2(z_r2), .r3(z_r3),
+        .r0(z_r0),
+        .r1(z_r1),
+        .r2(z_r2),
+        .r3(z_r3),
         .X_out(X_base),
         .CRT_Done(CRT_Done)
     );
 
+    // ------------------------------------------------------------
+    // Correction selector
+    // ------------------------------------------------------------
     wire signed [WIDTH_IN-1:0] X_corr_now;
     wire                       Error_now;
     wire                       Corrected_now;
@@ -194,12 +200,8 @@ module rrns_top_crt #(
         .W0(W0), .W1(W1), .W2(W2), .W3(W3), .W4(W4), .W5(W5),
         .OUT_WIDTH(WIDTH_IN)
     ) u_corrector (
-        .clk(clk),
-        .rst_n(rst_n),
-        .Corr_Start(Corr_Start),
         .X_base(X_base),
         .r0(z_r0), .r1(z_r1), .r2(z_r2), .r3(z_r3), .r4(z_r4), .r5(z_r5),
-        .Corr_Done(Corr_Done),
         .X_corr(X_corr_now),
         .Error_Detected(Error_now),
         .Corrected(Corrected_now),
