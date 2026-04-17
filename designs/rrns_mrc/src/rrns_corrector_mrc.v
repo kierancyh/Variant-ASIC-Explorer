@@ -39,7 +39,7 @@ module rrns_corrector_mrc #(
     reg       busy;
 
     reg signed [OUT_WIDTH-1:0] x_base_q;
-    reg signed [4:0] n0_q, n1_q, n2_q, n3_q, n4_q, n5_q;
+    reg signed [5:0] n0_q, n1_q, n2_q, n3_q, n4_q, n5_q;
 
     reg chk13_q, chk17_q;
     reg [2:0] count13_q, count17_q;
@@ -82,7 +82,7 @@ module rrns_corrector_mrc #(
 
     function red_ok;
         input signed [17:0] x;
-        input signed [4:0]  r;
+        input signed [5:0]  r;
         input integer       m;
         begin
             red_ok = (norm_mod18(x, m) == r);
@@ -91,7 +91,7 @@ module rrns_corrector_mrc #(
 
     function signed [17:0] candidate13;
         input [1:0] idx;
-        input signed [4:0] n0, n1, n2, n3, n4;
+        input signed [5:0] n0, n1, n2, n3, n4;
         begin
             case (idx)
                 2'd0: candidate13 = center_with_modulus((n1 * 18'sd1001) + (n2 * 18'sd715)  + (n3 * 18'sd1365) + (n4 * 18'sd1925), 5005);
@@ -105,7 +105,7 @@ module rrns_corrector_mrc #(
 
     function signed [17:0] candidate17;
         input [1:0] idx;
-        input signed [4:0] n0, n1, n2, n3, n5;
+        input signed [5:0] n0, n1, n2, n3, n5;
         begin
             case (idx)
                 2'd0: candidate17 = center_with_modulus((n1 * 18'sd5236) + (n2 * 18'sd1870) + (n3 * 18'sd595)  + (n5 * 18'sd5390), 6545);
