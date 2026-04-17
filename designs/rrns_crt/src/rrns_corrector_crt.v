@@ -132,22 +132,11 @@ module rrns_corrector_crt #(
         end else begin
             Error_Detected = 1'b1;
 
-            if (ok3_13 && ok3_17) begin
-                if (cand3_13 == cand3_17) begin
-                    X_corr    = cand3_13[OUT_WIDTH-1:0];
-                    Corrected = 1'b1;
-                    Valid     = 1'b1;
-                end else begin
-                    X_corr    = X_base;
-                    Corrected = 1'b0;
-                    Valid     = 1'b0;
-                end
-            end else if (ok3_13) begin
+            // Not-overly-simplified Option A:
+            // only accept r3-only base correction when BOTH independent
+            // recovery paths are self-consistent and agree on the same value.
+            if (ok3_13 && ok3_17 && (cand3_13 == cand3_17)) begin
                 X_corr    = cand3_13[OUT_WIDTH-1:0];
-                Corrected = 1'b1;
-                Valid     = 1'b1;
-            end else if (ok3_17) begin
-                X_corr    = cand3_17[OUT_WIDTH-1:0];
                 Corrected = 1'b1;
                 Valid     = 1'b1;
             end else begin
