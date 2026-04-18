@@ -9,7 +9,12 @@ clock:
   max_ns_cap: 200
 
 sources:
-  - src/**/*.v
+  - src/rrns_cu.v
+  - src/rrns_encoder.v
+  - src/rrns_slice.v
+  - src/rrns_crt_recon.v
+  - src/rrns_corrector_crt.v
+  - src/rrns_top_crt.v
 
 precheck:
   icarus:
