@@ -105,6 +105,7 @@ def main() -> None:
     ap.add_argument("--run-heuristic-diode-insertion", default="")
     ap.add_argument("--run-post-grt-design-repair", default="")
     ap.add_argument("--run-post-grt-resizer-timing", default="")
+    ap.add_argument("--gpl-cell-padding", default="")
     args = ap.parse_args()
 
     variant_path = resolve_variant_path(args.variant)
@@ -149,6 +150,14 @@ def main() -> None:
         args.run_post_grt_resizer_timing,
         as_bool(ll_policy.get("run_post_grt_resizer_timing"), False),
     )
+    explicit_gpl_cell_padding = str(args.gpl_cell_padding or "").strip()
+    variant_gpl_cell_padding = ll_policy.get("gpl_cell_padding")
+    if explicit_gpl_cell_padding:
+        gpl_cell_padding = int(explicit_gpl_cell_padding)
+    elif variant_gpl_cell_padding not in (None, ""):
+        gpl_cell_padding = int(variant_gpl_cell_padding)
+    else:
+        gpl_cell_padding = 0
 
     cfg: Dict[str, Any] = {
         "DESIGN_NAME": top_module,
@@ -156,6 +165,7 @@ def main() -> None:
         "CLOCK_PORT": clock_port,
         "CLOCK_PERIOD": clock_ns,
         "FP_CORE_UTIL": core_util,
+        "GPL_CELL_PADDING": gpl_cell_padding,
         "SYNTH_ABC_DFF": False,
         "RUN_ANTENNA_REPAIR": run_antenna_repair,
         "RUN_HEURISTIC_DIODE_INSERTION": run_heuristic_diode_insertion,
