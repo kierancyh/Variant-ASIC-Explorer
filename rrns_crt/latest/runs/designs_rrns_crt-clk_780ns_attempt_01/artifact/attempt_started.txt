@@ -1,4 +1,0 @@
-attempt=1
-clock_ns=780.0
-stage_label=coarse
-started_at=1776454801
