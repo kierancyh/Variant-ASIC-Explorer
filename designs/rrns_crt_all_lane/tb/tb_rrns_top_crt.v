@@ -40,7 +40,7 @@ module tb_rrns_top_crt;
     end
 
     initial begin
-        $dumpfile("sim/waves/crt_rtl_precheck.vcd");
+        $dumpfile("crt_rtl_precheck.vcd");
         $dumpvars(0, tb_rrns_top_crt);
     end
 

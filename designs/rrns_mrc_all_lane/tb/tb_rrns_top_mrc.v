@@ -40,7 +40,7 @@ module tb_rrns_top_mrc;
     end
 
     initial begin
-        $dumpfile("sim/waves/mrc_rtl_precheck.vcd");
+        $dumpfile("mrc_rtl_precheck.vcd");
         $dumpvars(0, tb_rrns_top_mrc);
     end
 
