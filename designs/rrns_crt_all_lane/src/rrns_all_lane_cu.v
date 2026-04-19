@@ -1,25 +1,26 @@
 `timescale 1ns/1ps
 module rrns_all_lane_cu (
-    input  wire       clk,
-    input  wire       rst_n,
-    input  wire       Start,
-    input  wire       Recon_Mode,    // 0 = CRT, 1 = MRC
-    output reg        Done,
+    input  wire clk,
+    input  wire rst_n,
+
+    input  wire Start,
+    input  wire Recon_Mode,      // 0 = CRT, 1 = MRC
+    output reg  Done,
     output wire [3:0] CU_state_dbg,
 
-    input  wire       Encode_Done,
-    input  wire       ALU_Done,
-    input  wire       CRT_Done,
-    input  wire       MRC_Done,
-    input  wire       Correct_Done,
+    input  wire Encode_Done,
+    input  wire ALU_Done,
+    input  wire CRT_Done,
+    input  wire MRC_Done,
+    input  wire Correct_Done,
 
-    output reg        Load_IN,
-    output reg        Encode_EN,
-    output reg        ALU_EN,
-    output reg        CRT_Start,
-    output reg        MRC_Start,
-    output reg        Correct_Start,
-    output reg        Out_EN
+    output reg  Load_IN,
+    output reg  Encode_EN,
+    output reg  ALU_EN,
+    output reg  CRT_Start,
+    output reg  MRC_Start,
+    output reg  Correct_Start,
+    output reg  Out_EN
 );
 
     localparam [3:0]
@@ -57,24 +58,24 @@ module rrns_all_lane_cu (
             S_RECON_POST: if (recon_done_sel) next_state = S_OUT;
             S_OUT:                          next_state = S_DONE;
             S_DONE:       if (!Start)       next_state = S_IDLE;
-            default:                       next_state = S_IDLE;
+            default:                        next_state = S_IDLE;
         endcase
     end
 
     always @* begin
-        Load_IN       = 1'b0;
-        Encode_EN     = 1'b0;
-        ALU_EN        = 1'b0;
-        CRT_Start     = 1'b0;
-        MRC_Start     = 1'b0;
-        Correct_Start = 1'b0;
-        Out_EN        = 1'b0;
-        Done          = 1'b0;
+        Load_IN      = 1'b0;
+        Encode_EN    = 1'b0;
+        ALU_EN       = 1'b0;
+        CRT_Start    = 1'b0;
+        MRC_Start    = 1'b0;
+        Correct_Start= 1'b0;
+        Out_EN       = 1'b0;
+        Done         = 1'b0;
 
         case (state)
-            S_LOAD:   Load_IN       = 1'b1;
-            S_ENCODE: Encode_EN     = 1'b1;
-            S_ALU:    ALU_EN        = 1'b1;
+            S_LOAD:      Load_IN       = 1'b1;
+            S_ENCODE:    Encode_EN     = 1'b1;
+            S_ALU:       ALU_EN        = 1'b1;
 
             S_RECON_PRE,
             S_RECON_POST: begin
@@ -84,9 +85,9 @@ module rrns_all_lane_cu (
                     MRC_Start = 1'b1;
             end
 
-            S_CORRECT: Correct_Start = 1'b1;
-            S_OUT:     Out_EN        = 1'b1;
-            S_DONE:    Done          = 1'b1;
+            S_CORRECT:   Correct_Start = 1'b1;
+            S_OUT:       Out_EN        = 1'b1;
+            S_DONE:      Done          = 1'b1;
         endcase
     end
 
