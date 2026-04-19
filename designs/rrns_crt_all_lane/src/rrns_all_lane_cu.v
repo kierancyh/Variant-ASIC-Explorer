@@ -1,62 +1,42 @@
-// Function: Control Unit for RNS ALU (CU FSM)
-
-// Controls the pipeline: 
-//   IDLE -> LOAD -> ENCODE -> ALU -> RECON -> CORRECT -> OUT -> DONE
-
-// Controls:
-//   - rrns_all_lane_encoder.v      (Encode_EN / Encode_Done)
-//   - rrns_all_lane_slice.v        (ALU_EN / ALU_Done)
-//   - rrns_all_lane_crt_recon.v    (CRT_Start / CRT_Done)
-//   - rrns_all_lane_mrc_recon.v    (MRC_Start / MRC_Done)
-//   - rrns_all_lane_corrector_*.v  (Correct_Start / Correct_Done)
-
-// Reconstruction Selection (runtime):
-//   Recon_Mode = 0 -> use CRT
-//   Recon_Mode = 1 -> use MRC
-
 `timescale 1ns/1ps
 module rrns_all_lane_cu (
-    // Clock & Reset
-    input  wire clk,
-    input  wire rst_n,
+    input  wire       clk,
+    input  wire       rst_n,
+    input  wire       Start,
+    input  wire       Recon_Mode,    // 0 = CRT, 1 = MRC
+    output reg        Done,
+    output wire [3:0] CU_state_dbg,
 
-    // External control
-    input  wire Start,         // Start a new operation
-    input  wire Recon_Mode,    // 0 = CRT, 1 = MRC
-    output reg  Done,          // High when full operation completed
-    output wire [2:0] CU_state_dbg, // Debug: Current CU FSM state
+    input  wire       Encode_Done,
+    input  wire       ALU_Done,
+    input  wire       CRT_Done,
+    input  wire       MRC_Done,
+    input  wire       Correct_Done,
 
-    // Handshakes from Data Path
-    input  wire Encode_Done,   // Encoders finished
-    input  wire ALU_Done,      // All ALU slices finished
-    input  wire CRT_Done,      // CRT reconstructor finished
-    input  wire MRC_Done,      // MRC reconstructor finished
-    input  wire Correct_Done,  // Corrector finished
-
-    // Control outputs to Data Path 
-    output reg  Load_IN,       // Latch A, B, OpSel into input regs
-    output reg  Encode_EN,     // Enable encoders
-    output reg  ALU_EN,        // Enable modular ALUs
-    output reg  CRT_Start,     // Trigger CRT reconstruction
-    output reg  MRC_Start,     // Trigger MRC reconstruction
-    output reg  Correct_Start, // Trigger registered correction stage
-    output reg  Out_EN         // Latch final X_out register
+    output reg        Load_IN,
+    output reg        Encode_EN,
+    output reg        ALU_EN,
+    output reg        CRT_Start,
+    output reg        MRC_Start,
+    output reg        Correct_Start,
+    output reg        Out_EN
 );
 
-    // State Encoding
-    localparam [2:0]
-        S_IDLE    = 3'd0,
-        S_LOAD    = 3'd1,
-        S_ENCODE  = 3'd2,
-        S_ALU     = 3'd3,
-        S_RECON   = 3'd4,
-        S_CORRECT = 3'd5,
-        S_OUT     = 3'd6,
-        S_DONE    = 3'd7;
+    localparam [3:0]
+        S_IDLE       = 4'd0,
+        S_LOAD       = 4'd1,
+        S_ENCODE     = 4'd2,
+        S_ALU        = 4'd3,
+        S_RECON_PRE  = 4'd4,
+        S_CORRECT    = 4'd5,
+        S_RECON_POST = 4'd6,
+        S_OUT        = 4'd7,
+        S_DONE       = 4'd8;
 
-    reg [2:0] state, next_state;
+    reg [3:0] state, next_state;
 
-    // State Register
+    wire recon_done_sel = (Recon_Mode == 1'b0) ? CRT_Done : MRC_Done;
+
     always @(posedge clk) begin
         if (!rst_n)
             state <= S_IDLE;
@@ -64,32 +44,27 @@ module rrns_all_lane_cu (
             state <= next_state;
     end
 
-    // Next-State Logic
-    wire recon_done_sel;
-    assign recon_done_sel = (Recon_Mode == 1'b0) ? CRT_Done : MRC_Done;
-
     always @* begin
-        next_state = state; // Default hold
+        next_state = state;
 
         case (state)
-            S_IDLE:    if (Start)          next_state = S_LOAD;
-            S_LOAD:                       next_state = S_ENCODE;
-            S_ENCODE:  if (Encode_Done)   next_state = S_ALU;
-            S_ALU:     if (ALU_Done)      next_state = S_RECON;
-            S_RECON:   if (recon_done_sel) next_state = S_CORRECT;
-            S_CORRECT: if (Correct_Done)  next_state = S_OUT;
-            S_OUT:                        next_state = S_DONE;
-            S_DONE:    if (!Start)        next_state = S_IDLE;
-            default:                   next_state = S_IDLE;
+            S_IDLE:       if (Start)        next_state = S_LOAD;
+            S_LOAD:                         next_state = S_ENCODE;
+            S_ENCODE:     if (Encode_Done)  next_state = S_ALU;
+            S_ALU:        if (ALU_Done)     next_state = S_RECON_PRE;
+            S_RECON_PRE:  if (recon_done_sel) next_state = S_CORRECT;
+            S_CORRECT:    if (Correct_Done) next_state = S_RECON_POST;
+            S_RECON_POST: if (recon_done_sel) next_state = S_OUT;
+            S_OUT:                          next_state = S_DONE;
+            S_DONE:       if (!Start)       next_state = S_IDLE;
+            default:                       next_state = S_IDLE;
         endcase
     end
 
-    // Output Logic (Moore FSM)
     always @* begin
-        // Default all controls LOW
-        Load_IN   = 1'b0;
-        Encode_EN = 1'b0;
-        ALU_EN    = 1'b0;
+        Load_IN       = 1'b0;
+        Encode_EN     = 1'b0;
+        ALU_EN        = 1'b0;
         CRT_Start     = 1'b0;
         MRC_Start     = 1'b0;
         Correct_Start = 1'b0;
@@ -97,11 +72,12 @@ module rrns_all_lane_cu (
         Done          = 1'b0;
 
         case (state)
-            S_LOAD:   Load_IN   = 1'b1;
-            S_ENCODE: Encode_EN = 1'b1;
-            S_ALU:    ALU_EN    = 1'b1;
+            S_LOAD:   Load_IN       = 1'b1;
+            S_ENCODE: Encode_EN     = 1'b1;
+            S_ALU:    ALU_EN        = 1'b1;
 
-            S_RECON: begin
+            S_RECON_PRE,
+            S_RECON_POST: begin
                 if (Recon_Mode == 1'b0)
                     CRT_Start = 1'b1;
                 else
@@ -114,7 +90,6 @@ module rrns_all_lane_cu (
         endcase
     end
 
-    // Expose internal state for debugging
     assign CU_state_dbg = state;
 
 endmodule

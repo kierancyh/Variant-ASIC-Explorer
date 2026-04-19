@@ -44,7 +44,7 @@ module rrns_all_lane_top_crt #(
     wire Correct_Done;
     assign MRC_Done = 1'b0;
 
-    wire [2:0] CU_state_dbg;
+    wire [3:0] CU_state_dbg;
 
     reg signed [WIDTH_IN-1:0] A_req, B_req;
     reg [1:0]                 OpSel_req;
@@ -67,31 +67,26 @@ module rrns_all_lane_top_crt #(
     end
 
     rrns_all_lane_cu u_cu (
-        .clk         (clk),
-        .rst_n       (rst_n),
-        .Start       (Start),
-        .Recon_Mode  (1'b0),
-        .Done        (Done),
-        .CU_state_dbg(CU_state_dbg),
-        .Encode_Done (Encode_Done_all),
-        .ALU_Done    (ALU_Done_all),
-        .CRT_Done    (CRT_Done),
-        .MRC_Done    (MRC_Done),
-        .Correct_Done(Correct_Done),
-        .Load_IN     (Load_IN),
-        .Encode_EN   (Encode_EN),
-        .ALU_EN      (ALU_EN),
-        .CRT_Start   (CRT_Start),
-        .MRC_Start   (MRC_Start),
+        .clk          (clk),
+        .rst_n        (rst_n),
+        .Start        (Start),
+        .Recon_Mode   (1'b0),
+        .Done         (Done),
+        .CU_state_dbg (CU_state_dbg),
+        .Encode_Done  (Encode_Done_all),
+        .ALU_Done     (ALU_Done_all),
+        .CRT_Done     (CRT_Done),
+        .MRC_Done     (MRC_Done),
+        .Correct_Done (Correct_Done),
+        .Load_IN      (Load_IN),
+        .Encode_EN    (Encode_EN),
+        .ALU_EN       (ALU_EN),
+        .CRT_Start    (CRT_Start),
+        .MRC_Start    (MRC_Start),
         .Correct_Start(Correct_Start),
-        .Out_EN      (Out_EN)
+        .Out_EN       (Out_EN)
     );
 
-    // ------------------------------------------------------------
-    // Encoders -> 6 RRNS residues
-    // Base      : [3,5,7,11]
-    // Redundant : [13,17]
-    // ------------------------------------------------------------
     wire signed [W0-1:0] a_r0;
     wire signed [W1-1:0] a_r1;
     wire signed [W2-1:0] a_r2;
@@ -132,9 +127,6 @@ module rrns_all_lane_top_crt #(
 
     assign Encode_Done_all = Encode_Done_A & Encode_Done_B;
 
-    // ------------------------------------------------------------
-    // Arithmetic slices across all 6 lanes
-    // ------------------------------------------------------------
     wire signed [W0-1:0] z_r0;
     wire signed [W1-1:0] z_r1;
     wire signed [W2-1:0] z_r2;
@@ -173,10 +165,26 @@ module rrns_all_lane_top_crt #(
         slice0_done & slice1_done & slice2_done &
         slice3_done & slice4_done & slice5_done;
 
-    // ------------------------------------------------------------
-    // Base CRT reconstruction from [3,5,7,11]
-    // ------------------------------------------------------------
-    wire signed [WIDTH_IN-1:0] X_base;
+    wire signed [W0-1:0] corr_r0_w;
+    wire signed [W1-1:0] corr_r1_w;
+    wire signed [W2-1:0] corr_r2_w;
+    wire signed [W3-1:0] corr_r3_w;
+    wire                 base_fault_found_w;
+    wire                 Error_now;
+    wire                 Corrected_now;
+    wire                 Valid_now;
+
+    reg                  use_repaired_base_r;
+    reg                  Error_pending_r;
+    reg                  Corrected_pending_r;
+    reg                  Valid_pending_r;
+
+    wire signed [W0-1:0] recon_r0_w = use_repaired_base_r ? corr_r0_w : z_r0;
+    wire signed [W1-1:0] recon_r1_w = use_repaired_base_r ? corr_r1_w : z_r1;
+    wire signed [W2-1:0] recon_r2_w = use_repaired_base_r ? corr_r2_w : z_r2;
+    wire signed [W3-1:0] recon_r3_w = use_repaired_base_r ? corr_r3_w : z_r3;
+
+    wire signed [WIDTH_IN-1:0] X_recon;
 
     rrns_all_lane_crt_recon #(
         .W0(W0), .W1(W1), .W2(W2), .W3(W3), .OUT_WIDTH(WIDTH_IN)
@@ -184,21 +192,13 @@ module rrns_all_lane_top_crt #(
         .clk(clk),
         .rst_n(rst_n),
         .CRT_Start(CRT_Start),
-        .r0(z_r0),
-        .r1(z_r1),
-        .r2(z_r2),
-        .r3(z_r3),
-        .X_out(X_base),
+        .r0(recon_r0_w),
+        .r1(recon_r1_w),
+        .r2(recon_r2_w),
+        .r3(recon_r3_w),
+        .X_out(X_recon),
         .CRT_Done(CRT_Done)
     );
-
-    // ------------------------------------------------------------
-    // Registered all-lane correction stage
-    // ------------------------------------------------------------
-    wire signed [WIDTH_IN-1:0] X_corr_now;
-    wire                       Error_now;
-    wire                       Corrected_now;
-    wire                       Valid_now;
 
     rrns_all_lane_corrector_crt #(
         .W0(W0), .W1(W1), .W2(W2), .W3(W3), .W4(W4), .W5(W5),
@@ -207,9 +207,13 @@ module rrns_all_lane_top_crt #(
         .clk(clk),
         .rst_n(rst_n),
         .Correct_Start(Correct_Start),
-        .X_base(X_base),
+        .X_base(X_recon),
         .r0(z_r0), .r1(z_r1), .r2(z_r2), .r3(z_r3), .r4(z_r4), .r5(z_r5),
-        .X_corr(X_corr_now),
+        .corr_r0(corr_r0_w),
+        .corr_r1(corr_r1_w),
+        .corr_r2(corr_r2_w),
+        .corr_r3(corr_r3_w),
+        .Base_Fault_Found(base_fault_found_w),
         .Error_Detected(Error_now),
         .Corrected(Corrected_now),
         .Valid(Valid_now),
@@ -223,15 +227,35 @@ module rrns_all_lane_top_crt #(
 
     always @(posedge clk) begin
         if (!rst_n) begin
-            X_reg         <= '0;
-            Error_reg     <= 1'b0;
-            Corrected_reg <= 1'b0;
-            Valid_reg     <= 1'b0;
-        end else if (Out_EN) begin
-            X_reg         <= X_corr_now;
-            Error_reg     <= Error_now;
-            Corrected_reg <= Corrected_now;
-            Valid_reg     <= Valid_now;
+            use_repaired_base_r <= 1'b0;
+            Error_pending_r     <= 1'b0;
+            Corrected_pending_r <= 1'b0;
+            Valid_pending_r     <= 1'b0;
+            X_reg               <= '0;
+            Error_reg           <= 1'b0;
+            Corrected_reg       <= 1'b0;
+            Valid_reg           <= 1'b0;
+        end else begin
+            if (Load_IN) begin
+                use_repaired_base_r <= 1'b0;
+                Error_pending_r     <= 1'b0;
+                Corrected_pending_r <= 1'b0;
+                Valid_pending_r     <= 1'b0;
+            end
+
+            if (Correct_Done) begin
+                use_repaired_base_r <= base_fault_found_w;
+                Error_pending_r     <= Error_now;
+                Corrected_pending_r <= Corrected_now;
+                Valid_pending_r     <= Valid_now;
+            end
+
+            if (Out_EN) begin
+                X_reg         <= X_recon;
+                Error_reg     <= Error_pending_r;
+                Corrected_reg <= Corrected_pending_r;
+                Valid_reg     <= Valid_pending_r;
+            end
         end
     end
 
