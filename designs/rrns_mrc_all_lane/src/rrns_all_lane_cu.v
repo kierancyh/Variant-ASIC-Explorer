@@ -49,33 +49,33 @@ module rrns_all_lane_cu (
         next_state = state;
 
         case (state)
-            S_IDLE:       if (Start)           next_state = S_LOAD;
-            S_LOAD:                            next_state = S_ENCODE;
-            S_ENCODE:     if (Encode_Done)     next_state = S_ALU;
-            S_ALU:        if (ALU_Done)        next_state = S_RECON_PRE;
-            S_RECON_PRE:  if (recon_done_sel)  next_state = S_CORRECT;
-            S_CORRECT:    if (Correct_Done)    next_state = S_RECON_POST;
-            S_RECON_POST: if (recon_done_sel)  next_state = S_OUT;
-            S_OUT:                             next_state = S_DONE;
-            S_DONE:       if (!Start)          next_state = S_IDLE;
-            default:                           next_state = S_IDLE;
+            S_IDLE:       if (Start)        next_state = S_LOAD;
+            S_LOAD:                         next_state = S_ENCODE;
+            S_ENCODE:     if (Encode_Done)  next_state = S_ALU;
+            S_ALU:        if (ALU_Done)     next_state = S_RECON_PRE;
+            S_RECON_PRE:  if (recon_done_sel) next_state = S_CORRECT;
+            S_CORRECT:    if (Correct_Done) next_state = S_RECON_POST;
+            S_RECON_POST: if (recon_done_sel) next_state = S_OUT;
+            S_OUT:                          next_state = S_DONE;
+            S_DONE:       if (!Start)       next_state = S_IDLE;
+            default:                        next_state = S_IDLE;
         endcase
     end
 
     always @* begin
-        Load_IN       = 1'b0;
-        Encode_EN     = 1'b0;
-        ALU_EN        = 1'b0;
-        CRT_Start     = 1'b0;
-        MRC_Start     = 1'b0;
-        Correct_Start = 1'b0;
-        Out_EN        = 1'b0;
-        Done          = 1'b0;
+        Load_IN      = 1'b0;
+        Encode_EN    = 1'b0;
+        ALU_EN       = 1'b0;
+        CRT_Start    = 1'b0;
+        MRC_Start    = 1'b0;
+        Correct_Start= 1'b0;
+        Out_EN       = 1'b0;
+        Done         = 1'b0;
 
         case (state)
-            S_LOAD:      Load_IN        = 1'b1;
-            S_ENCODE:    Encode_EN      = 1'b1;
-            S_ALU:       ALU_EN         = 1'b1;
+            S_LOAD:      Load_IN       = 1'b1;
+            S_ENCODE:    Encode_EN     = 1'b1;
+            S_ALU:       ALU_EN        = 1'b1;
 
             S_RECON_PRE,
             S_RECON_POST: begin
@@ -85,9 +85,9 @@ module rrns_all_lane_cu (
                     MRC_Start = 1'b1;
             end
 
-            S_CORRECT:   Correct_Start  = 1'b1;
-            S_OUT:       Out_EN         = 1'b1;
-            S_DONE:      Done           = 1'b1;
+            S_CORRECT:   Correct_Start = 1'b1;
+            S_OUT:       Out_EN        = 1'b1;
+            S_DONE:      Done          = 1'b1;
         endcase
     end
 
