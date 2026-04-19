@@ -29,6 +29,10 @@ module rrns_all_lane_top_mrc #(
     output wire                        Valid
 );
 
+    localparam [3:0]
+        S_RECON_PRE  = 4'd4,
+        S_RECON_POST = 4'd6;
+
     wire Load_IN, Encode_EN, ALU_EN, CRT_Start, MRC_Start, Correct_Start, Out_EN;
     wire Encode_Done_all, ALU_Done_all, CRT_Done, MRC_Done, Correct_Done;
     assign CRT_Done = 1'b0;
@@ -54,24 +58,24 @@ module rrns_all_lane_top_mrc #(
     end
 
     rrns_all_lane_cu u_cu (
-        .clk         (clk),
-        .rst_n       (rst_n),
-        .Start       (Start),
-        .Recon_Mode  (1'b1),
-        .Done        (Done),
-        .CU_state_dbg(CU_state_dbg),
-        .Encode_Done (Encode_Done_all),
-        .ALU_Done    (ALU_Done_all),
-        .CRT_Done    (CRT_Done),
-        .MRC_Done    (MRC_Done),
-        .Correct_Done(Correct_Done),
-        .Load_IN     (Load_IN),
-        .Encode_EN   (Encode_EN),
-        .ALU_EN      (ALU_EN),
-        .CRT_Start   (CRT_Start),
-        .MRC_Start   (MRC_Start),
+        .clk          (clk),
+        .rst_n        (rst_n),
+        .Start        (Start),
+        .Recon_Mode   (1'b1),
+        .Done         (Done),
+        .CU_state_dbg (CU_state_dbg),
+        .Encode_Done  (Encode_Done_all),
+        .ALU_Done     (ALU_Done_all),
+        .CRT_Done     (CRT_Done),
+        .MRC_Done     (MRC_Done),
+        .Correct_Done (Correct_Done),
+        .Load_IN      (Load_IN),
+        .Encode_EN    (Encode_EN),
+        .ALU_EN       (ALU_EN),
+        .CRT_Start    (CRT_Start),
+        .MRC_Start    (MRC_Start),
         .Correct_Start(Correct_Start),
-        .Out_EN      (Out_EN)
+        .Out_EN       (Out_EN)
     );
 
     wire signed [W0-1:0] a_r0, b_r0;
@@ -139,10 +143,27 @@ module rrns_all_lane_top_mrc #(
     wire                 Error_now;
     wire                 Corrected_now;
     wire                 Valid_now;
-    wire signed [WIDTH_IN-1:0] X_base_pre;
-    wire signed [WIDTH_IN-1:0] X_final_post;
+    wire                 in_recon_pre  = (CU_state_dbg == S_RECON_PRE);
+    wire                 in_recon_post = (CU_state_dbg == S_RECON_POST);
 
-    wire recon_post_sel = (CU_state_dbg == 4'd6);
+    reg signed [W0-1:0] recon_r0_reg;
+    reg signed [W1-1:0] recon_r1_reg;
+    reg signed [W2-1:0] recon_r2_reg;
+    reg signed [W3-1:0] recon_r3_reg;
+
+    reg signed [WIDTH_IN-1:0] X_base_pre_reg;
+    reg signed [WIDTH_IN-1:0] X_post_reg;
+
+    reg Error_fix_reg;
+    reg Corrected_fix_reg;
+    reg Valid_fix_reg;
+
+    wire signed [W0-1:0] recon_in_r0 = in_recon_post ? recon_r0_reg : z_r0;
+    wire signed [W1-1:0] recon_in_r1 = in_recon_post ? recon_r1_reg : z_r1;
+    wire signed [W2-1:0] recon_in_r2 = in_recon_post ? recon_r2_reg : z_r2;
+    wire signed [W3-1:0] recon_in_r3 = in_recon_post ? recon_r3_reg : z_r3;
+
+    wire signed [WIDTH_IN-1:0] X_recon_wire;
 
     rrns_all_lane_mrc_recon #(
         .W0(W0), .W1(W1), .W2(W2), .W3(W3), .OUT_WIDTH(WIDTH_IN)
@@ -150,15 +171,13 @@ module rrns_all_lane_top_mrc #(
         .clk(clk),
         .rst_n(rst_n),
         .MRC_Start(MRC_Start),
-        .r0(recon_post_sel ? corr_r0 : z_r0),
-        .r1(recon_post_sel ? corr_r1 : z_r1),
-        .r2(recon_post_sel ? corr_r2 : z_r2),
-        .r3(recon_post_sel ? corr_r3 : z_r3),
-        .X_out(X_final_post),
+        .r0(recon_in_r0),
+        .r1(recon_in_r1),
+        .r2(recon_in_r2),
+        .r3(recon_in_r3),
+        .X_out(X_recon_wire),
         .MRC_Done(MRC_Done)
     );
-
-    assign X_base_pre = X_final_post;
 
     rrns_all_lane_corrector_mrc #(
         .W0(W0), .W1(W1), .W2(W2), .W3(W3), .W4(W4), .W5(W5), .OUT_WIDTH(WIDTH_IN)
@@ -166,7 +185,7 @@ module rrns_all_lane_top_mrc #(
         .clk(clk),
         .rst_n(rst_n),
         .Correct_Start(Correct_Start),
-        .X_base(X_base_pre),
+        .X_base(X_base_pre_reg),
         .r0(z_r0), .r1(z_r1), .r2(z_r2), .r3(z_r3), .r4(z_r4), .r5(z_r5),
         .corr_r0(corr_r0), .corr_r1(corr_r1), .corr_r2(corr_r2), .corr_r3(corr_r3),
         .Error_Detected(Error_now),
@@ -182,15 +201,44 @@ module rrns_all_lane_top_mrc #(
 
     always @(posedge clk) begin
         if (!rst_n) begin
-            X_reg         <= '0;
-            Error_reg     <= 1'b0;
-            Corrected_reg <= 1'b0;
-            Valid_reg     <= 1'b0;
-        end else if (Out_EN) begin
-            X_reg         <= X_final_post;
-            Error_reg     <= Error_now;
-            Corrected_reg <= Corrected_now;
-            Valid_reg     <= Valid_now;
+            recon_r0_reg      <= '0;
+            recon_r1_reg      <= '0;
+            recon_r2_reg      <= '0;
+            recon_r3_reg      <= '0;
+            X_base_pre_reg    <= '0;
+            X_post_reg        <= '0;
+            Error_fix_reg     <= 1'b0;
+            Corrected_fix_reg <= 1'b0;
+            Valid_fix_reg     <= 1'b0;
+            X_reg             <= '0;
+            Error_reg         <= 1'b0;
+            Corrected_reg     <= 1'b0;
+            Valid_reg         <= 1'b0;
+        end else begin
+            if (MRC_Done && in_recon_pre) begin
+                X_base_pre_reg <= X_recon_wire;
+            end
+
+            if (Correct_Done) begin
+                recon_r0_reg      <= corr_r0;
+                recon_r1_reg      <= corr_r1;
+                recon_r2_reg      <= corr_r2;
+                recon_r3_reg      <= corr_r3;
+                Error_fix_reg     <= Error_now;
+                Corrected_fix_reg <= Corrected_now;
+                Valid_fix_reg     <= Valid_now;
+            end
+
+            if (MRC_Done && in_recon_post) begin
+                X_post_reg <= X_recon_wire;
+            end
+
+            if (Out_EN) begin
+                X_reg         <= X_post_reg;
+                Error_reg     <= Error_fix_reg;
+                Corrected_reg <= Corrected_fix_reg;
+                Valid_reg     <= Valid_fix_reg;
+            end
         end
     end
 
