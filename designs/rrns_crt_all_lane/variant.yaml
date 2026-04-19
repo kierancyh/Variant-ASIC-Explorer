@@ -1,7 +1,7 @@
 name: rrns_crt_all_lane
 pdk: sky130A
 
-top_module: rrns_top_crt
+top_module: rrns_all_lane_top_crt
 
 clock:
   port: clk
@@ -9,21 +9,21 @@ clock:
   max_ns_cap: 200
 
 sources:
-  - src/rrns_cu.v
-  - src/rrns_encoder.v
-  - src/rrns_slice.v
-  - src/rrns_crt_recon.v
-  - src/rrns_corrector_crt.v
-  - src/rrns_top_crt.v
+  - src/rrns_all_lane_cu.v
+  - src/rrns_all_lane_encoder.v
+  - src/rrns_all_lane_slice.v
+  - src/rrns_all_lane_crt_recon.v
+  - src/rrns_all_lane_corrector_crt.v
+  - src/rrns_all_lane_top_crt.v
 
 precheck:
   icarus:
     enabled: true
-    testbench_top: tb_rrns_top_crt
+    testbench_top: tb_rrns_all_lane_top_crt
     testbench_sources:
       - tb/**/*.v
       - tb/**/*.sv
-    vcd_name: crt_rtl_precheck.vcd
+    vcd_name: all_lane_crt_rtl_precheck.vcd
     stop_on_fail: true
 
   yosys:
@@ -35,4 +35,4 @@ ll_policy:
   sdc: ../_shared/ll_policy/constraints.sdc
   power_fair_tcl: ../_shared/ll_policy/power_fair.tcl
   power_activity_tcl: ../_shared/ll_policy/power_activity.tcl
-  gpl_cell_padding: 2
+  gpl_cell_padding: 1

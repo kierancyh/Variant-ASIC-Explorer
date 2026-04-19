@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-module rrns_mrc_recon #(
+module rrns_all_lane_mrc_recon #(
     parameter W0        = 2,   // modulus 3
     parameter W1        = 3,   // modulus 5
     parameter W2        = 3,   // modulus 7

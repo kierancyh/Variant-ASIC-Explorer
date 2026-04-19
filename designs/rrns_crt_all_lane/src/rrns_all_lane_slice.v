@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-module rrns_slice #(
+module rrns_all_lane_slice #(
     parameter MODULUS = 3,
     parameter WIDTH   = 2,
     parameter CRNS_EN = 1

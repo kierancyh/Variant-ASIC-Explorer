@@ -1,20 +1,21 @@
 // Function: Control Unit for RNS ALU (CU FSM)
 
 // Controls the pipeline: 
-//   IDLE -> LOAD -> ENCODE -> ALU -> RECON -> OUT -> DONE
+//   IDLE -> LOAD -> ENCODE -> ALU -> RECON -> CORRECT -> OUT -> DONE
 
 // Controls:
-//   - rrns_encoder.v   (Encode_EN / Encode_Done)
-//   - rrns_slice.v     (ALU_EN / ALU_Done)
-//   - rrns_crt_recon.v (CRT_Start / CRT_Done)
-//   - rrns_mrc_recon.v (MRC_Start / MRC_Done)
+//   - rrns_all_lane_encoder.v      (Encode_EN / Encode_Done)
+//   - rrns_all_lane_slice.v        (ALU_EN / ALU_Done)
+//   - rrns_all_lane_crt_recon.v    (CRT_Start / CRT_Done)
+//   - rrns_all_lane_mrc_recon.v    (MRC_Start / MRC_Done)
+//   - rrns_all_lane_corrector_*.v  (Correct_Start / Correct_Done)
 
 // Reconstruction Selection (runtime):
 //   Recon_Mode = 0 -> use CRT
 //   Recon_Mode = 1 -> use MRC
 
 `timescale 1ns/1ps
-module rrns_cu (
+module rrns_all_lane_cu (
     // Clock & Reset
     input  wire clk,
     input  wire rst_n,
@@ -30,6 +31,7 @@ module rrns_cu (
     input  wire ALU_Done,      // All ALU slices finished
     input  wire CRT_Done,      // CRT reconstructor finished
     input  wire MRC_Done,      // MRC reconstructor finished
+    input  wire Correct_Done,  // Corrector finished
 
     // Control outputs to Data Path 
     output reg  Load_IN,       // Latch A, B, OpSel into input regs
@@ -37,18 +39,20 @@ module rrns_cu (
     output reg  ALU_EN,        // Enable modular ALUs
     output reg  CRT_Start,     // Trigger CRT reconstruction
     output reg  MRC_Start,     // Trigger MRC reconstruction
+    output reg  Correct_Start, // Trigger registered correction stage
     output reg  Out_EN         // Latch final X_out register
 );
 
     // State Encoding
     localparam [2:0]
-        S_IDLE   = 3'd0,
-        S_LOAD   = 3'd1,
-        S_ENCODE = 3'd2,
-        S_ALU    = 3'd3,
-        S_RECON  = 3'd4,
-        S_OUT    = 3'd5,
-        S_DONE   = 3'd6;
+        S_IDLE    = 3'd0,
+        S_LOAD    = 3'd1,
+        S_ENCODE  = 3'd2,
+        S_ALU     = 3'd3,
+        S_RECON   = 3'd4,
+        S_CORRECT = 3'd5,
+        S_OUT     = 3'd6,
+        S_DONE    = 3'd7;
 
     reg [2:0] state, next_state;
 
@@ -68,13 +72,14 @@ module rrns_cu (
         next_state = state; // Default hold
 
         case (state)
-            S_IDLE:   if (Start)       next_state = S_LOAD;
-            S_LOAD:                    next_state = S_ENCODE;
-            S_ENCODE: if (Encode_Done) next_state = S_ALU;
-            S_ALU:    if (ALU_Done)    next_state = S_RECON;
-            S_RECON:  if (recon_done_sel) next_state = S_OUT;
-            S_OUT:                     next_state = S_DONE;
-            S_DONE:   if (!Start)      next_state = S_IDLE;
+            S_IDLE:    if (Start)          next_state = S_LOAD;
+            S_LOAD:                       next_state = S_ENCODE;
+            S_ENCODE:  if (Encode_Done)   next_state = S_ALU;
+            S_ALU:     if (ALU_Done)      next_state = S_RECON;
+            S_RECON:   if (recon_done_sel) next_state = S_CORRECT;
+            S_CORRECT: if (Correct_Done)  next_state = S_OUT;
+            S_OUT:                        next_state = S_DONE;
+            S_DONE:    if (!Start)        next_state = S_IDLE;
             default:                   next_state = S_IDLE;
         endcase
     end
@@ -85,10 +90,11 @@ module rrns_cu (
         Load_IN   = 1'b0;
         Encode_EN = 1'b0;
         ALU_EN    = 1'b0;
-        CRT_Start = 1'b0;
-        MRC_Start = 1'b0;
-        Out_EN    = 1'b0;
-        Done      = 1'b0;
+        CRT_Start     = 1'b0;
+        MRC_Start     = 1'b0;
+        Correct_Start = 1'b0;
+        Out_EN        = 1'b0;
+        Done          = 1'b0;
 
         case (state)
             S_LOAD:   Load_IN   = 1'b1;
@@ -102,8 +108,9 @@ module rrns_cu (
                     MRC_Start = 1'b1;
             end
 
-            S_OUT:  Out_EN = 1'b1;
-            S_DONE: Done   = 1'b1;
+            S_CORRECT: Correct_Start = 1'b1;
+            S_OUT:     Out_EN        = 1'b1;
+            S_DONE:    Done          = 1'b1;
         endcase
     end
 

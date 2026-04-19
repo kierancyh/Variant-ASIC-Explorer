@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-module rrns_encoder #(
+module rrns_all_lane_encoder #(
     parameter WIDTH_IN = 16,
 
     parameter M0 = 3,

@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
 
-module tb_rrns_top_mrc;
+module tb_rrns_all_lane_top_crt;
 
     reg clk;
     reg rst_n;
@@ -16,7 +16,14 @@ module tb_rrns_top_mrc;
     wire        Corrected;
     wire        Valid;
 
-    rrns_top_mrc #(
+    integer tests_run;
+    integer tests_failed;
+    reg signed [3:0] force_r4_hold;
+    reg signed [4:0] force_r5_hold;
+    integer force_lane_hold;
+    integer lane;
+
+    rrns_all_lane_top_crt #(
         .WIDTH_IN (16),
         .M0(3), .M1(5), .M2(7), .M3(11), .M4(13), .M5(17),
         .W0(2), .W1(3), .W2(3), .W3(4), .W4(4), .W5(5)
@@ -40,19 +47,14 @@ module tb_rrns_top_mrc;
     end
 
     initial begin
-        $dumpfile("mrc_rtl_precheck.vcd");
-        $dumpvars(0, tb_rrns_top_mrc);
+        $dumpfile("all_lane_crt_rtl_precheck.vcd");
+        $dumpvars(0, tb_rrns_all_lane_top_crt);
     end
 
-    task run_test;
+    task automatic pulse_start;
         input [1:0]         op;
         input signed [15:0] a;
         input signed [15:0] b;
-        input signed [15:0] expected_x;
-        input               expected_err;
-        input               expected_corr;
-        input               expected_valid;
-        input [255:0]       name;
     begin
         Op_Sel = op;
         A_in   = a;
@@ -62,9 +64,41 @@ module tb_rrns_top_mrc;
         Start = 1'b1;
         @(negedge clk);
         Start = 1'b0;
+    end
+    endtask
 
-        @(posedge Done);
-        #1;
+    task automatic wait_done_or_timeout;
+        input [255:0] name;
+        input integer max_cycles;
+        output integer timed_out;
+        integer cycles;
+    begin
+        timed_out = 0;
+        cycles    = 0;
+
+        while ((Done !== 1'b1) && (cycles < max_cycles)) begin
+            @(posedge clk);
+            cycles = cycles + 1;
+        end
+
+        if (Done !== 1'b1) begin
+            timed_out    = 1;
+            tests_run    = tests_run + 1;
+            tests_failed = tests_failed + 1;
+            $display("[%0t] TEST %s | TIMEOUT waiting for Done after %0d cycles", $time, name, max_cycles);
+            $display("  -> FAIL");
+        end
+    end
+    endtask
+
+    task automatic record_result;
+        input [255:0]       name;
+        input signed [15:0] expected_x;
+        input               expected_err;
+        input               expected_corr;
+        input               expected_valid;
+    begin
+        tests_run = tests_run + 1;
 
         $display("[%0t] TEST %s | X_out=%0d exp=%0d err=%b exp_err=%b corr=%b exp_corr=%b valid=%b exp_valid=%b",
             $time, name, $signed(X_out), $signed(expected_x),
@@ -73,94 +107,120 @@ module tb_rrns_top_mrc;
         if (($signed(X_out) !== $signed(expected_x)) ||
             (Error_Detected !== expected_err) ||
             (Corrected !== expected_corr) ||
-            (Valid !== expected_valid))
+            (Valid !== expected_valid)) begin
+            tests_failed = tests_failed + 1;
             $display("  -> FAIL");
-        else
+        end else begin
             $display("  -> PASS");
+        end
 
         @(negedge clk);
     end
     endtask
 
-    task run_fault_test_red13;
+    task automatic run_test;
+        input [1:0]         op;
+        input signed [15:0] a;
+        input signed [15:0] b;
+        input signed [15:0] expected_x;
+        input               expected_err;
+        input               expected_corr;
+        input               expected_valid;
+        input [255:0]       name;
+        integer timed_out;
+    begin
+        pulse_start(op, a, b);
+        wait_done_or_timeout(name, 60, timed_out);
+        if (!timed_out) begin
+            #1;
+            record_result(name, expected_x, expected_err, expected_corr, expected_valid);
+        end
+    end
+    endtask
+
+    task automatic run_fault_test_red13;
         input [1:0]         op;
         input signed [15:0] a;
         input signed [15:0] b;
         input signed [15:0] expected_x;
         input [255:0]       name;
         reg signed [3:0] corrupted_r4;
+        integer timed_out;
     begin
-        Op_Sel = op; A_in = a; B_in = b;
-
-        @(negedge clk); Start = 1'b1;
-        @(negedge clk); Start = 1'b0;
+        pulse_start(op, a, b);
 
         @(posedge dut.ALU_Done_all);
         #1;
 
         corrupted_r4 = dut.z_r4 + 1;
-        force dut.z_r4 = corrupted_r4;
+        force_r4_hold = corrupted_r4;
+        force dut.z_r4 = force_r4_hold;
 
-        @(posedge Done);
-        #1;
+        wait_done_or_timeout(name, 60, timed_out);
+        if (!timed_out) begin
+            tests_run = tests_run + 1;
+            $display("[%0t] TEST %s | X_out=%0d exp=%0d forced_r13=%0d err=%b corr=%b valid=%b",
+                $time, name, $signed(X_out), $signed(expected_x), $signed(force_r4_hold),
+                Error_Detected, Corrected, Valid);
 
-        $display("[%0t] TEST %s | X_out=%0d exp=%0d forced_r13=%0d err=%b corr=%b valid=%b",
-            $time, name, $signed(X_out), $signed(expected_x), $signed(corrupted_r4),
-            Error_Detected, Corrected, Valid);
-
-        if (($signed(X_out) !== $signed(expected_x)) ||
-            (Error_Detected !== 1'b1) ||
-            (Corrected !== 1'b1) ||
-            (Valid !== 1'b1))
-            $display("  -> FAIL");
-        else
-            $display("  -> PASS");
+            if (($signed(X_out) !== $signed(expected_x)) ||
+                (Error_Detected !== 1'b1) ||
+                (Corrected !== 1'b1) ||
+                (Valid !== 1'b1)) begin
+                tests_failed = tests_failed + 1;
+                $display("  -> FAIL");
+            end else begin
+                $display("  -> PASS");
+            end
+        end
 
         release dut.z_r4;
         @(negedge clk);
     end
     endtask
 
-    task run_fault_test_red17;
+    task automatic run_fault_test_red17;
         input [1:0]         op;
         input signed [15:0] a;
         input signed [15:0] b;
         input signed [15:0] expected_x;
         input [255:0]       name;
         reg signed [4:0] corrupted_r5;
+        integer timed_out;
     begin
-        Op_Sel = op; A_in = a; B_in = b;
-
-        @(negedge clk); Start = 1'b1;
-        @(negedge clk); Start = 1'b0;
+        pulse_start(op, a, b);
 
         @(posedge dut.ALU_Done_all);
         #1;
 
         corrupted_r5 = dut.z_r5 + 1;
-        force dut.z_r5 = corrupted_r5;
+        force_r5_hold = corrupted_r5;
+        force dut.z_r5 = force_r5_hold;
 
-        @(posedge Done);
-        #1;
+        wait_done_or_timeout(name, 60, timed_out);
+        if (!timed_out) begin
+            tests_run = tests_run + 1;
+            $display("[%0t] TEST %s | X_out=%0d exp=%0d forced_r17=%0d err=%b corr=%b valid=%b",
+                $time, name, $signed(X_out), $signed(expected_x), $signed(force_r5_hold),
+                Error_Detected, Corrected, Valid);
 
-        $display("[%0t] TEST %s | X_out=%0d exp=%0d forced_r17=%0d err=%b corr=%b valid=%b",
-            $time, name, $signed(X_out), $signed(expected_x), $signed(corrupted_r5),
-            Error_Detected, Corrected, Valid);
-
-        if (($signed(X_out) !== $signed(expected_x)) ||
-            (Error_Detected !== 1'b1) ||
-            (Corrected !== 1'b1) ||
-            (Valid !== 1'b1))
-            $display("  -> FAIL");
-        else
-            $display("  -> PASS");
+            if (($signed(X_out) !== $signed(expected_x)) ||
+                (Error_Detected !== 1'b1) ||
+                (Corrected !== 1'b1) ||
+                (Valid !== 1'b1)) begin
+                tests_failed = tests_failed + 1;
+                $display("  -> FAIL");
+            end else begin
+                $display("  -> PASS");
+            end
+        end
 
         release dut.z_r5;
         @(negedge clk);
     end
     endtask
 
-    task run_fault_test_base_lane;
+    task automatic run_fault_test_base_lane;
         input integer       lane_idx;
         input [1:0]         op;
         input signed [15:0] a;
@@ -169,11 +229,9 @@ module tb_rrns_top_mrc;
         input [255:0]       name;
         integer original_lane;
         integer corrupted_lane;
+        integer timed_out;
     begin
-        Op_Sel = op; A_in = a; B_in = b;
-
-        @(negedge clk); Start = 1'b1;
-        @(negedge clk); Start = 1'b0;
+        pulse_start(op, a, b);
 
         @(posedge dut.ALU_Done_all);
         #1;
@@ -182,39 +240,46 @@ module tb_rrns_top_mrc;
             0: begin
                 original_lane  = dut.z_r0;
                 corrupted_lane = (original_lane != 0) ? 0 : 1;
-                force dut.z_r0 = corrupted_lane;
+                force_lane_hold = corrupted_lane;
+                force dut.z_r0 = force_lane_hold;
             end
             1: begin
                 original_lane  = dut.z_r1;
                 corrupted_lane = (original_lane != 0) ? 0 : 1;
-                force dut.z_r1 = corrupted_lane;
+                force_lane_hold = corrupted_lane;
+                force dut.z_r1 = force_lane_hold;
             end
             2: begin
                 original_lane  = dut.z_r2;
                 corrupted_lane = (original_lane != 0) ? 0 : 1;
-                force dut.z_r2 = corrupted_lane;
+                force_lane_hold = corrupted_lane;
+                force dut.z_r2 = force_lane_hold;
             end
             default: begin
                 original_lane  = dut.z_r3;
                 corrupted_lane = (original_lane != 0) ? 0 : 1;
-                force dut.z_r3 = corrupted_lane;
+                force_lane_hold = corrupted_lane;
+                force dut.z_r3 = force_lane_hold;
             end
         endcase
 
-        @(posedge Done);
-        #1;
+        wait_done_or_timeout(name, 60, timed_out);
+        if (!timed_out) begin
+            tests_run = tests_run + 1;
+            $display("[%0t] TEST %s | lane=%0d X_out=%0d exp=%0d orig_lane=%0d forced_lane=%0d err=%b corr=%b valid=%b",
+                $time, name, lane_idx, $signed(X_out), $signed(expected_x),
+                original_lane, force_lane_hold, Error_Detected, Corrected, Valid);
 
-        $display("[%0t] TEST %s | lane=%0d X_out=%0d exp=%0d orig_lane=%0d forced_lane=%0d err=%b corr=%b valid=%b",
-            $time, name, lane_idx, $signed(X_out), $signed(expected_x),
-            original_lane, corrupted_lane, Error_Detected, Corrected, Valid);
-
-        if (($signed(X_out) !== $signed(expected_x)) ||
-            (Error_Detected !== 1'b1) ||
-            (Corrected !== 1'b1) ||
-            (Valid !== 1'b1))
-            $display("  -> FAIL");
-        else
-            $display("  -> PASS");
+            if (($signed(X_out) !== $signed(expected_x)) ||
+                (Error_Detected !== 1'b1) ||
+                (Corrected !== 1'b1) ||
+                (Valid !== 1'b1)) begin
+                tests_failed = tests_failed + 1;
+                $display("  -> FAIL");
+            end else begin
+                $display("  -> PASS");
+            end
+        end
 
         case (lane_idx)
             0: release dut.z_r0;
@@ -227,13 +292,26 @@ module tb_rrns_top_mrc;
     end
     endtask
 
-    integer lane;
+    task automatic finish_report;
+        input [255:0] banner;
+    begin
+        $display("%s", banner);
+        $display("[CRT RTL] SUMMARY | total=%0d failed=%0d passed=%0d", tests_run, tests_failed, tests_run - tests_failed);
+        #20;
+        if (tests_failed != 0)
+            $fatal(1, "CRT RTL bench had %0d failing tests", tests_failed);
+        else
+            $finish;
+    end
+    endtask
 
     initial begin
-        Start  = 1'b0;
-        Op_Sel = 2'b00;
-        A_in   = 16'd0;
-        B_in   = 16'd0;
+        Start        = 1'b0;
+        Op_Sel       = 2'b00;
+        A_in         = 16'd0;
+        B_in         = 16'd0;
+        tests_run    = 0;
+        tests_failed = 0;
 
         rst_n = 1'b0;
         repeat (5) @(negedge clk);
@@ -271,9 +349,7 @@ module tb_rrns_top_mrc;
             run_fault_test_base_lane(lane, 2'b10, 16'd14,   16'd20,    16'd280,  "MUL2_BASE_FAULT_CORR");
         end
 
-        $display("MRC RRNS correction-stage tests completed.");
-        #20;
-        $finish;
+        finish_report("CRT RRNS correction-stage tests completed.");
     end
 
 endmodule

@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-module rrns_crt_recon #(
+module rrns_all_lane_crt_recon #(
     parameter W0        = 2,
     parameter W1        = 3,
     parameter W2        = 3,
