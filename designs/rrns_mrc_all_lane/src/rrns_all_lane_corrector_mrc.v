@@ -216,8 +216,10 @@ module rrns_all_lane_corrector_mrc #(
         integer xs;
         begin
             xs = $signed(x);
-            if (xs < 0)
-                xs = xs + M_BASE;
+            // Compare the centered reconstruction against the redundant channels
+            // using the actual signed value. Adding M_BASE here is wrong because
+            // 1155 is not congruent to 0 modulo 13, so negative in-range results
+            // would be shifted to the wrong redundant residue.
             x_mod13_from_centered = norm_mod(xs, M4);
         end
     endfunction
@@ -227,8 +229,7 @@ module rrns_all_lane_corrector_mrc #(
         integer xs;
         begin
             xs = $signed(x);
-            if (xs < 0)
-                xs = xs + M_BASE;
+            // Same centered-value comparison rule for mod-17.
             x_mod17_from_centered = norm_mod(xs, M5);
         end
     endfunction
@@ -256,6 +257,8 @@ module rrns_all_lane_corrector_mrc #(
             integer t3_i;
             integer x3_i;
             integer t4_i;
+            integer x_pos_i;
+            integer x_ctr_i;
             x1_i = b0_w;
             t2_i = norm_mod((b1_w - norm_mod(x1_i, M1)), M1);
             t2_i = norm_mod(t2_i * 2, M1);          // inv(3 mod 5) = 2
@@ -267,8 +270,14 @@ module rrns_all_lane_corrector_mrc #(
             t4_i = norm_mod((b3_w - norm_mod(x3_i, M3)), M3);
             t4_i = norm_mod(t4_i * 2, M3);          // inv(105 mod 11) = 2
 
-            exp13_w = norm_mod(x3_i + t4_i, M4);           // 105 mod 13 = 1
-            exp17_w = norm_mod(x3_i + (3 * t4_i), M5);     // 105 mod 17 = 3
+            x_pos_i = x3_i + (105 * t4_i);
+            if (x_pos_i > (M_BASE / 2))
+                x_ctr_i = x_pos_i - M_BASE;
+            else
+                x_ctr_i = x_pos_i;
+
+            exp13_w = norm_mod(x_ctr_i, M4);
+            exp17_w = norm_mod(x_ctr_i, M5);
         end
 
         hit_w = (exp13_w == n4_r) && (exp17_w == n5_r);
