@@ -37,52 +37,46 @@ module rrns_all_lane_corrector_crt #(
     localparam integer M4        = 13;
     localparam integer M5        = 17;
     localparam integer M_BASE    = 1155;
-    localparam integer HALF_BASE = M_BASE / 2;
 
-    localparam [3:0]
-        S_IDLE     = 4'd0,
-        S_PREP     = 4'd1,
-        S_LOAD13   = 4'd2,
-        S_PRED13   = 4'd3,
-        S_LOAD17   = 4'd4,
-        S_PRED17   = 4'd5,
-        S_COMPARE  = 4'd6,
-        S_RESOLVE  = 4'd7,
-        S_DONE     = 4'd8;
+    localparam [2:0]
+        S_IDLE    = 3'd0,
+        S_PREP    = 3'd1,
+        S_EVAL    = 3'd2,
+        S_RESOLVE = 3'd3,
+        S_DONE    = 3'd4;
 
-    reg [3:0] state;
+    reg [2:0] state;
 
-    reg       start_d;
-    wire      start_pulse = Correct_Start & ~start_d;
-
-    reg [1:0] lane_idx_r;
-    reg       winner_found_r;
-    reg       conflict_found_r;
-    reg [1:0] winner_lane_r;
-    reg [3:0] winner_res_r;
+    reg start_d;
+    wire start_pulse = Correct_Start & ~start_d;
 
     reg [1:0] n0_r;
     reg [2:0] n1_r;
     reg [2:0] n2_r;
     reg [3:0] n3_r;
+    reg [3:0] n4_r;
+    reg [4:0] n5_r;
 
     reg       chk13_r;
     reg       chk17_r;
 
-    reg [4:0] src_ref_r;
-    reg [4:0] verify_ref_r;
+    reg [1:0] lane_idx_r;
+    reg [3:0] cand_val_r;
 
-    reg signed [13:0] cand13_x_r;
-    reg               cand13_ok_r;
-    reg [3:0]         cand13_res_r;
+    reg       winner_found_r;
+    reg       conflict_found_r;
+    reg [1:0] winner_lane_r;
+    reg [3:0] winner_res_r;
 
-    reg signed [13:0] cand17_x_r;
-    reg               cand17_ok_r;
-    reg [3:0]         cand17_res_r;
+    reg [1:0] b0_w;
+    reg [2:0] b1_w;
+    reg [2:0] b2_w;
+    reg [3:0] b3_w;
+    reg [3:0] exp13_w;
+    reg [4:0] exp17_w;
+    reg       hit_w;
 
-    integer accept_now;
-
-    function integer norm_mod_int;
+    function integer norm_mod;
         input integer x;
         input integer m;
         integer t;
@@ -90,7 +84,7 @@ module rrns_all_lane_corrector_crt #(
             t = x % m;
             if (t < 0)
                 t = t + m;
-            norm_mod_int = t;
+            norm_mod = t;
         end
     endfunction
 
@@ -99,27 +93,11 @@ module rrns_all_lane_corrector_crt #(
         input integer p;
         integer t;
         begin
-            t = norm_mod_int(x, p);
+            t = norm_mod(x, p);
             if (t > (p / 2))
                 center_with_modulus = t - p;
             else
                 center_with_modulus = t;
-        end
-    endfunction
-
-    function integer in_base_range;
-        input integer x;
-        begin
-            in_base_range = (x >= -HALF_BASE) && (x <= HALF_BASE);
-        end
-    endfunction
-
-    function integer red_ok;
-        input integer x;
-        input integer r;
-        input integer m;
-        begin
-            red_ok = (norm_mod_int(x, m) == norm_mod_int(r, m));
         end
     endfunction
 
@@ -130,7 +108,7 @@ module rrns_all_lane_corrector_crt #(
                 -1: canon_r0 = 2'd2;
                  0: canon_r0 = 2'd0;
                  1: canon_r0 = 2'd1;
-                default: canon_r0 = norm_mod_int($signed(x), M0);
+                default: canon_r0 = norm_mod($signed(x), M0);
             endcase
         end
     endfunction
@@ -144,7 +122,7 @@ module rrns_all_lane_corrector_crt #(
                  0: canon_r1 = 3'd0;
                  1: canon_r1 = 3'd1;
                  2: canon_r1 = 3'd2;
-                default: canon_r1 = norm_mod_int($signed(x), M1);
+                default: canon_r1 = norm_mod($signed(x), M1);
             endcase
         end
     endfunction
@@ -160,7 +138,7 @@ module rrns_all_lane_corrector_crt #(
                  1: canon_r2 = 3'd1;
                  2: canon_r2 = 3'd2;
                  3: canon_r2 = 3'd3;
-                default: canon_r2 = norm_mod_int($signed(x), M2);
+                default: canon_r2 = norm_mod($signed(x), M2);
             endcase
         end
     endfunction
@@ -180,7 +158,7 @@ module rrns_all_lane_corrector_crt #(
                  3: canon_r3 = 4'd3;
                  4: canon_r3 = 4'd4;
                  5: canon_r3 = 4'd5;
-                default: canon_r3 = norm_mod_int($signed(x), M3);
+                default: canon_r3 = norm_mod($signed(x), M3);
             endcase
         end
     endfunction
@@ -202,7 +180,7 @@ module rrns_all_lane_corrector_crt #(
                  4: canon_r4 = 4'd4;
                  5: canon_r4 = 4'd5;
                  6: canon_r4 = 4'd6;
-                default: canon_r4 = norm_mod_int($signed(x), M4);
+                default: canon_r4 = norm_mod($signed(x), M4);
             endcase
         end
     endfunction
@@ -228,109 +206,100 @@ module rrns_all_lane_corrector_crt #(
                  6: canon_r5 = 5'd6;
                  7: canon_r5 = 5'd7;
                  8: canon_r5 = 5'd8;
-                default: canon_r5 = norm_mod_int($signed(x), M5);
+                default: canon_r5 = norm_mod($signed(x), M5);
             endcase
         end
     endfunction
 
-    function integer candidate_x_13;
-        input [1:0] lane;
-        input integer n0;
-        input integer n1;
-        input integer n2;
-        input integer n3;
-        input integer ref13;
+    function [3:0] x_mod13_from_centered;
+        input signed [OUT_WIDTH-1:0] x;
+        integer xs;
         begin
-            case (lane)
-                2'd0: candidate_x_13 = center_with_modulus(
-                    (n1*1001*1 + n2*715*1 + n3*455*3 + ref13*385*5), 5005
-                );
-                2'd1: candidate_x_13 = center_with_modulus(
-                    (n0*1001*2 + n2*429*4 + n3*273*5 + ref13*231*4), 3003
-                );
-                2'd2: candidate_x_13 = center_with_modulus(
-                    (n0*715*1 + n1*429*4 + n3*195*7 + ref13*165*3), 2145
-                );
-                default: candidate_x_13 = center_with_modulus(
-                    (n0*455*2 + n1*273*2 + n2*195*6 + ref13*105*1), 1365
-                );
-            endcase
+            xs = $signed(x);
+            if (xs < 0)
+                xs = xs + M_BASE;
+            x_mod13_from_centered = norm_mod(xs, M4);
         end
     endfunction
 
-    function integer candidate_x_17;
-        input [1:0] lane;
-        input integer n0;
-        input integer n1;
-        input integer n2;
-        input integer n3;
-        input integer ref17;
+    function [4:0] x_mod17_from_centered;
+        input signed [OUT_WIDTH-1:0] x;
+        integer xs;
         begin
-            case (lane)
-                2'd0: candidate_x_17 = center_with_modulus(
-                    (n1*1309*4 + n2*935*2 + n3*595*1 + ref17*385*14), 6545
-                );
-                2'd1: candidate_x_17 = center_with_modulus(
-                    (n0*1309*1 + n2*561*1 + n3*357*9 + ref17*231*12), 3927
-                );
-                2'd2: candidate_x_17 = center_with_modulus(
-                    (n0*935*2 + n1*561*1 + n3*255*6 + ref17*165*10), 2805
-                );
-                default: candidate_x_17 = center_with_modulus(
-                    (n0*595*1 + n1*357*3 + n2*255*5 + ref17*105*6), 1785
-                );
-            endcase
+            xs = $signed(x);
+            if (xs < 0)
+                xs = xs + M_BASE;
+            x_mod17_from_centered = norm_mod(xs, M5);
         end
     endfunction
 
-    function [3:0] residue_for_lane;
-        input [1:0] lane;
-        input integer x;
-        begin
-            case (lane)
-                2'd0: residue_for_lane = norm_mod_int(x, M0);
-                2'd1: residue_for_lane = norm_mod_int(x, M1);
-                2'd2: residue_for_lane = norm_mod_int(x, M2);
-                default: residue_for_lane = norm_mod_int(x, M3);
-            endcase
-        end
-    endfunction
+    // Compute the expected redundant residues from a candidate base residue vector
+    // using a tiny mixed-radix forward engine. This stays in residue space and never
+    // reconstructs the full X candidate.
+    always @* begin
+        b0_w = n0_r;
+        b1_w = n1_r;
+        b2_w = n2_r;
+        b3_w = n3_r;
 
-    always @(posedge clk) begin : p_seq
-        integer cand_tmp;
+        case (lane_idx_r)
+            2'd0: b0_w = cand_val_r[1:0];
+            2'd1: b1_w = cand_val_r[2:0];
+            2'd2: b2_w = cand_val_r[2:0];
+            default: b3_w = cand_val_r[3:0];
+        endcase
+
+        begin : predict_reds
+            integer x1_i;
+            integer t2_i;
+            integer x2_i;
+            integer t3_i;
+            integer x3_i;
+            integer t4_i;
+            x1_i = b0_w;
+            t2_i = norm_mod((b1_w - norm_mod(x1_i, M1)), M1);
+            t2_i = norm_mod(t2_i * 2, M1);          // inv(3 mod 5) = 2
+            x2_i = x1_i + (3 * t2_i);
+
+            t3_i = norm_mod((b2_w - norm_mod(x2_i, M2)), M2);
+            x3_i = x2_i + (15 * t3_i);              // inv(15 mod 7) = 1
+
+            t4_i = norm_mod((b3_w - norm_mod(x3_i, M3)), M3);
+            t4_i = norm_mod(t4_i * 2, M3);          // inv(105 mod 11) = 2
+
+            exp13_w = norm_mod(x3_i + t4_i, M4);           // 105 mod 13 = 1
+            exp17_w = norm_mod(x3_i + (3 * t4_i), M5);     // 105 mod 17 = 3
+        end
+
+        hit_w = (exp13_w == n4_r) && (exp17_w == n5_r);
+    end
+
+    always @(posedge clk) begin
         if (!rst_n) begin
-            state           <= S_IDLE;
-            start_d         <= 1'b0;
-            Correct_Done    <= 1'b0;
-
-            corr_r0         <= '0;
-            corr_r1         <= '0;
-            corr_r2         <= '0;
-            corr_r3         <= '0;
-            Error_Detected  <= 1'b0;
-            Corrected       <= 1'b0;
-            Valid           <= 1'b0;
-
+            state            <= S_IDLE;
+            start_d          <= 1'b0;
+            Correct_Done     <= 1'b0;
+            corr_r0          <= '0;
+            corr_r1          <= '0;
+            corr_r2          <= '0;
+            corr_r3          <= '0;
+            Error_Detected   <= 1'b0;
+            Corrected        <= 1'b0;
+            Valid            <= 1'b0;
+            chk13_r          <= 1'b0;
+            chk17_r          <= 1'b0;
             lane_idx_r       <= 2'd0;
+            cand_val_r       <= 4'd0;
             winner_found_r   <= 1'b0;
             conflict_found_r <= 1'b0;
             winner_lane_r    <= 2'd0;
             winner_res_r     <= 4'd0;
-
             n0_r             <= '0;
             n1_r             <= '0;
             n2_r             <= '0;
             n3_r             <= '0;
-            chk13_r          <= 1'b0;
-            chk17_r          <= 1'b0;
-            src_ref_r        <= '0;
-            verify_ref_r     <= '0;
-            cand13_x_r       <= '0;
-            cand13_ok_r      <= 1'b0;
-            cand13_res_r     <= '0;
-            cand17_x_r       <= '0;
-            cand17_ok_r      <= 1'b0;
-            cand17_res_r     <= '0;
+            n4_r             <= '0;
+            n5_r             <= '0;
         end else begin
             start_d      <= Correct_Start;
             Correct_Done <= 1'b0;
@@ -342,6 +311,8 @@ module rrns_all_lane_corrector_crt #(
                         n1_r <= canon_r1(r1);
                         n2_r <= canon_r2(r2);
                         n3_r <= canon_r3(r3);
+                        n4_r <= canon_r4(r4);
+                        n5_r <= canon_r5(r5);
 
                         corr_r0 <= r0;
                         corr_r1 <= r1;
@@ -353,15 +324,16 @@ module rrns_all_lane_corrector_crt #(
                         winner_lane_r    <= 2'd0;
                         winner_res_r     <= 4'd0;
                         lane_idx_r       <= 2'd0;
+                        cand_val_r       <= 4'd0;
                         state            <= S_PREP;
                     end
                 end
 
                 S_PREP: begin
-                    chk13_r <= red_ok(X_base, canon_r4(r4), M4);
-                    chk17_r <= red_ok(X_base, canon_r5(r5), M5);
+                    chk13_r <= (x_mod13_from_centered(X_base) == n4_r);
+                    chk17_r <= (x_mod17_from_centered(X_base) == n5_r);
 
-                    if (red_ok(X_base, canon_r4(r4), M4) && red_ok(X_base, canon_r5(r5), M5)) begin
+                    if ((x_mod13_from_centered(X_base) == n4_r) && (x_mod17_from_centered(X_base) == n5_r)) begin
                         corr_r0        <= r0;
                         corr_r1        <= r1;
                         corr_r2        <= r2;
@@ -370,7 +342,7 @@ module rrns_all_lane_corrector_crt #(
                         Corrected      <= 1'b0;
                         Valid          <= 1'b1;
                         state          <= S_DONE;
-                    end else if (red_ok(X_base, canon_r4(r4), M4) ^ red_ok(X_base, canon_r5(r5), M5)) begin
+                    end else if ((x_mod13_from_centered(X_base) == n4_r) ^ (x_mod17_from_centered(X_base) == n5_r)) begin
                         corr_r0        <= r0;
                         corr_r1        <= r1;
                         corr_r2        <= r2;
@@ -383,59 +355,62 @@ module rrns_all_lane_corrector_crt #(
                         Error_Detected   <= 1'b1;
                         Corrected        <= 1'b0;
                         Valid            <= 1'b0;
-                        lane_idx_r       <= 2'd0;
                         winner_found_r   <= 1'b0;
                         conflict_found_r <= 1'b0;
-                        state            <= S_LOAD13;
+                        winner_lane_r    <= 2'd0;
+                        winner_res_r     <= 4'd0;
+                        lane_idx_r       <= 2'd0;
+                        cand_val_r       <= 4'd0;
+                        state            <= S_EVAL;
                     end
                 end
 
-                S_LOAD13: begin
-                    src_ref_r    <= {1'b0, canon_r4(r4)};
-                    verify_ref_r <= canon_r5(r5);
-                    state        <= S_PRED13;
-                end
-
-                S_PRED13: begin
-                    cand_tmp     = candidate_x_13(lane_idx_r, n0_r, n1_r, n2_r, n3_r, src_ref_r[3:0]);
-                    cand13_x_r   <= cand_tmp;
-                    cand13_ok_r  <= in_base_range(cand_tmp) && red_ok(cand_tmp, verify_ref_r, M5);
-                    cand13_res_r <= residue_for_lane(lane_idx_r, cand_tmp);
-                    state        <= S_LOAD17;
-                end
-
-                S_LOAD17: begin
-                    src_ref_r    <= canon_r5(r5);
-                    verify_ref_r <= {1'b0, canon_r4(r4)};
-                    state        <= S_PRED17;
-                end
-
-                S_PRED17: begin
-                    cand_tmp     = candidate_x_17(lane_idx_r, n0_r, n1_r, n2_r, n3_r, src_ref_r);
-                    cand17_x_r   <= cand_tmp;
-                    cand17_ok_r  <= in_base_range(cand_tmp) && red_ok(cand_tmp, verify_ref_r, M4);
-                    cand17_res_r <= residue_for_lane(lane_idx_r, cand_tmp);
-                    state        <= S_COMPARE;
-                end
-
-                S_COMPARE: begin
-                    accept_now = cand13_ok_r && cand17_ok_r && (cand13_x_r == cand17_x_r) && (cand13_res_r == cand17_res_r);
-
-                    if (accept_now) begin
+                S_EVAL: begin
+                    if (hit_w) begin
                         if (!winner_found_r) begin
                             winner_found_r <= 1'b1;
                             winner_lane_r  <= lane_idx_r;
-                            winner_res_r   <= cand13_res_r;
-                        end else begin
+                            winner_res_r   <= cand_val_r;
+                        end else if ((winner_lane_r != lane_idx_r) || (winner_res_r != cand_val_r)) begin
                             conflict_found_r <= 1'b1;
                         end
                     end
 
-                    if ((accept_now && winner_found_r) || conflict_found_r || (lane_idx_r == 2'd3)) begin
+                    if (conflict_found_r || ((winner_found_r && hit_w) && ((winner_lane_r != lane_idx_r) || (winner_res_r != cand_val_r)))) begin
                         state <= S_RESOLVE;
                     end else begin
-                        lane_idx_r <= lane_idx_r + 2'd1;
-                        state      <= S_LOAD13;
+                        case (lane_idx_r)
+                            2'd0: begin
+                                if (cand_val_r == 4'd2) begin
+                                    lane_idx_r <= 2'd1;
+                                    cand_val_r <= 4'd0;
+                                end else begin
+                                    cand_val_r <= cand_val_r + 4'd1;
+                                end
+                            end
+                            2'd1: begin
+                                if (cand_val_r == 4'd4) begin
+                                    lane_idx_r <= 2'd2;
+                                    cand_val_r <= 4'd0;
+                                end else begin
+                                    cand_val_r <= cand_val_r + 4'd1;
+                                end
+                            end
+                            2'd2: begin
+                                if (cand_val_r == 4'd6) begin
+                                    lane_idx_r <= 2'd3;
+                                    cand_val_r <= 4'd0;
+                                end else begin
+                                    cand_val_r <= cand_val_r + 4'd1;
+                                end
+                            end
+                            default: begin
+                                if (cand_val_r == 4'd10)
+                                    state <= S_RESOLVE;
+                                else
+                                    cand_val_r <= cand_val_r + 4'd1;
+                            end
+                        endcase
                     end
                 end
 
@@ -453,7 +428,6 @@ module rrns_all_lane_corrector_crt #(
                         Error_Detected <= 1'b1;
                         Corrected      <= 1'b1;
                         Valid          <= 1'b1;
-
                         case (winner_lane_r)
                             2'd0: corr_r0 <= center_with_modulus(winner_res_r, M0);
                             2'd1: corr_r1 <= center_with_modulus(winner_res_r, M1);
