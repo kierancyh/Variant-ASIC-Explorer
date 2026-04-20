@@ -1,0 +1,10 @@
+{
+  "variant": "designs_rrns_crt_all_lane",
+  "clock_ns_requested": 47.0,
+  "github_run_id": "24657119302",
+  "github_run_number": "132",
+  "commit_sha": "8379539017a857992d0a0ba0966f7db0a7a73aed",
+  "synth_strategy_override": "",
+  "stage_label": "refine-1",
+  "artifact_name": "refine_1-designs_rrns_crt_all_lane"
+}
