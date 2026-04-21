@@ -327,19 +327,15 @@ module final_alu_corrector #(
                     chk17_r <= (x_mod17_from_centered(X_base) == n5_r);
 
                     if ((x_mod13_from_centered(X_base) == n4_r) && (x_mod17_from_centered(X_base) == n5_r)) begin
-                        corr_r0        <= r0;
-                        corr_r1        <= r1;
-                        corr_r2        <= r2;
-                        corr_r3        <= r3;
+                        // corr_r* were already loaded from the original base residues
+                        // in S_IDLE when this correction job started. Keep them stable
+                        // here to avoid a wide rewrite-all mux/update network.
                         Error_Detected <= 1'b0;
                         Corrected      <= 1'b0;
                         Valid          <= 1'b1;
                         state          <= S_DONE;
                     end else if ((x_mod13_from_centered(X_base) == n4_r) ^ (x_mod17_from_centered(X_base) == n5_r)) begin
-                        corr_r0        <= r0;
-                        corr_r1        <= r1;
-                        corr_r2        <= r2;
-                        corr_r3        <= r3;
+                        // Preserve the captured original residues and only update status.
                         Error_Detected <= 1'b1;
                         Corrected      <= 1'b1;
                         Valid          <= 1'b1;
@@ -408,19 +404,19 @@ module final_alu_corrector #(
                 end
 
                 S_RESOLVE: begin
-                    corr_r0 <= r0;
-                    corr_r1 <= r1;
-                    corr_r2 <= r2;
-                    corr_r3 <= r3;
-
                     if (!winner_found_r || conflict_found_r) begin
                         Error_Detected <= 1'b1;
                         Corrected      <= 1'b0;
                         Valid          <= 1'b0;
+                        // Leave corr_r* unchanged. They already hold the original
+                        // base residues captured at S_IDLE for this job.
                     end else begin
                         Error_Detected <= 1'b1;
                         Corrected      <= 1'b1;
                         Valid          <= 1'b1;
+                        // Only update the single winning lane. Avoid rewriting the
+                        // full corrected residue bank, which synthesizes into a
+                        // broad correction-apply mux/select network.
                         case (winner_lane_r)
                             2'd0: corr_r0 <= center_with_modulus(winner_res_r, M0);
                             2'd1: corr_r1 <= center_with_modulus(winner_res_r, M1);
