@@ -15,13 +15,13 @@ module final_alu_encoder #(
     input  wire                               rst_n,
     input  wire                               Encode_EN,
     input  wire signed [WIDTH_IN-1:0]         x,
-    output reg                                Encode_Done,
-    output reg signed [`FINAL_ALU_RES_W-1:0]  base_r0,
-    output reg signed [`FINAL_ALU_RES_W-1:0]  base_r1,
-    output reg signed [`FINAL_ALU_RES_W-1:0]  base_r2,
-    output reg signed [`FINAL_ALU_RES_W-1:0]  base_r3,
-    output reg signed [`FINAL_ALU_RES_W-1:0]  red_r0,
-    output reg signed [`FINAL_ALU_RES_W-1:0]  red_r1
+    output wire                               Encode_Done,
+    output wire signed [`FINAL_ALU_RES_W-1:0] base_r0,
+    output wire signed [`FINAL_ALU_RES_W-1:0] base_r1,
+    output wire signed [`FINAL_ALU_RES_W-1:0] base_r2,
+    output wire signed [`FINAL_ALU_RES_W-1:0] base_r3,
+    output wire signed [`FINAL_ALU_RES_W-1:0] red_r0,
+    output wire signed [`FINAL_ALU_RES_W-1:0] red_r1
 );
 
     function integer norm_std;
@@ -46,27 +46,30 @@ module final_alu_encoder #(
         end
     endfunction
 
-    always @(posedge clk) begin
-        if (!rst_n) begin
-            Encode_Done <= 1'b0;
-            base_r0 <= '0;
-            base_r1 <= '0;
-            base_r2 <= '0;
-            base_r3 <= '0;
-            red_r0  <= '0;
-            red_r1  <= '0;
-        end else begin
-            Encode_Done <= 1'b0;
-            if (Encode_EN) begin
-                base_r0 <= (CRNS_EN ? norm_bal(x, M0) : norm_std(x, M0));
-                base_r1 <= (CRNS_EN ? norm_bal(x, M1) : norm_std(x, M1));
-                base_r2 <= (CRNS_EN ? norm_bal(x, M2) : norm_std(x, M2));
-                base_r3 <= (CRNS_EN ? norm_bal(x, M3) : norm_std(x, M3));
-                red_r0  <= (CRNS_EN ? norm_bal(x, M4) : norm_std(x, M4));
-                red_r1  <= (CRNS_EN ? norm_bal(x, M5) : norm_std(x, M5));
-                Encode_Done <= 1'b1;
-            end
+    function integer enc_mod;
+        input integer val;
+        input integer m;
+        begin
+            enc_mod = CRNS_EN ? norm_bal(val, m) : norm_std(val, m);
         end
-    end
+    endfunction
+
+    // Hardening change:
+    //   Keep residue generation purely combinational from the already-captured
+    //   A_reg/B_reg values in final_alu_top. This removes the large Encode_EN
+    //   broadcast from the encoder datapath and leaves Encode_EN as a tiny stage
+    //   handshake only.
+    assign base_r0 = enc_mod(x, M0);
+    assign base_r1 = enc_mod(x, M1);
+    assign base_r2 = enc_mod(x, M2);
+    assign base_r3 = enc_mod(x, M3);
+    assign red_r0  = enc_mod(x, M4);
+    assign red_r1  = enc_mod(x, M5);
+
+    // Stage-complete handshake only. No large internal fanout remains on this net.
+    assign Encode_Done = Encode_EN;
+
+    // Keep ports for compatibility with the existing benches and integration.
+    wire _unused_ok = &{1'b0, clk, rst_n};
 
 endmodule
