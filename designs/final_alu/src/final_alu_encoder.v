@@ -1,27 +1,18 @@
 `timescale 1ns/1ps
 `include "final_alu_cfg.svh"
 
-module final_alu_encoder #(
+(* keep_hierarchy = "yes" *)
+module final_alu_residue_lane_encoder #(
     parameter WIDTH_IN = `FINAL_ALU_DATA_W,
-    parameter M0 = `FINAL_ALU_BASE_MOD_0,
-    parameter M1 = `FINAL_ALU_BASE_MOD_1,
-    parameter M2 = `FINAL_ALU_BASE_MOD_2,
-    parameter M3 = `FINAL_ALU_BASE_MOD_3,
-    parameter M4 = `FINAL_ALU_RED_MOD_0,
-    parameter M5 = `FINAL_ALU_RED_MOD_1,
-    parameter CRNS_EN = 1
+    parameter RES_W    = `FINAL_ALU_RES_W,
+    parameter MODULUS  = 3,
+    parameter CRNS_EN  = 1
 )(
-    input  wire                               clk,
-    input  wire                               rst_n,
-    input  wire                               Encode_EN,
-    input  wire signed [WIDTH_IN-1:0]         x,
-    output wire                               Encode_Done,
-    output wire signed [`FINAL_ALU_RES_W-1:0] base_r0,
-    output wire signed [`FINAL_ALU_RES_W-1:0] base_r1,
-    output wire signed [`FINAL_ALU_RES_W-1:0] base_r2,
-    output wire signed [`FINAL_ALU_RES_W-1:0] base_r3,
-    output wire signed [`FINAL_ALU_RES_W-1:0] red_r0,
-    output wire signed [`FINAL_ALU_RES_W-1:0] red_r1
+    input  wire                              clk,
+    input  wire                              rst_n,
+    input  wire                              Encode_EN,
+    input  wire signed [WIDTH_IN-1:0]        x,
+    output reg  signed [RES_W-1:0]           r_out
 );
 
     function integer norm_std;
@@ -46,30 +37,86 @@ module final_alu_encoder #(
         end
     endfunction
 
-    function integer enc_mod;
-        input integer val;
-        input integer m;
-        begin
-            enc_mod = CRNS_EN ? norm_bal(val, m) : norm_std(val, m);
+    integer lane_tmp;
+    always @(posedge clk) begin
+        if (!rst_n) begin
+            r_out <= '0;
+        end else if (Encode_EN) begin
+            lane_tmp = CRNS_EN ? norm_bal(x, MODULUS) : norm_std(x, MODULUS);
+            r_out <= lane_tmp[RES_W-1:0];
         end
-    endfunction
+    end
 
-    // Hardening change:
-    //   Keep residue generation purely combinational from the already-captured
-    //   A_reg/B_reg values in final_alu_top. This removes the large Encode_EN
-    //   broadcast from the encoder datapath and leaves Encode_EN as a tiny stage
-    //   handshake only.
-    assign base_r0 = enc_mod(x, M0);
-    assign base_r1 = enc_mod(x, M1);
-    assign base_r2 = enc_mod(x, M2);
-    assign base_r3 = enc_mod(x, M3);
-    assign red_r0  = enc_mod(x, M4);
-    assign red_r1  = enc_mod(x, M5);
+endmodule
 
-    // Stage-complete handshake only. No large internal fanout remains on this net.
-    assign Encode_Done = Encode_EN;
+(* keep_hierarchy = "yes" *)
+module final_alu_encoder #(
+    parameter WIDTH_IN = `FINAL_ALU_DATA_W,
+    parameter M0 = `FINAL_ALU_BASE_MOD_0,
+    parameter M1 = `FINAL_ALU_BASE_MOD_1,
+    parameter M2 = `FINAL_ALU_BASE_MOD_2,
+    parameter M3 = `FINAL_ALU_BASE_MOD_3,
+    parameter M4 = `FINAL_ALU_RED_MOD_0,
+    parameter M5 = `FINAL_ALU_RED_MOD_1,
+    parameter CRNS_EN = 1
+)(
+    input  wire                               clk,
+    input  wire                               rst_n,
+    input  wire                               Encode_EN,
+    input  wire signed [WIDTH_IN-1:0]         x,
+    output reg                                Encode_Done,
+    output wire signed [`FINAL_ALU_RES_W-1:0] base_r0,
+    output wire signed [`FINAL_ALU_RES_W-1:0] base_r1,
+    output wire signed [`FINAL_ALU_RES_W-1:0] base_r2,
+    output wire signed [`FINAL_ALU_RES_W-1:0] base_r3,
+    output wire signed [`FINAL_ALU_RES_W-1:0] red_r0,
+    output wire signed [`FINAL_ALU_RES_W-1:0] red_r1
+);
 
-    // Keep ports for compatibility with the existing benches and integration.
-    wire _unused_ok = &{1'b0, clk, rst_n};
+    // Lane-local residue encoders reduce global shared boolean logic.
+    // This encourages synthesis/P&R to keep each modulus path physically local
+    // instead of building one large shared combinational encoder cone.
+    (* keep_hierarchy = "yes" *) final_alu_residue_lane_encoder #(
+        .WIDTH_IN(WIDTH_IN), .RES_W(`FINAL_ALU_RES_W), .MODULUS(M0), .CRNS_EN(CRNS_EN)
+    ) u_lane_enc_0 (
+        .clk(clk), .rst_n(rst_n), .Encode_EN(Encode_EN), .x(x), .r_out(base_r0)
+    );
+
+    (* keep_hierarchy = "yes" *) final_alu_residue_lane_encoder #(
+        .WIDTH_IN(WIDTH_IN), .RES_W(`FINAL_ALU_RES_W), .MODULUS(M1), .CRNS_EN(CRNS_EN)
+    ) u_lane_enc_1 (
+        .clk(clk), .rst_n(rst_n), .Encode_EN(Encode_EN), .x(x), .r_out(base_r1)
+    );
+
+    (* keep_hierarchy = "yes" *) final_alu_residue_lane_encoder #(
+        .WIDTH_IN(WIDTH_IN), .RES_W(`FINAL_ALU_RES_W), .MODULUS(M2), .CRNS_EN(CRNS_EN)
+    ) u_lane_enc_2 (
+        .clk(clk), .rst_n(rst_n), .Encode_EN(Encode_EN), .x(x), .r_out(base_r2)
+    );
+
+    (* keep_hierarchy = "yes" *) final_alu_residue_lane_encoder #(
+        .WIDTH_IN(WIDTH_IN), .RES_W(`FINAL_ALU_RES_W), .MODULUS(M3), .CRNS_EN(CRNS_EN)
+    ) u_lane_enc_3 (
+        .clk(clk), .rst_n(rst_n), .Encode_EN(Encode_EN), .x(x), .r_out(base_r3)
+    );
+
+    (* keep_hierarchy = "yes" *) final_alu_residue_lane_encoder #(
+        .WIDTH_IN(WIDTH_IN), .RES_W(`FINAL_ALU_RES_W), .MODULUS(M4), .CRNS_EN(CRNS_EN)
+    ) u_lane_enc_4 (
+        .clk(clk), .rst_n(rst_n), .Encode_EN(Encode_EN), .x(x), .r_out(red_r0)
+    );
+
+    (* keep_hierarchy = "yes" *) final_alu_residue_lane_encoder #(
+        .WIDTH_IN(WIDTH_IN), .RES_W(`FINAL_ALU_RES_W), .MODULUS(M5), .CRNS_EN(CRNS_EN)
+    ) u_lane_enc_5 (
+        .clk(clk), .rst_n(rst_n), .Encode_EN(Encode_EN), .x(x), .r_out(red_r1)
+    );
+
+    always @(posedge clk) begin
+        if (!rst_n)
+            Encode_Done <= 1'b0;
+        else
+            Encode_Done <= Encode_EN;
+    end
 
 endmodule
