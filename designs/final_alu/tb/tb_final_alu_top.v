@@ -47,7 +47,7 @@ module tb_final_alu_top;
     end
 
     initial begin
-        $dumpfile("sim/waves/final_alu_rtl_precheck.vcd");
+        $dumpfile("final_alu_rtl_precheck.vcd");
         $dumpvars(0, tb_final_alu_top);
     end
 

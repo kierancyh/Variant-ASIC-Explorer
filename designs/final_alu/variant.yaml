@@ -9,7 +9,12 @@ clock:
   max_ns_cap: 200
 
 sources:
-  - src/**/*.v
+  - src/final_alu_cu.v
+  - src/final_alu_encoder.v
+  - src/final_alu_slice.v
+  - src/final_alu_recon.v
+  - src/final_alu_corrector.v
+  - src/final_alu_top.v
 
 precheck:
   icarus:
