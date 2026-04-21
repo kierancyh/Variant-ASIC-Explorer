@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-`include "src/final_alu_cfg.svh"
+`include "final_alu_cfg.svh"
 
 module final_alu_corrector #(
     parameter OUT_WIDTH = `FINAL_ALU_DATA_W

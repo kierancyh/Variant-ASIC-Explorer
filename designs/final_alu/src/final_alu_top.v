@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-`include "src/final_alu_cfg.svh"
+`include "final_alu_cfg.svh"
 
 module final_alu_top #(
     parameter WIDTH_IN  = `FINAL_ALU_DATA_W,
