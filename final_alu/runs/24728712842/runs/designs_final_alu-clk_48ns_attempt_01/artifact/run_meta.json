@@ -1,0 +1,10 @@
+{
+  "variant": "designs_final_alu",
+  "clock_ns_requested": 48.0,
+  "github_run_id": "24728712842",
+  "github_run_number": "143",
+  "commit_sha": "adae8e02c22c695b6b6bb3fb48f0155be48dcec7",
+  "synth_strategy_override": "",
+  "stage_label": "refine-1",
+  "artifact_name": "refine_1-designs_final_alu"
+}
