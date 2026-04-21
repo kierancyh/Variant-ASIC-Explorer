@@ -1,42 +1,42 @@
 `timescale 1ns/1ps
-`include "final_alu_cfg.svh"
-
 module final_alu_corrector #(
-    parameter OUT_WIDTH = `FINAL_ALU_DATA_W
+    parameter W0        = 2,
+    parameter W1        = 3,
+    parameter W2        = 3,
+    parameter W3        = 4,
+    parameter W4        = 4,
+    parameter W5        = 5,
+    parameter OUT_WIDTH = 16
 )(
-    input  wire                               clk,
-    input  wire                               rst_n,
-    input  wire                               Correct_Start,
-    input  wire signed [OUT_WIDTH-1:0]        X_base,
+    input  wire                          clk,
+    input  wire                          rst_n,
+    input  wire                          Correct_Start,
+    input  wire signed [OUT_WIDTH-1:0]   X_base,
 
-    input  wire signed [`FINAL_ALU_RES_W-1:0] base_r0,
-    input  wire signed [`FINAL_ALU_RES_W-1:0] base_r1,
-    input  wire signed [`FINAL_ALU_RES_W-1:0] base_r2,
-    input  wire signed [`FINAL_ALU_RES_W-1:0] base_r3,
-    input  wire signed [`FINAL_ALU_RES_W-1:0] red_r0,
-    input  wire signed [`FINAL_ALU_RES_W-1:0] red_r1,
+    input  wire signed [W0-1:0]          r0,
+    input  wire signed [W1-1:0]          r1,
+    input  wire signed [W2-1:0]          r2,
+    input  wire signed [W3-1:0]          r3,
+    input  wire signed [W4-1:0]          r4,
+    input  wire signed [W5-1:0]          r5,
 
-    output wire signed [`FINAL_ALU_RES_W-1:0] corr_base_r0,
-    output wire signed [`FINAL_ALU_RES_W-1:0] corr_base_r1,
-    output wire signed [`FINAL_ALU_RES_W-1:0] corr_base_r2,
-    output wire signed [`FINAL_ALU_RES_W-1:0] corr_base_r3,
-    output reg                                Error_Detected,
-    output reg                                Corrected,
-    output reg                                Valid,
-    output reg                                Correct_Done
+    output reg  signed [W0-1:0]          corr_r0,
+    output reg  signed [W1-1:0]          corr_r1,
+    output reg  signed [W2-1:0]          corr_r2,
+    output reg  signed [W3-1:0]          corr_r3,
+    output reg                           Error_Detected,
+    output reg                           Corrected,
+    output reg                           Valid,
+    output reg                           Correct_Done
 );
 
-    localparam integer N_BASE     = `FINAL_ALU_N_BASE;
-    localparam integer N_RED      = `FINAL_ALU_N_RED;
-    localparam integer RES_W      = `FINAL_ALU_RES_W;
-
-    localparam integer M0         = 3;
-    localparam integer M1         = 5;
-    localparam integer M2         = 7;
-    localparam integer M3         = 11;
-    localparam integer M4         = 13;
-    localparam integer M5         = 17;
-    localparam integer M_BASE     = `FINAL_ALU_M_BASE;
+    localparam integer M0        = 3;
+    localparam integer M1        = 5;
+    localparam integer M2        = 7;
+    localparam integer M3        = 11;
+    localparam integer M4        = 13;
+    localparam integer M5        = 17;
+    localparam integer M_BASE    = 1155;
 
     localparam [2:0]
         S_IDLE    = 3'd0,
@@ -49,13 +49,6 @@ module final_alu_corrector #(
 
     reg start_d;
     wire start_pulse = Correct_Start & ~start_d;
-
-    wire signed [RES_W-1:0] r0 = base_r0;
-    wire signed [RES_W-1:0] r1 = base_r1;
-    wire signed [RES_W-1:0] r2 = base_r2;
-    wire signed [RES_W-1:0] r3 = base_r3;
-    wire signed [RES_W-1:0] r4 = red_r0;
-    wire signed [RES_W-1:0] r5 = red_r1;
 
     reg [1:0] n0_r;
     reg [2:0] n1_r;
@@ -83,16 +76,6 @@ module final_alu_corrector #(
     reg [4:0] exp17_w;
     reg       hit_w;
 
-    reg signed [RES_W-1:0] corr_r0_i;
-    reg signed [RES_W-1:0] corr_r1_i;
-    reg signed [RES_W-1:0] corr_r2_i;
-    reg signed [RES_W-1:0] corr_r3_i;
-
-    assign corr_base_r0 = corr_r0_i;
-    assign corr_base_r1 = corr_r1_i;
-    assign corr_base_r2 = corr_r2_i;
-    assign corr_base_r3 = corr_r3_i;
-
     function integer norm_mod;
         input integer x;
         input integer m;
@@ -119,7 +102,7 @@ module final_alu_corrector #(
     endfunction
 
     function [1:0] canon_r0;
-        input signed [RES_W-1:0] x;
+        input signed [W0-1:0] x;
         begin
             case ($signed(x))
                 -1: canon_r0 = 2'd2;
@@ -131,7 +114,7 @@ module final_alu_corrector #(
     endfunction
 
     function [2:0] canon_r1;
-        input signed [RES_W-1:0] x;
+        input signed [W1-1:0] x;
         begin
             case ($signed(x))
                 -2: canon_r1 = 3'd3;
@@ -145,7 +128,7 @@ module final_alu_corrector #(
     endfunction
 
     function [2:0] canon_r2;
-        input signed [RES_W-1:0] x;
+        input signed [W2-1:0] x;
         begin
             case ($signed(x))
                 -3: canon_r2 = 3'd4;
@@ -161,7 +144,7 @@ module final_alu_corrector #(
     endfunction
 
     function [3:0] canon_r3;
-        input signed [RES_W-1:0] x;
+        input signed [W3-1:0] x;
         begin
             case ($signed(x))
                 -5: canon_r3 = 4'd6;
@@ -181,7 +164,7 @@ module final_alu_corrector #(
     endfunction
 
     function [3:0] canon_r4;
-        input signed [RES_W-1:0] x;
+        input signed [W4-1:0] x;
         begin
             case ($signed(x))
                 -6: canon_r4 = 4'd7;
@@ -203,7 +186,7 @@ module final_alu_corrector #(
     endfunction
 
     function [4:0] canon_r5;
-        input signed [RES_W-1:0] x;
+        input signed [W5-1:0] x;
         begin
             case ($signed(x))
                 -8: canon_r5 = 5'd9;
@@ -233,6 +216,10 @@ module final_alu_corrector #(
         integer xs;
         begin
             xs = $signed(x);
+            // Compare the centered reconstruction against the redundant channels
+            // using the actual signed value. Adding M_BASE here is wrong because
+            // 1155 is not congruent to 0 modulo 13, so negative in-range results
+            // would be shifted to the wrong redundant residue.
             x_mod13_from_centered = norm_mod(xs, M4);
         end
     endfunction
@@ -242,17 +229,14 @@ module final_alu_corrector #(
         integer xs;
         begin
             xs = $signed(x);
+            // Same centered-value comparison rule for mod-17.
             x_mod17_from_centered = norm_mod(xs, M5);
         end
     endfunction
 
-    initial begin
-        if (N_BASE != 4 || N_RED != 2) begin
-            $display("ERROR: Stage 1 final_alu_corrector only supports 4 base lanes and 2 redundant lanes.");
-            $finish;
-        end
-    end
-
+    // Compute the expected redundant residues from a candidate base residue vector
+    // using a tiny mixed-radix forward engine. This stays in residue space and never
+    // reconstructs the full X candidate.
     always @* begin
         b0_w = n0_r;
         b1_w = n1_r;
@@ -301,30 +285,14 @@ module final_alu_corrector #(
 
     always @(posedge clk) begin
         if (!rst_n) begin
-            state            <= S_IDLE;
-            start_d          <= 1'b0;
-            Correct_Done     <= 1'b0;
-            corr_r0_i        <= '0;
-            corr_r1_i        <= '0;
-            corr_r2_i        <= '0;
-            corr_r3_i        <= '0;
-            Error_Detected   <= 1'b0;
-            Corrected        <= 1'b0;
-            Valid            <= 1'b0;
-            chk13_r          <= 1'b0;
-            chk17_r          <= 1'b0;
-            lane_idx_r       <= 2'd0;
-            cand_val_r       <= 4'd0;
-            winner_found_r   <= 1'b0;
-            conflict_found_r <= 1'b0;
-            winner_lane_r    <= 2'd0;
-            winner_res_r     <= 4'd0;
-            n0_r             <= '0;
-            n1_r             <= '0;
-            n2_r             <= '0;
-            n3_r             <= '0;
-            n4_r             <= '0;
-            n5_r             <= '0;
+            // Reset only the small control/status state.
+            // Large datapath registers are overwritten on a new Correct_Start pulse.
+            state          <= S_IDLE;
+            start_d        <= 1'b0;
+            Correct_Done   <= 1'b0;
+            Error_Detected <= 1'b0;
+            Corrected      <= 1'b0;
+            Valid          <= 1'b0;
         end else begin
             start_d      <= Correct_Start;
             Correct_Done <= 1'b0;
@@ -339,10 +307,10 @@ module final_alu_corrector #(
                         n4_r <= canon_r4(r4);
                         n5_r <= canon_r5(r5);
 
-                        corr_r0_i <= r0;
-                        corr_r1_i <= r1;
-                        corr_r2_i <= r2;
-                        corr_r3_i <= r3;
+                        corr_r0 <= r0;
+                        corr_r1 <= r1;
+                        corr_r2 <= r2;
+                        corr_r3 <= r3;
 
                         winner_found_r   <= 1'b0;
                         conflict_found_r <= 1'b0;
@@ -359,19 +327,19 @@ module final_alu_corrector #(
                     chk17_r <= (x_mod17_from_centered(X_base) == n5_r);
 
                     if ((x_mod13_from_centered(X_base) == n4_r) && (x_mod17_from_centered(X_base) == n5_r)) begin
-                        corr_r0_i      <= r0;
-                        corr_r1_i      <= r1;
-                        corr_r2_i      <= r2;
-                        corr_r3_i      <= r3;
+                        corr_r0        <= r0;
+                        corr_r1        <= r1;
+                        corr_r2        <= r2;
+                        corr_r3        <= r3;
                         Error_Detected <= 1'b0;
                         Corrected      <= 1'b0;
                         Valid          <= 1'b1;
                         state          <= S_DONE;
                     end else if ((x_mod13_from_centered(X_base) == n4_r) ^ (x_mod17_from_centered(X_base) == n5_r)) begin
-                        corr_r0_i      <= r0;
-                        corr_r1_i      <= r1;
-                        corr_r2_i      <= r2;
-                        corr_r3_i      <= r3;
+                        corr_r0        <= r0;
+                        corr_r1        <= r1;
+                        corr_r2        <= r2;
+                        corr_r3        <= r3;
                         Error_Detected <= 1'b1;
                         Corrected      <= 1'b1;
                         Valid          <= 1'b1;
@@ -440,10 +408,10 @@ module final_alu_corrector #(
                 end
 
                 S_RESOLVE: begin
-                    corr_r0_i <= r0;
-                    corr_r1_i <= r1;
-                    corr_r2_i <= r2;
-                    corr_r3_i <= r3;
+                    corr_r0 <= r0;
+                    corr_r1 <= r1;
+                    corr_r2 <= r2;
+                    corr_r3 <= r3;
 
                     if (!winner_found_r || conflict_found_r) begin
                         Error_Detected <= 1'b1;
@@ -454,10 +422,10 @@ module final_alu_corrector #(
                         Corrected      <= 1'b1;
                         Valid          <= 1'b1;
                         case (winner_lane_r)
-                            2'd0: corr_r0_i <= center_with_modulus(winner_res_r, M0);
-                            2'd1: corr_r1_i <= center_with_modulus(winner_res_r, M1);
-                            2'd2: corr_r2_i <= center_with_modulus(winner_res_r, M2);
-                            default: corr_r3_i <= center_with_modulus(winner_res_r, M3);
+                            2'd0: corr_r0 <= center_with_modulus(winner_res_r, M0);
+                            2'd1: corr_r1 <= center_with_modulus(winner_res_r, M1);
+                            2'd2: corr_r2 <= center_with_modulus(winner_res_r, M2);
+                            default: corr_r3 <= center_with_modulus(winner_res_r, M3);
                         endcase
                     end
                     state <= S_DONE;
