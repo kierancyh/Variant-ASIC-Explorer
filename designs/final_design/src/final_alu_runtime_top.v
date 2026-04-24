@@ -42,6 +42,13 @@ module final_alu_runtime_top #(
         MS_OP_WAIT_CORR  = 4'd9,
         MS_OP_FINAL      = 4'd10;
 
+    /* Range multiplier side-path constants.
+       For 5-bit moduli, the largest base product is below 2^PW.
+       Saturating at 2^PW is therefore always above half_range, so it is
+       sufficient for overflow/range detection without a 24-bit multiplier. */
+    localparam [PW:0] MUL_SAT_MAX    = {1'b1, {PW{1'b0}}};
+    localparam [5:0]  MUL_LAST_COUNT = PW;
+
     reg [3:0] main_state;
     reg [2:0] cfg_state_dbg;
     reg [3:0] op_state_dbg;
@@ -126,14 +133,20 @@ module final_alu_runtime_top #(
     reg               raw_range_error_reg;
     reg  [PW:0]       mul_acc_sat_reg;
     reg  [PW:0]       mul_mcand_sat_reg;
-    reg  [XW-1:0]     mul_mult_reg;
+    reg  [PW:0]       mul_mult_sat_reg;
     reg  [5:0]        mul_count_reg;
-    wire [PW:0]       mul_sat_limit_wire;
     wire [PW:0]       mul_addend_sat_wire;
     wire [PW+1:0]     mul_acc_sum_wire;
     wire [PW:0]       mul_acc_next_sat_wire;
     wire [PW+1:0]     mul_mcand_shift_wire;
     wire [PW:0]       mul_mcand_next_sat_wire;
+    wire [XW-1:0]     a_abs_wire;
+    wire [XW-1:0]     b_abs_wire;
+    wire [XW:0]       a_abs_ext_wire;
+    wire [XW:0]       b_abs_ext_wire;
+    wire [XW:0]       mul_sat_max_ext_wire;
+    wire [PW:0]       a_abs_sat_wire;
+    wire [PW:0]       b_abs_sat_wire;
     wire signed [XW:0] add_true_wire;
     wire signed [XW:0] sub_true_wire;
     wire signed [XW:0] half_range_xw_wire;
@@ -165,14 +178,21 @@ module final_alu_runtime_top #(
 
     assign z_res_flat = {z5_reg, z4_reg, z3_reg, z2_reg, z1_reg, z0_reg};
 
-    assign mul_sat_limit_wire      = {1'b0, half_range_reg} + {{PW{1'b0}}, 1'b1};
-    assign mul_addend_sat_wire     = mul_mult_reg[0] ? mul_mcand_sat_reg : {(PW+1){1'b0}};
+    assign mul_addend_sat_wire     = mul_mult_sat_reg[0] ? mul_mcand_sat_reg : {(PW+1){1'b0}};
     assign mul_acc_sum_wire        = {1'b0, mul_acc_sat_reg} + {1'b0, mul_addend_sat_wire};
-    assign mul_acc_next_sat_wire   = (mul_acc_sum_wire > {1'b0, mul_sat_limit_wire}) ?
-                                     mul_sat_limit_wire : mul_acc_sum_wire[PW:0];
+    assign mul_acc_next_sat_wire   = (mul_acc_sum_wire > {1'b0, MUL_SAT_MAX}) ?
+                                     MUL_SAT_MAX : mul_acc_sum_wire[PW:0];
     assign mul_mcand_shift_wire    = {1'b0, mul_mcand_sat_reg} << 1;
-    assign mul_mcand_next_sat_wire = (mul_mcand_shift_wire > {1'b0, mul_sat_limit_wire}) ?
-                                     mul_sat_limit_wire : mul_mcand_shift_wire[PW:0];
+    assign mul_mcand_next_sat_wire = (mul_mcand_shift_wire > {1'b0, MUL_SAT_MAX}) ?
+                                     MUL_SAT_MAX : mul_mcand_shift_wire[PW:0];
+
+    assign a_abs_wire              = A_in[XW-1] ? ((~A_in) + {{(XW-1){1'b0}}, 1'b1}) : A_in;
+    assign b_abs_wire              = B_in[XW-1] ? ((~B_in) + {{(XW-1){1'b0}}, 1'b1}) : B_in;
+    assign a_abs_ext_wire          = {1'b0, a_abs_wire};
+    assign b_abs_ext_wire          = {1'b0, b_abs_wire};
+    assign mul_sat_max_ext_wire    = {{(XW-PW){1'b0}}, MUL_SAT_MAX};
+    assign a_abs_sat_wire          = (a_abs_ext_wire > mul_sat_max_ext_wire) ? MUL_SAT_MAX : a_abs_ext_wire[PW:0];
+    assign b_abs_sat_wire          = (b_abs_ext_wire > mul_sat_max_ext_wire) ? MUL_SAT_MAX : b_abs_ext_wire[PW:0];
 
     assign add_true_wire           = {A_in[XW-1], A_in} + {B_in[XW-1], B_in};
     assign sub_true_wire           = {A_in[XW-1], A_in} - {B_in[XW-1], B_in};
@@ -332,25 +352,6 @@ module final_alu_runtime_top #(
         end
     endfunction
 
-    function [XW-1:0] abs_xw;
-        input signed [XW-1:0] val;
-        begin
-            abs_xw = val[XW-1] ? ((~val) + {{(XW-1){1'b0}}, 1'b1}) : val;
-        end
-    endfunction
-
-    function [PW:0] sat_abs_xw;
-        input signed [XW-1:0] val;
-        input [PW:0] limit;
-        reg [XW:0] mag_ext;
-        reg [XW:0] limit_ext;
-        begin
-            mag_ext   = {1'b0, abs_xw(val)};
-            limit_ext = {{(XW-PW){1'b0}}, limit};
-            sat_abs_xw = (mag_ext > limit_ext) ? limit : mag_ext[PW:0];
-        end
-    endfunction
-
     assign slice_a_sel = get_lane_res(a_res_flat_reg, lane_idx);
     assign slice_b_sel = get_lane_res(b_res_flat_reg, lane_idx);
     assign slice_m_sel = (lane_idx == 3'd0) ? m0_cfg :
@@ -468,8 +469,8 @@ module final_alu_runtime_top #(
                             default: raw_range_error_reg <= 1'b0;
                         endcase
                         mul_acc_sat_reg   <= {(PW+1){1'b0}};
-                        mul_mcand_sat_reg <= sat_abs_xw(A_in, mul_sat_limit_wire);
-                        mul_mult_reg      <= abs_xw(B_in);
+                        mul_mcand_sat_reg <= a_abs_sat_wire;
+                        mul_mult_sat_reg  <= b_abs_sat_wire;
                         mul_count_reg     <= 6'd0;
                         z0_reg                       <= {WM{1'b0}};
                         z1_reg                       <= {WM{1'b0}};
@@ -529,8 +530,8 @@ module final_alu_runtime_top #(
                     op_state_dbg       <= 4'd1;
                     mul_acc_sat_reg    <= mul_acc_next_sat_wire;
                     mul_mcand_sat_reg  <= mul_mcand_next_sat_wire;
-                    mul_mult_reg       <= {1'b0, mul_mult_reg[XW-1:1]};
-                    if (mul_count_reg == (XW-1)) begin
+                    mul_mult_sat_reg   <= {1'b0, mul_mult_sat_reg[PW:1]};
+                    if (mul_count_reg == MUL_LAST_COUNT) begin
                         raw_range_error_reg <= (mul_acc_next_sat_wire > {1'b0, half_range_reg});
                         main_state          <= MS_OP_START_ENC;
                     end else begin
