@@ -2,7 +2,7 @@
 module final_alu_cfg_checker #(
     parameter integer WM = 5,
     parameter integer XW = 24,
-    parameter integer PW = 32
+    parameter integer PW = 20
 )(
     input  wire                 clk,
     input  wire                 rst_n,
@@ -35,7 +35,11 @@ module final_alu_cfg_checker #(
         ST_DONE         = 5'd11,
         ST_ERROR        = 5'd12;
 
-    localparam [PW-1:0] RANGE_LIMIT = (({{(PW-1){1'b0}}, 1'b1} << (XW-1)) - 1'b1);
+    // With WM=5, the largest legal 4-lane product is 31^4 = 923521,
+    // so the internal product/candidate width can be reduced to PW=20.
+    // Keep the legality limit at the full PW range instead of deriving it
+    // from XW, because XW may be wider than PW.
+    localparam [PW-1:0] RANGE_LIMIT = {PW{1'b1}};
 
     reg [4:0] state;
 

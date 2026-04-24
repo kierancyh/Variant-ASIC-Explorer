@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 module final_alu_corrector_search #(
     parameter integer WM = 5,
-    parameter integer PW = 32
+    parameter integer PW = 20
 )(
     input  wire                 clk,
     input  wire                 rst_n,
@@ -27,9 +27,9 @@ module final_alu_corrector_search #(
     output reg  [PW-1:0]        corrected_candidate_base
 );
 
-    localparam [2:0] ST_IDLE = 3'd0;
-    localparam [2:0] ST_SCAN = 3'd1;
-    localparam [2:0] ST_DONE = 3'd2;
+    localparam [1:0] ST_IDLE = 2'd0;
+    localparam [1:0] ST_SCAN = 2'd1;
+    localparam [1:0] ST_DONE = 2'd2;
 
     wire [WM-1:0] z0 = z_res_flat[(0*WM)+:WM];
     wire [WM-1:0] z1 = z_res_flat[(1*WM)+:WM];
@@ -45,7 +45,7 @@ module final_alu_corrector_search #(
     reg [WM-1:0] lm0, lm1, lm2, lm3, lm4, lm5;
     reg [WM-1:0] lz0, lz1, lz2, lz3, lz4, lz5;
 
-    reg [2:0]  state;
+    reg [1:0]    state;
     reg [PW-1:0] cand;
 
     reg [WM-1:0] p0;
@@ -54,11 +54,6 @@ module final_alu_corrector_search #(
     reg [WM-1:0] p3;
     reg [WM-1:0] p4;
     reg [WM-1:0] p5;
-
-    reg          clean_found;
-    reg          clean_conflict;
-    reg [PW-1:0] clean_candidate;
-    reg [5:0]    clean_mask;
 
     reg          corr_found;
     reg          corr_conflict;
@@ -72,6 +67,23 @@ module final_alu_corrector_search #(
 
     reg [5:0] cmp_mask;
     reg [2:0] cmp_count;
+
+    wire [PW-1:0] one_pw = {{(PW-1){1'b0}}, 1'b1};
+    wire          last_candidate = ((cand + one_pw) >= M_base_q);
+    wire          base_match = (p0 == lz0) && (p1 == lz1) && (p2 == lz2) && (p3 == lz3);
+    wire          corr_this = enable_correction_q && (cmp_count == 3'd1);
+    wire          corr_conflict_final = corr_conflict || (corr_found && corr_this && (cand != corr_candidate));
+    wire          corr_valid_final = enable_correction_q && (corr_found || corr_this) && !corr_conflict_final;
+    wire [PW-1:0] corr_candidate_final = corr_found ? corr_candidate : cand;
+    wire [5:0]    corr_mask_final = corr_found ? corr_mask : cmp_mask;
+    wire          base_found_final = base_found || base_match;
+    wire [PW-1:0] base_candidate_final = base_found ? base_candidate : cand;
+    wire [5:0]    base_mask_final = base_found ? base_mask : cmp_mask;
+    wire [2:0]    base_count_final = base_found ? base_count : cmp_count;
+
+    // usable_subset_bitmap is intentionally retained in the interface for
+    // compatibility with older wrappers. The current sequential corrector scans
+    // candidates directly and does not need the precomputed subset mask.
 
     always @(*) begin
         cmp_mask  = 6'd0;
@@ -99,18 +111,14 @@ module final_alu_corrector_search #(
                         p0 <= {WM{1'b0}}; p1 <= {WM{1'b0}}; p2 <= {WM{1'b0}};
                         p3 <= {WM{1'b0}}; p4 <= {WM{1'b0}}; p5 <= {WM{1'b0}};
 
-                        clean_found <= 1'b0;
-                        clean_conflict <= 1'b0;
-                        clean_candidate <= {PW{1'b0}};
-                        clean_mask <= 6'd0;
-                        corr_found <= 1'b0;
-                        corr_conflict <= 1'b0;
+                        corr_found     <= 1'b0;
+                        corr_conflict  <= 1'b0;
                         corr_candidate <= {PW{1'b0}};
-                        corr_mask <= 6'd0;
-                        base_found <= 1'b0;
+                        corr_mask      <= 6'd0;
+                        base_found     <= 1'b0;
                         base_candidate <= {PW{1'b0}};
-                        base_mask <= 6'd0;
-                        base_count <= 3'd0;
+                        base_mask      <= 6'd0;
+                        base_count     <= 3'd0;
 
                         enable_detection_q <= enable_detection;
                         enable_correction_q <= enable_correction;
@@ -121,7 +129,7 @@ module final_alu_corrector_search #(
                         lz0 <= z0; lz1 <= z1; lz2 <= z2;
                         lz3 <= z3; lz4 <= z4; lz5 <= z5;
 
-                        if (M_base == 0) begin
+                        if (M_base == {PW{1'b0}}) begin
                             residue_error            <= 1'b1;
                             corrected_success        <= 1'b0;
                             uncorrectable            <= 1'b1;
@@ -147,7 +155,7 @@ module final_alu_corrector_search #(
                         corrected_candidate_base <= cand;
                         state                    <= ST_DONE;
                     end else if (cmp_count == 3'd0) begin
-                        // A unique clean candidate is enough. Stop early so large reconfigured bases do not timeout.
+                        // A clean all-lane match is unique enough to stop early.
                         residue_error            <= 1'b0;
                         corrected_success        <= 1'b0;
                         uncorrectable            <= 1'b0;
@@ -157,18 +165,14 @@ module final_alu_corrector_search #(
                         corrected_candidate_base <= cand;
                         state                    <= ST_DONE;
                     end else begin
-                        // Keep the unique base-domain candidate as a safe scalar fallback.
-                        // This preserves range-error behaviour: base lanes may reconstruct a valid
-                        // modulo-M_base scalar even when redundant lanes disagree because the true
-                        // arithmetic result exceeded the signed RRNS range.
-                        if (!base_found && (p0 == lz0) && (p1 == lz1) && (p2 == lz2) && (p3 == lz3)) begin
+                        if (!base_found && base_match) begin
                             base_found     <= 1'b1;
                             base_candidate <= cand;
                             base_mask      <= cmp_mask;
                             base_count     <= cmp_count;
                         end
 
-                        if (enable_correction_q && (cmp_count == 3'd1)) begin
+                        if (corr_this) begin
                             if (!corr_found) begin
                                 corr_found     <= 1'b1;
                                 corr_candidate <= cand;
@@ -178,23 +182,23 @@ module final_alu_corrector_search #(
                             end
                         end
 
-                        if ((cand + {{(PW-1){1'b0}},1'b1}) >= M_base_q) begin
-                            if (enable_correction_q && corr_found && !corr_conflict) begin
+                        if (last_candidate) begin
+                            if (corr_valid_final) begin
                                 residue_error            <= 1'b1;
                                 corrected_success        <= 1'b1;
                                 uncorrectable            <= 1'b0;
-                                corrected_lane_mask      <= corr_mask;
-                                mismatch_mask_out        <= corr_mask;
+                                corrected_lane_mask      <= corr_mask_final;
+                                mismatch_mask_out        <= corr_mask_final;
                                 mismatch_count_out       <= 3'd1;
-                                corrected_candidate_base <= corr_candidate;
-                            end else if (base_found) begin
-                                residue_error            <= (base_count != 3'd0);
+                                corrected_candidate_base <= corr_candidate_final;
+                            end else if (base_found_final) begin
+                                residue_error            <= (base_count_final != 3'd0);
                                 corrected_success        <= 1'b0;
-                                uncorrectable            <= enable_correction_q && (base_count > 3'd1);
+                                uncorrectable            <= enable_correction_q && (base_count_final > 3'd1);
                                 corrected_lane_mask      <= 6'd0;
-                                mismatch_mask_out        <= base_mask;
-                                mismatch_count_out       <= base_count;
-                                corrected_candidate_base <= base_candidate;
+                                mismatch_mask_out        <= base_mask_final;
+                                mismatch_count_out       <= base_count_final;
+                                corrected_candidate_base <= base_candidate_final;
                             end else begin
                                 residue_error            <= 1'b1;
                                 corrected_success        <= 1'b0;
@@ -206,7 +210,7 @@ module final_alu_corrector_search #(
                             end
                             state <= ST_DONE;
                         end else begin
-                            cand <= cand + {{(PW-1){1'b0}},1'b1};
+                            cand <= cand + one_pw;
 
                             if (cand == half_base_q) begin
                                 if ((lm0 <= 1) || (p0 == {WM{1'b0}})) p0 <= {WM{1'b0}}; else p0 <= lm0 - p0;

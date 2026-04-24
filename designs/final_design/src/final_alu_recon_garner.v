@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 module final_alu_recon_garner #(
     parameter integer WM = 5,
-    parameter integer PW = 32
+    parameter integer PW = 20
 )(
     input  wire                 clk,
     input  wire                 rst_n,

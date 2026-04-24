@@ -2,7 +2,7 @@
 module final_alu_runtime_top #(
     parameter integer WM = 5,
     parameter integer XW = 24,
-    parameter integer PW = 32
+    parameter integer PW = 20
 )(
     input  wire                     clk,
     input  wire                     rst_n,
