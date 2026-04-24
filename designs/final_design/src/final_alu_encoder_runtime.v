@@ -26,15 +26,17 @@ module final_alu_encoder_runtime #(
     output reg  [6*WM-1:0]      res_flat
 );
 
-    localparam [2:0]
-        ST_IDLE   = 3'd0,
-        ST_INIT0  = 3'd1,
-        ST_INIT1  = 3'd2,
-        ST_INIT2  = 3'd3,
-        ST_BITS   = 3'd4,
-        ST_STORE  = 3'd5;
+    // Manual one-hot FSM. This prevents start/state from becoming one
+    // high-load mux-select net for the encoder work-register bank.
+    localparam [5:0]
+        ST_IDLE   = 6'b000001,
+        ST_INIT0  = 6'b000010,
+        ST_INIT1  = 6'b000100,
+        ST_INIT2  = 6'b001000,
+        ST_BITS   = 6'b010000,
+        ST_STORE  = 6'b100000;
 
-    reg [2:0]      state;
+    (* keep = "true" *) reg [5:0]      state;
     reg [2:0]      lane_idx;
     reg [5:0]      bit_count;      // XW is 24 in this project envelope
     reg [XW-1:0]   mag_reg;

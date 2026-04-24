@@ -27,13 +27,16 @@ module final_alu_corrector_search #(
     output reg  [PW-1:0]        corrected_candidate_base
 );
 
-    localparam [2:0] ST_IDLE      = 3'd0;
-    localparam [2:0] ST_INIT_CTRL = 3'd1;
-    localparam [2:0] ST_INIT_L01  = 3'd2;
-    localparam [2:0] ST_INIT_L23  = 3'd3;
-    localparam [2:0] ST_INIT_L45  = 3'd4;
-    localparam [2:0] ST_SCAN      = 3'd5;
-    localparam [2:0] ST_DONE      = 3'd6;
+    // Manual one-hot FSM. V11A still produced a large corrector-start/state
+    // mux-select net after routing. One-hot keeps each init/scan/done enable
+    // physically smaller and less shared.
+    localparam [6:0] ST_IDLE      = 7'b0000001;
+    localparam [6:0] ST_INIT_CTRL = 7'b0000010;
+    localparam [6:0] ST_INIT_L01  = 7'b0000100;
+    localparam [6:0] ST_INIT_L23  = 7'b0001000;
+    localparam [6:0] ST_INIT_L45  = 7'b0010000;
+    localparam [6:0] ST_SCAN      = 7'b0100000;
+    localparam [6:0] ST_DONE      = 7'b1000000;
 
     wire [WM-1:0] z0 = z_res_flat[(0*WM)+:WM];
     wire [WM-1:0] z1 = z_res_flat[(1*WM)+:WM];
@@ -49,7 +52,7 @@ module final_alu_corrector_search #(
     reg [WM-1:0] lm0, lm1, lm2, lm3, lm4, lm5;
     reg [WM-1:0] lz0, lz1, lz2, lz3, lz4, lz5;
 
-    reg [2:0]    state;
+    (* keep = "true" *) reg [6:0]    state;
     reg [PW-1:0] cand;
 
     reg [WM-1:0] p0;

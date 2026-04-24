@@ -87,9 +87,27 @@ module final_alu_runtime_top #(
     reg        config_busy_reg;
     reg        config_error_reg;
     reg [3:0]  config_error_code_reg;
-    reg [PW-1:0] M_base_reg;
-    reg [PW-1:0] half_range_reg;
-    reg [14:0] usable_subset_bitmap_reg;
+
+    /*
+     * V12 physical-signoff cleanup:
+     * V11A still produced a very slow config-commit mux-select net for the
+     * duplicated M_base/half-range/bitmap top-level register bank.
+     * The cfg_checker/precompute blocks already hold stable registered outputs
+     * after Config_Valid, and the ALU will not accept operations until then.
+     * Use those checked values directly instead of committing them through a
+     * second wide register bank.
+     */
+    wire [PW-1:0] M_base_live;
+    wire [PW-1:0] half_range_live;
+    wire [14:0]   usable_subset_bitmap_live;
+
+    // Backwards-compatible debug aliases for the existing RTL/GLS testbench.
+    // V12 deliberately removed the physical commit register bank, but the
+    // testbench still probes these historical hierarchical names.  Keep these
+    // as simple wires so they do not recreate the old high-load commit muxes.
+    wire [PW-1:0] M_base_reg;
+    wire [PW-1:0] half_range_reg;
+    wire [14:0]   usable_subset_bitmap_reg;
 
     reg        op_busy_reg;
     reg        error_detected_reg;
@@ -183,6 +201,14 @@ module final_alu_runtime_top #(
 
     assign z_res_flat = {z5_reg, z4_reg, z3_reg, z2_reg, z1_reg, z0_reg};
 
+    assign M_base_live               = checker_M_base;
+    assign half_range_live           = checker_half_range;
+    assign usable_subset_bitmap_live = config_valid_reg ? precomp_bitmap : 15'd0;
+
+    assign M_base_reg               = M_base_live;
+    assign half_range_reg           = half_range_live;
+    assign usable_subset_bitmap_reg = usable_subset_bitmap_live;
+
     assign mul_addend_sat_wire     = mul_mult_sat_reg[0] ? mul_mcand_sat_reg : {(PW+1){1'b0}};
     assign mul_acc_sum_wire        = {1'b0, mul_acc_sat_reg} + {1'b0, mul_addend_sat_wire};
     assign mul_acc_next_sat_wire   = (mul_acc_sum_wire > {1'b0, MUL_SAT_MAX}) ?
@@ -201,7 +227,7 @@ module final_alu_runtime_top #(
 
     assign add_true_wire           = {A_in[XW-1], A_in} + {B_in[XW-1], B_in};
     assign sub_true_wire           = {A_in[XW-1], A_in} - {B_in[XW-1], B_in};
-    assign half_range_xw_wire      = $signed({1'b0, {{(XW-PW){1'b0}}, half_range_reg}});
+    assign half_range_xw_wire      = $signed({1'b0, {{(XW-PW){1'b0}}, half_range_live}});
     assign neg_half_range_xw_wire  = -half_range_xw_wire;
     assign add_range_error_wire    = (add_true_wire > half_range_xw_wire) ||
                                      (add_true_wire < neg_half_range_xw_wire);
@@ -311,8 +337,8 @@ module final_alu_runtime_top #(
         .enable_detection(detect_en_cfg),
         .enable_correction(correct_en_cfg),
         .z_res_flat(z_res_flat),
-        .M_base(M_base_reg),
-        .usable_subset_bitmap(usable_subset_bitmap_reg),
+        .M_base(M_base_live),
+        .usable_subset_bitmap(usable_subset_bitmap_live),
         .m0(m0_cfg),
         .m1(m1_cfg),
         .m2(m2_cfg),
@@ -331,8 +357,8 @@ module final_alu_runtime_top #(
 
     final_alu_range_check #(.XW(XW), .PW(PW)) u_range (
         .raw_range_error(raw_range_error_reg),
-        .M_base(M_base_reg),
-        .half_range(half_range_reg),
+        .M_base(M_base_live),
+        .half_range(half_range_live),
         .candidate_base(corrector_candidate_base),
         .range_error(range_error_wire),
         .x_centered(x_centered_wire)
@@ -384,9 +410,9 @@ module final_alu_runtime_top #(
                 4'h6: cfg_rdata = {{(32-WM){1'b0}}, m5_cfg};
                 4'h7: cfg_rdata = {26'd0, Done, op_busy_reg, config_error_reg, config_busy_reg, config_valid_reg, cfg_loaded_cfg};
                 4'h8: cfg_rdata = {28'd0, config_error_code_reg};
-                4'h9: cfg_rdata = M_base_reg;
-                4'hA: cfg_rdata = half_range_reg;
-                4'hB: cfg_rdata = {17'd0, usable_subset_bitmap_reg};
+                4'h9: cfg_rdata = {{(32-PW){1'b0}}, M_base_live};
+                4'hA: cfg_rdata = {{(32-PW){1'b0}}, half_range_live};
+                4'hB: cfg_rdata = {17'd0, usable_subset_bitmap_live};
                 4'hC: cfg_rdata = {23'd0, last_mismatch_count_reg, last_mismatch_mask_reg};
                 4'hD: cfg_rdata = {26'd0, last_corrected_lane_mask_reg};
                 4'hE: cfg_rdata = {22'd0, cfg_state_dbg_wire, op_state_dbg_wire, lane_idx};
@@ -517,7 +543,6 @@ module final_alu_runtime_top #(
                             config_valid_reg         <= 1'b0;
                             config_error_reg         <= 1'b1;
                             config_error_code_reg    <= checker_error_code;
-                            usable_subset_bitmap_reg <= 15'd0;
                             main_state               <= MS_IDLE;
                         end else begin
                             precomp_start_reg <= 1'b1;
@@ -532,43 +557,24 @@ module final_alu_runtime_top #(
                         config_valid_reg      <= precomp_ok;
                         config_error_reg      <= !precomp_ok;
                         config_error_code_reg <= precomp_ok ? 4'd0 : 4'd6;
+                        config_busy_reg       <= 1'b0;
                         cfg_state_dbg         <= 3'd4;
-                        main_state            <= MS_CFG_COMMIT0;
+                        main_state            <= MS_IDLE;
                     end
                 end
 
                 /*
-                 * Physical-signoff patch:
-                 * V10 committed M_base/half_range/bitmap in one cycle.  In the
-                 * routed netlist that became a single high-load mux-select net
-                 * driving the M_base_reg bank.  Commit the configuration over a
-                 * few tiny states instead.  This only adds four setup cycles and
-                 * does not alter the externally visible final configuration.
+                 * Legacy/unreachable encodings. V12 no longer uses the wide
+                 * config-commit register bank; removing it deletes the routed
+                 * _2124-style max-slew/max-cap mux-select cluster.
                  */
-                MS_CFG_COMMIT0: begin
-                    M_base_reg[9:0] <= checker_M_base[9:0];
-                    main_state      <= MS_CFG_COMMIT1;
-                end
-
-                MS_CFG_COMMIT1: begin
-                    M_base_reg[PW-1:10] <= checker_M_base[PW-1:10];
-                    main_state          <= MS_CFG_COMMIT2;
-                end
-
-                MS_CFG_COMMIT2: begin
-                    half_range_reg[9:0] <= checker_half_range[9:0];
-                    main_state          <= MS_CFG_COMMIT3;
-                end
-
-                MS_CFG_COMMIT3: begin
-                    half_range_reg[PW-1:10] <= checker_half_range[PW-1:10];
-                    main_state              <= MS_CFG_COMMIT4;
-                end
-
+                MS_CFG_COMMIT0,
+                MS_CFG_COMMIT1,
+                MS_CFG_COMMIT2,
+                MS_CFG_COMMIT3,
                 MS_CFG_COMMIT4: begin
-                    usable_subset_bitmap_reg <= precomp_bitmap;
-                    config_busy_reg          <= 1'b0;
-                    main_state               <= MS_IDLE;
+                    config_busy_reg <= 1'b0;
+                    main_state      <= MS_IDLE;
                 end
 
                 MS_OP_MUL_STEP: begin
@@ -577,7 +583,7 @@ module final_alu_runtime_top #(
                     mul_mcand_sat_reg  <= mul_mcand_next_sat_wire;
                     mul_mult_sat_reg   <= {1'b0, mul_mult_sat_reg[PW:1]};
                     if (mul_count_reg == MUL_LAST_COUNT) begin
-                        raw_range_error_reg <= (mul_acc_next_sat_wire > {1'b0, half_range_reg});
+                        raw_range_error_reg <= (mul_acc_next_sat_wire > {1'b0, half_range_live});
                         main_state          <= MS_OP_START_ENC;
                     end else begin
                         mul_count_reg <= mul_count_reg + 6'd1;
