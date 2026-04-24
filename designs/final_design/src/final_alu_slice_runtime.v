@@ -21,6 +21,11 @@ module final_alu_slice_runtime #(
      * area after the encoder was slimmed.  This version keeps the same external
      * handshake but reduces by repeated add/subtract over multiple cycles.
      * Latency increases, area drops substantially.
+     *
+     * Physical-signoff patch:
+     * state/done are the only reset registers.  The arithmetic work registers
+     * are kept in a separate no-reset block so rst_n is not synthesized into
+     * wide self-hold mux select nets for work_s/work_u/mod_u/z_res.
      */
 
     localparam integer IW = (2*WM) + 4;
@@ -46,50 +51,25 @@ module final_alu_slice_runtime #(
             case (state)
                 ST_IDLE: begin
                     if (start) begin
-                        mod_u <= {{(IW-WM){1'b0}}, modulus};
-
-                        if (modulus == {WM{1'b0}}) begin
-                            z_res <= {WM{1'b0}};
+                        if (modulus == {WM{1'b0}})
                             state <= ST_DONE;
-                        end else begin
-                            case (op_sel)
-                                2'b00: begin
-                                    work_s <= $signed({{(IW-WM){1'b0}}, a_res}) +
-                                              $signed({{(IW-WM){1'b0}}, b_res});
-                                end
-                                2'b01: begin
-                                    work_s <= $signed({{(IW-WM){1'b0}}, a_res}) -
-                                              $signed({{(IW-WM){1'b0}}, b_res});
-                                end
-                                2'b10: begin
-                                    work_s <= $signed({{(IW-WM){1'b0}}, a_res}) *
-                                              $signed({{(IW-WM){1'b0}}, b_res});
-                                end
-                                default: begin
-                                    work_s <= {IW{1'b0}};
-                                end
-                            endcase
+                        else
                             state <= ST_FIXN;
-                        end
                     end
                 end
 
                 ST_FIXN: begin
-                    if (work_s < 0) begin
-                        work_s <= work_s + $signed(mod_u);
-                    end else begin
-                        work_u <= work_s[IW-1:0];
-                        state  <= ST_REDU;
-                    end
+                    if (work_s < 0)
+                        state <= ST_FIXN;
+                    else
+                        state <= ST_REDU;
                 end
 
                 ST_REDU: begin
-                    if (work_u >= mod_u) begin
-                        work_u <= work_u - mod_u;
-                    end else begin
-                        z_res <= work_u[WM-1:0];
+                    if (work_u >= mod_u)
+                        state <= ST_REDU;
+                    else
                         state <= ST_DONE;
-                    end
                 end
 
                 ST_DONE: begin
@@ -102,6 +82,57 @@ module final_alu_slice_runtime #(
                 end
             endcase
         end
+    end
+
+    always @(posedge clk) begin
+        case (state)
+            ST_IDLE: begin
+                if (start) begin
+                    mod_u <= {{(IW-WM){1'b0}}, modulus};
+
+                    if (modulus == {WM{1'b0}}) begin
+                        z_res <= {WM{1'b0}};
+                    end else begin
+                        case (op_sel)
+                            2'b00: begin
+                                work_s <= $signed({{(IW-WM){1'b0}}, a_res}) +
+                                          $signed({{(IW-WM){1'b0}}, b_res});
+                            end
+                            2'b01: begin
+                                work_s <= $signed({{(IW-WM){1'b0}}, a_res}) -
+                                          $signed({{(IW-WM){1'b0}}, b_res});
+                            end
+                            2'b10: begin
+                                work_s <= $signed({{(IW-WM){1'b0}}, a_res}) *
+                                          $signed({{(IW-WM){1'b0}}, b_res});
+                            end
+                            default: begin
+                                work_s <= {IW{1'b0}};
+                            end
+                        endcase
+                    end
+                end
+            end
+
+            ST_FIXN: begin
+                if (work_s < 0) begin
+                    work_s <= work_s + $signed(mod_u);
+                end else begin
+                    work_u <= work_s[IW-1:0];
+                end
+            end
+
+            ST_REDU: begin
+                if (work_u >= mod_u) begin
+                    work_u <= work_u - mod_u;
+                end else begin
+                    z_res <= work_u[WM-1:0];
+                end
+            end
+
+            default: begin
+            end
+        endcase
     end
 
 endmodule

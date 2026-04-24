@@ -18,8 +18,9 @@ module final_alu_cfg_precompute #(
     output reg  [14:0]          usable_subset_bitmap
 );
 
-    // The config checker already guarantees the required 4-of-6 subset-product
-    // legality before this block is started. Keep precompute intentionally tiny.
+    // The current runtime corrector scans base candidates directly and no longer
+    // consumes per-subset reconstruction metadata. Keep precompute intentionally
+    // tiny and return the legacy all-usable bitmap for wrapper compatibility.
     always @(posedge clk) begin
         if (!rst_n) begin
             done       <= 1'b0;
