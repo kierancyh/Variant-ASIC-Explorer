@@ -53,7 +53,20 @@ module final_alu_corrector_search #(
     reg [WM-1:0] lz0, lz1, lz2, lz3, lz4, lz5;
 
     (* keep = "true" *) reg [6:0]    state;
-    reg [PW-1:0] cand;
+
+    /*
+     * V13 physical cleanup:
+     * Split the 20-bit candidate counter into two 10-bit banks.  V12A still
+     * had a remaining max-cap hotspot on the synthesized cand hold/update
+     * select (_7664_/Y).  The lower bank advances every scan cycle; the upper
+     * bank advances only on lower-bank wrap, so the router no longer sees one
+     * control net feeding the whole candidate register.
+     */
+    localparam integer CAND_LO_W = 10;
+    localparam integer CAND_HI_W = PW - CAND_LO_W;
+    reg [CAND_LO_W-1:0] cand_lo;
+    reg [CAND_HI_W-1:0] cand_hi;
+    wire [PW-1:0] cand = {cand_hi, cand_lo};
 
     reg [WM-1:0] p0;
     reg [WM-1:0] p1;
@@ -93,8 +106,12 @@ module final_alu_corrector_search #(
 
     wire [PW-1:0] zero_pw = {PW{1'b0}};
     wire [PW-1:0] one_pw = {{(PW-1){1'b0}}, 1'b1};
-    wire [PW-1:0] cand_plus_one = cand + one_pw;
-    wire          last_candidate = (cand_plus_one >= M_base_q);
+    wire [CAND_LO_W-1:0] cand_lo_plus_one = cand_lo + {{(CAND_LO_W-1){1'b0}}, 1'b1};
+    wire                 cand_lo_wrap     = &cand_lo;
+    wire [CAND_HI_W-1:0] cand_hi_plus_one = cand_hi + {{(CAND_HI_W-1){1'b0}}, 1'b1};
+    wire [PW-1:0]        cand_plus_one    = {cand_lo_wrap ? cand_hi_plus_one : cand_hi,
+                                             cand_lo_plus_one};
+    wire                 last_candidate   = (cand_plus_one >= M_base_q);
     wire          next_half_hit = (cand_plus_one == half_base_q);
     wire          base_match = (p0 == lz0) && (p1 == lz1) && (p2 == lz2) && (p3 == lz3);
     wire          corr_this = enable_correction_q && (cmp_count == 3'd1);
@@ -183,7 +200,8 @@ module final_alu_corrector_search #(
     always @(posedge clk) begin
         case (state)
             ST_INIT_CTRL: begin
-                cand <= zero_pw;
+                cand_lo <= {CAND_LO_W{1'b0}};
+                cand_hi <= {CAND_HI_W{1'b0}};
 
                 corr_found     <= 1'b0;
                 corr_conflict  <= 1'b0;
@@ -306,7 +324,9 @@ module final_alu_corrector_search #(
                             corrected_candidate_base <= cand;
                         end
                     end else begin
-                        cand <= cand_plus_one;
+                        cand_lo <= cand_lo_plus_one;
+                        if (cand_lo_wrap)
+                            cand_hi <= cand_hi_plus_one;
                         half_hit0_q <= next_half_hit;
                         half_hit1_q <= next_half_hit;
                         half_hit2_q <= next_half_hit;

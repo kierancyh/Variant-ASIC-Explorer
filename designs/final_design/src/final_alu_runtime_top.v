@@ -33,7 +33,17 @@ module final_alu_runtime_top #(
         MS_IDLE          = 4'd0,
         MS_CFG_WAIT_CHK  = 4'd1,
         MS_CFG_WAIT_PRE  = 4'd2,
-        MS_OP_MUL_STEP   = 4'd3,
+
+        /*
+         * V13 physical cleanup:
+         * Do not update the saturated multiplier accumulator, multiplicand and
+         * multiplier shift register in one wide state.  V12A synthesized a
+         * single large hold/update mux-select for all of those registers
+         * (_5121_/Y in the LibreLane report), causing the remaining max-slew
+         * and max-cap cluster.  Split one multiply bit into three small
+         * micro-states so each state only drives one 21-bit bank.
+         */
+        MS_OP_MUL_ACC    = 4'd3,
         MS_OP_START_ENC  = 4'd4,
         MS_OP_WAIT_ENC   = 4'd5,
         MS_OP_START_LANE = 4'd6,
@@ -41,11 +51,13 @@ module final_alu_runtime_top #(
         MS_OP_START_CORR = 4'd8,
         MS_OP_WAIT_CORR  = 4'd9,
         MS_OP_FINAL      = 4'd10,
-        MS_CFG_COMMIT0   = 4'd11,
-        MS_CFG_COMMIT1   = 4'd12,
-        MS_CFG_COMMIT2   = 4'd13,
-        MS_CFG_COMMIT3   = 4'd14,
-        MS_CFG_COMMIT4   = 4'd15;
+        MS_OP_MUL_MCAND  = 4'd11,
+        MS_OP_MUL_MULT   = 4'd12,
+
+        /* Legacy/unreachable encodings retained as safe fallbacks. */
+        MS_CFG_COMMIT0   = 4'd13,
+        MS_CFG_COMMIT1   = 4'd14,
+        MS_CFG_COMMIT2   = 4'd15;
 
     /* Range multiplier side-path constants.
        For 5-bit moduli, the largest base product is below 2^PW.
@@ -531,7 +543,7 @@ module final_alu_runtime_top #(
                         last_corrected_lane_mask_reg <= 6'd0;
                         residue_error_reg            <= 1'b0;
                         range_error_reg              <= 1'b0;
-                        main_state                   <= (Op_Sel == 2'b10) ? MS_OP_MUL_STEP : MS_OP_START_ENC;
+                        main_state                   <= (Op_Sel == 2'b10) ? MS_OP_MUL_ACC : MS_OP_START_ENC;
                     end
                 end
 
@@ -570,23 +582,36 @@ module final_alu_runtime_top #(
                  */
                 MS_CFG_COMMIT0,
                 MS_CFG_COMMIT1,
-                MS_CFG_COMMIT2,
-                MS_CFG_COMMIT3,
-                MS_CFG_COMMIT4: begin
+                MS_CFG_COMMIT2: begin
                     config_busy_reg <= 1'b0;
                     main_state      <= MS_IDLE;
                 end
 
-                MS_OP_MUL_STEP: begin
-                    op_state_dbg       <= 4'd1;
-                    mul_acc_sat_reg    <= mul_acc_next_sat_wire;
-                    mul_mcand_sat_reg  <= mul_mcand_next_sat_wire;
-                    mul_mult_sat_reg   <= {1'b0, mul_mult_sat_reg[PW:1]};
+                MS_OP_MUL_ACC: begin
+                    op_state_dbg    <= 4'd1;
+                    mul_acc_sat_reg <= mul_acc_next_sat_wire;
+                    main_state      <= MS_OP_MUL_MCAND;
+                end
+
+                MS_OP_MUL_MCAND: begin
+                    op_state_dbg      <= 4'd1;
+                    mul_mcand_sat_reg <= mul_mcand_next_sat_wire;
+                    main_state        <= MS_OP_MUL_MULT;
+                end
+
+                MS_OP_MUL_MULT: begin
+                    op_state_dbg     <= 4'd1;
+                    mul_mult_sat_reg <= {1'b0, mul_mult_sat_reg[PW:1]};
                     if (mul_count_reg == MUL_LAST_COUNT) begin
-                        raw_range_error_reg <= (mul_acc_next_sat_wire > {1'b0, half_range_live});
+                        /*
+                         * mul_acc_sat_reg already contains the accumulator
+                         * produced by the preceding MS_OP_MUL_ACC state.
+                         */
+                        raw_range_error_reg <= (mul_acc_sat_reg > {1'b0, half_range_live});
                         main_state          <= MS_OP_START_ENC;
                     end else begin
                         mul_count_reg <= mul_count_reg + 6'd1;
+                        main_state    <= MS_OP_MUL_ACC;
                     end
                 end
 
