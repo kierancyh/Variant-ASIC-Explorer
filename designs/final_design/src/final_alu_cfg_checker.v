@@ -37,9 +37,9 @@ module final_alu_cfg_checker #(
 
     // With WM=5, the largest legal 4-lane product is 31^4 = 923521,
     // so the internal product/candidate width can be reduced to PW=20.
-    // Keep the legality limit at the full PW range instead of deriving it
-    // from XW, because XW may be wider than PW.
-    localparam [PW-1:0] RANGE_LIMIT = {PW{1'b1}};
+    // The previous RANGE_LIMIT compare was redundant for the current
+    // WM=5/PW=20 envelope: 31^4 = 923521 fits in 20 bits.  Removing that
+    // impossible compare avoids a high-load comparator cone in signoff.
 
     reg [4:0] state;
 
@@ -211,9 +211,6 @@ module final_alu_cfg_checker #(
                     half_range <= (base_acc >> 1);
                     if (base_acc == {PW{1'b0}}) begin
                         cfg_error_code <= 4'd4;
-                        state          <= ST_ERROR;
-                    end else if ((base_acc >> 1) > RANGE_LIMIT) begin
-                        cfg_error_code <= 4'd5;
                         state          <= ST_ERROR;
                     end else begin
                         // Physical-signoff cleanup:

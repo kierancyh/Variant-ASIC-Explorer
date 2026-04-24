@@ -40,7 +40,12 @@ module final_alu_runtime_top #(
         MS_OP_WAIT_LANE  = 4'd7,
         MS_OP_START_CORR = 4'd8,
         MS_OP_WAIT_CORR  = 4'd9,
-        MS_OP_FINAL      = 4'd10;
+        MS_OP_FINAL      = 4'd10,
+        MS_CFG_COMMIT0   = 4'd11,
+        MS_CFG_COMMIT1   = 4'd12,
+        MS_CFG_COMMIT2   = 4'd13,
+        MS_CFG_COMMIT3   = 4'd14,
+        MS_CFG_COMMIT4   = 4'd15;
 
     /* Range multiplier side-path constants.
        For 5-bit moduli, the largest base product is below 2^PW.
@@ -213,7 +218,11 @@ module final_alu_runtime_top #(
     assign Valid             = valid_reg;
     assign Uncorrectable     = uncorrectable_reg;
 
-    assign cfg_write_allow = !Busy && !(cfg_lock_cfg && config_valid_reg);
+    /* Allow configuration writes as soon as the config-register reset domain is released.
+       The local-reset stagger releases rst_main_n last for physical reset fanout
+       isolation. Gating writes with rst_main_n can drop early modulus writes,
+       causing checker error code 1 (modulus <= 1). */
+    assign cfg_write_allow = rst_cfgregs_n && !Busy && !(cfg_lock_cfg && config_valid_reg);
 
     final_alu_cfg_regs #(.WM(WM)) u_cfg_regs (
         .clk(clk),
@@ -398,13 +407,21 @@ module final_alu_runtime_top #(
             rst_slice_n     <= 1'b0;
             rst_corrector_n <= 1'b0;
         end else begin
-            rst_main_n      <= 1'b1;
+            /*
+             * Do not drive every local reset copy with the same expression.
+             * V10 used identical reset-copy flops; Yosys/OpenROAD legally
+             * merged their loads back onto one huge rst_cfgchk_n-style net.
+             * This staggered release makes each reset domain logically unique,
+             * so synthesis keeps the load partitioning.  The top FSM releases
+             * last, after its child engines are already out of reset.
+             */
             rst_cfgregs_n   <= 1'b1;
-            rst_cfgchk_n    <= 1'b1;
-            rst_precomp_n   <= 1'b1;
-            rst_encoder_n   <= 1'b1;
-            rst_slice_n     <= 1'b1;
-            rst_corrector_n <= 1'b1;
+            rst_cfgchk_n    <= rst_cfgregs_n;
+            rst_precomp_n   <= rst_cfgchk_n;
+            rst_encoder_n   <= rst_precomp_n;
+            rst_slice_n     <= rst_encoder_n;
+            rst_corrector_n <= rst_slice_n;
+            rst_main_n      <= rst_corrector_n;
         end
     end
 
@@ -500,8 +517,6 @@ module final_alu_runtime_top #(
                             config_valid_reg         <= 1'b0;
                             config_error_reg         <= 1'b1;
                             config_error_code_reg    <= checker_error_code;
-                            M_base_reg               <= checker_M_base;
-                            half_range_reg           <= checker_half_range;
                             usable_subset_bitmap_reg <= 15'd0;
                             main_state               <= MS_IDLE;
                         end else begin
@@ -514,17 +529,47 @@ module final_alu_runtime_top #(
 
                 MS_CFG_WAIT_PRE: begin
                     if (precomp_done) begin
-                        config_busy_reg          <= 1'b0;
-                        config_valid_reg         <= precomp_ok;
-                        config_error_reg         <= !precomp_ok;
-                        config_error_code_reg    <= precomp_ok ? 4'd0 : 4'd6;
-                        M_base_reg               <= checker_M_base;
-                        half_range_reg           <= checker_half_range;
-                        usable_subset_bitmap_reg <= precomp_bitmap;
-                        main_state               <= MS_IDLE;
+                        config_valid_reg      <= precomp_ok;
+                        config_error_reg      <= !precomp_ok;
+                        config_error_code_reg <= precomp_ok ? 4'd0 : 4'd6;
+                        cfg_state_dbg         <= 3'd4;
+                        main_state            <= MS_CFG_COMMIT0;
                     end
                 end
 
+                /*
+                 * Physical-signoff patch:
+                 * V10 committed M_base/half_range/bitmap in one cycle.  In the
+                 * routed netlist that became a single high-load mux-select net
+                 * driving the M_base_reg bank.  Commit the configuration over a
+                 * few tiny states instead.  This only adds four setup cycles and
+                 * does not alter the externally visible final configuration.
+                 */
+                MS_CFG_COMMIT0: begin
+                    M_base_reg[9:0] <= checker_M_base[9:0];
+                    main_state      <= MS_CFG_COMMIT1;
+                end
+
+                MS_CFG_COMMIT1: begin
+                    M_base_reg[PW-1:10] <= checker_M_base[PW-1:10];
+                    main_state          <= MS_CFG_COMMIT2;
+                end
+
+                MS_CFG_COMMIT2: begin
+                    half_range_reg[9:0] <= checker_half_range[9:0];
+                    main_state          <= MS_CFG_COMMIT3;
+                end
+
+                MS_CFG_COMMIT3: begin
+                    half_range_reg[PW-1:10] <= checker_half_range[PW-1:10];
+                    main_state              <= MS_CFG_COMMIT4;
+                end
+
+                MS_CFG_COMMIT4: begin
+                    usable_subset_bitmap_reg <= precomp_bitmap;
+                    config_busy_reg          <= 1'b0;
+                    main_state               <= MS_IDLE;
+                end
 
                 MS_OP_MUL_STEP: begin
                     op_state_dbg       <= 4'd1;

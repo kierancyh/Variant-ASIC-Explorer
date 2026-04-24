@@ -27,9 +27,13 @@ module final_alu_corrector_search #(
     output reg  [PW-1:0]        corrected_candidate_base
 );
 
-    localparam [1:0] ST_IDLE = 2'd0;
-    localparam [1:0] ST_SCAN = 2'd1;
-    localparam [1:0] ST_DONE = 2'd2;
+    localparam [2:0] ST_IDLE      = 3'd0;
+    localparam [2:0] ST_INIT_CTRL = 3'd1;
+    localparam [2:0] ST_INIT_L01  = 3'd2;
+    localparam [2:0] ST_INIT_L23  = 3'd3;
+    localparam [2:0] ST_INIT_L45  = 3'd4;
+    localparam [2:0] ST_SCAN      = 3'd5;
+    localparam [2:0] ST_DONE      = 3'd6;
 
     wire [WM-1:0] z0 = z_res_flat[(0*WM)+:WM];
     wire [WM-1:0] z1 = z_res_flat[(1*WM)+:WM];
@@ -45,7 +49,7 @@ module final_alu_corrector_search #(
     reg [WM-1:0] lm0, lm1, lm2, lm3, lm4, lm5;
     reg [WM-1:0] lz0, lz1, lz2, lz3, lz4, lz5;
 
-    reg [1:0]    state;
+    reg [2:0]    state;
     reg [PW-1:0] cand;
 
     reg [WM-1:0] p0;
@@ -57,12 +61,12 @@ module final_alu_corrector_search #(
 
     /*
      * Physical-signoff patch:
-     * The old RTL used one shared (cand == half_base_q) comparator result to
-     * steer all six lane-residue update muxes.  In the routed netlist this
-     * became the worst max-slew/max-cap net.  These six kept one-bit registers
-     * duplicate that control locally.  They all carry the same value, but each
-     * bit is consumed by only one lane update cone, so OpenROAD no longer has
-     * to route one long high-load half-hit net across the whole corrector.
+     * Keep lane-local half-hit controls and, in this version, also stagger the
+     * start-time input capture across three small lane groups.  The V10 netlist
+     * still produced one very slow corrector-start mux-select net because the
+     * old single-cycle start captured all six z/lm lanes and several status
+     * banks at once.  These extra init states add only a few cycles, but reduce
+     * the load driven by any one state/start decode.
      */
     (* keep = "true", dont_touch = "true" *) reg half_hit0_q;
     (* keep = "true", dont_touch = "true" *) reg half_hit1_q;
@@ -84,6 +88,7 @@ module final_alu_corrector_search #(
     reg [5:0] cmp_mask;
     reg [2:0] cmp_count;
 
+    wire [PW-1:0] zero_pw = {PW{1'b0}};
     wire [PW-1:0] one_pw = {{(PW-1){1'b0}}, 1'b1};
     wire [PW-1:0] cand_plus_one = cand + one_pw;
     wire          last_candidate = (cand_plus_one >= M_base_q);
@@ -115,13 +120,7 @@ module final_alu_corrector_search #(
         if (p5 != lz5) begin cmp_mask[5] = 1'b1; cmp_count = cmp_count + 3'd1; end
     end
 
-    /*
-     * Reset-minimal control block.
-     * Only state/done are reset here.  Work registers live in the separate
-     * no-reset block below.  This avoids the previous synthesis pattern where
-     * rst_n was folded into the self-hold mux for almost every corrector flop,
-     * creating high-load reset/state mux-select nets in signoff.
-     */
+    /* Reset-minimal control block.  Only state/done reset. */
     always @(posedge clk) begin
         if (!rst_n) begin
             state <= ST_IDLE;
@@ -132,11 +131,27 @@ module final_alu_corrector_search #(
             case (state)
                 ST_IDLE: begin
                     if (start) begin
-                        if (M_base == {PW{1'b0}})
-                            state <= ST_DONE;
-                        else
-                            state <= ST_SCAN;
+                        state <= ST_INIT_CTRL;
                     end
+                end
+
+                ST_INIT_CTRL: begin
+                    if (M_base == zero_pw)
+                        state <= ST_DONE;
+                    else
+                        state <= ST_INIT_L01;
+                end
+
+                ST_INIT_L01: begin
+                    state <= ST_INIT_L23;
+                end
+
+                ST_INIT_L23: begin
+                    state <= ST_INIT_L45;
+                end
+
+                ST_INIT_L45: begin
+                    state <= ST_SCAN;
                 end
 
                 ST_SCAN: begin
@@ -164,47 +179,65 @@ module final_alu_corrector_search #(
     /* Datapath/status block: deliberately no reset gating. */
     always @(posedge clk) begin
         case (state)
-            ST_IDLE: begin
-                if (start) begin
-                    cand <= {PW{1'b0}};
-                    p0 <= {WM{1'b0}}; p1 <= {WM{1'b0}}; p2 <= {WM{1'b0}};
-                    p3 <= {WM{1'b0}}; p4 <= {WM{1'b0}}; p5 <= {WM{1'b0}};
+            ST_INIT_CTRL: begin
+                cand <= zero_pw;
 
-                    half_hit0_q <= ({PW{1'b0}} == (M_base >> 1));
-                    half_hit1_q <= ({PW{1'b0}} == (M_base >> 1));
-                    half_hit2_q <= ({PW{1'b0}} == (M_base >> 1));
-                    half_hit3_q <= ({PW{1'b0}} == (M_base >> 1));
-                    half_hit4_q <= ({PW{1'b0}} == (M_base >> 1));
-                    half_hit5_q <= ({PW{1'b0}} == (M_base >> 1));
+                corr_found     <= 1'b0;
+                corr_conflict  <= 1'b0;
+                corr_candidate <= zero_pw;
+                corr_mask      <= 6'd0;
+                base_found     <= 1'b0;
+                base_candidate <= zero_pw;
+                base_mask      <= 6'd0;
+                base_count     <= 3'd0;
 
-                    corr_found     <= 1'b0;
-                    corr_conflict  <= 1'b0;
-                    corr_candidate <= {PW{1'b0}};
-                    corr_mask      <= 6'd0;
-                    base_found     <= 1'b0;
-                    base_candidate <= {PW{1'b0}};
-                    base_mask      <= 6'd0;
-                    base_count     <= 3'd0;
+                enable_detection_q  <= enable_detection;
+                enable_correction_q <= enable_correction;
+                M_base_q            <= M_base;
+                half_base_q         <= (M_base >> 1);
 
-                    enable_detection_q  <= enable_detection;
-                    enable_correction_q <= enable_correction;
-                    M_base_q            <= M_base;
-                    half_base_q         <= (M_base >> 1);
-                    lm0 <= m0; lm1 <= m1; lm2 <= m2;
-                    lm3 <= m3; lm4 <= m4; lm5 <= m5;
-                    lz0 <= z0; lz1 <= z1; lz2 <= z2;
-                    lz3 <= z3; lz4 <= z4; lz5 <= z5;
-
-                    if (M_base == {PW{1'b0}}) begin
-                        residue_error            <= 1'b1;
-                        corrected_success        <= 1'b0;
-                        uncorrectable            <= 1'b1;
-                        corrected_lane_mask      <= 6'd0;
-                        mismatch_mask_out        <= 6'd0;
-                        mismatch_count_out       <= 3'd0;
-                        corrected_candidate_base <= {PW{1'b0}};
-                    end
+                if (M_base == zero_pw) begin
+                    residue_error            <= 1'b1;
+                    corrected_success        <= 1'b0;
+                    uncorrectable            <= 1'b1;
+                    corrected_lane_mask      <= 6'd0;
+                    mismatch_mask_out        <= 6'd0;
+                    mismatch_count_out       <= 3'd0;
+                    corrected_candidate_base <= zero_pw;
                 end
+            end
+
+            ST_INIT_L01: begin
+                lm0 <= m0;
+                lm1 <= m1;
+                lz0 <= z0;
+                lz1 <= z1;
+                p0  <= {WM{1'b0}};
+                p1  <= {WM{1'b0}};
+                half_hit0_q <= (zero_pw == half_base_q);
+                half_hit1_q <= (zero_pw == half_base_q);
+            end
+
+            ST_INIT_L23: begin
+                lm2 <= m2;
+                lm3 <= m3;
+                lz2 <= z2;
+                lz3 <= z3;
+                p2  <= {WM{1'b0}};
+                p3  <= {WM{1'b0}};
+                half_hit2_q <= (zero_pw == half_base_q);
+                half_hit3_q <= (zero_pw == half_base_q);
+            end
+
+            ST_INIT_L45: begin
+                lm4 <= m4;
+                lm5 <= m5;
+                lz4 <= z4;
+                lz5 <= z5;
+                p4  <= {WM{1'b0}};
+                p5  <= {WM{1'b0}};
+                half_hit4_q <= (zero_pw == half_base_q);
+                half_hit5_q <= (zero_pw == half_base_q);
             end
 
             ST_SCAN: begin

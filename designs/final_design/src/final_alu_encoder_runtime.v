@@ -6,7 +6,7 @@
 //
 // Operation:
 //   - one encoder instance is already shared by the top for A then B
-//   - this module now reduces one input bit per clock, one lane at a time
+//   - this module reduces one input bit per clock, one lane at a time
 //   - latency is higher, but area is much smaller and Yosys-friendly
 module final_alu_encoder_runtime #(
     parameter integer WM = 5,
@@ -26,12 +26,15 @@ module final_alu_encoder_runtime #(
     output reg  [6*WM-1:0]      res_flat
 );
 
-    localparam [1:0]
-        ST_IDLE  = 2'd0,
-        ST_BITS  = 2'd1,
-        ST_STORE = 2'd2;
+    localparam [2:0]
+        ST_IDLE   = 3'd0,
+        ST_INIT0  = 3'd1,
+        ST_INIT1  = 3'd2,
+        ST_INIT2  = 3'd3,
+        ST_BITS   = 3'd4,
+        ST_STORE  = 3'd5;
 
-    reg [1:0]      state;
+    reg [2:0]      state;
     reg [2:0]      lane_idx;
     reg [5:0]      bit_count;      // XW is 24 in this project envelope
     reg [XW-1:0]   mag_reg;
@@ -42,6 +45,9 @@ module final_alu_encoder_runtime #(
     reg [WM:0]     rem_shift;
     reg [WM:0]     rem_next;
     reg [WM-1:0]   residue_next;
+
+    wire [XW-1:0] abs_x_wire;
+    assign abs_x_wire = x_in[XW-1] ? (~x_in + {{(XW-1){1'b0}}, 1'b1}) : x_in;
 
     always @* begin
         rem_shift = {rem_reg[WM-1:0], shift_reg[XW-1]};
@@ -74,16 +80,36 @@ module final_alu_encoder_runtime #(
             case (state)
                 ST_IDLE: begin
                     if (start) begin
-                        lane_idx  <= 3'd0;
-                        bit_count <= XW[5:0];
-                        neg_reg   <= x_in[XW-1];
-                        mag_reg   <= x_in[XW-1] ? (~x_in + {{(XW-1){1'b0}}, 1'b1}) : x_in;
-                        shift_reg <= x_in[XW-1] ? (~x_in + {{(XW-1){1'b0}}, 1'b1}) : x_in;
-                        rem_reg   <= {(WM+1){1'b0}};
-                        res_flat  <= {(6*WM){1'b0}};
-                        modulus_reg <= m0;
-                        state     <= ST_BITS;
+                        state <= ST_INIT0;
                     end
+                end
+
+                /*
+                 * Physical-signoff patch:
+                 * V10 still had one encoder-start decode feeding the 24-bit
+                 * mag/shift load muxes.  Stagger the capture so start only
+                 * changes the state flop, and each init state drives a smaller
+                 * local bank of registers.
+                 */
+                ST_INIT0: begin
+                    lane_idx    <= 3'd0;
+                    bit_count   <= XW[5:0];
+                    neg_reg     <= x_in[XW-1];
+                    modulus_reg <= m0;
+                    rem_reg     <= {(WM+1){1'b0}};
+                    state       <= ST_INIT1;
+                end
+
+                ST_INIT1: begin
+                    mag_reg[11:0]   <= abs_x_wire[11:0];
+                    shift_reg[11:0] <= abs_x_wire[11:0];
+                    state           <= ST_INIT2;
+                end
+
+                ST_INIT2: begin
+                    mag_reg[XW-1:12]   <= abs_x_wire[XW-1:12];
+                    shift_reg[XW-1:12] <= abs_x_wire[XW-1:12];
+                    state              <= ST_BITS;
                 end
 
                 ST_BITS: begin
