@@ -1,9 +1,9 @@
 project:
-  title: "ASIC Flow Template"
+  title: "ASIC Flow "
   author: "Kieran"
   notes: "Drop any multi-file Verilog design under designs/<name>/src and set top_module in designs/<name>/variant.yaml"
 
 experiments:
-  - variant: designs/final_alu
+  - variant: designs/final_design
     enabled: true
 
