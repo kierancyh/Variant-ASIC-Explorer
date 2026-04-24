@@ -100,17 +100,30 @@ module final_alu_runtime_top #(
 
     reg  signed [XW-1:0] A_reg;
     reg  signed [XW-1:0] B_reg;
-    reg  signed [(2*XW)-1:0] raw_true_reg;
 
-    /* Sequential multiplier used only for range checking.
-       This removes the large 24x24 combinational multiplier from the top. */
-    reg  [(2*XW)-1:0] mul_acc_reg;
-    reg  [(2*XW)-1:0] mul_mcand_reg;
+    /* Saturated true-range tracker.
+       The residue datapath still performs the actual RRNS operation, while this
+       small side-path only decides whether the mathematical result is outside
+       the signed base range. With 5-bit runtime moduli, the base product fits
+       in PW=20, so a 48-bit range multiplier is unnecessary and physically
+       expensive. */
+    reg               raw_range_error_reg;
+    reg  [PW:0]       mul_acc_sat_reg;
+    reg  [PW:0]       mul_mcand_sat_reg;
     reg  [XW-1:0]     mul_mult_reg;
-    reg               mul_neg_reg;
     reg  [5:0]        mul_count_reg;
-    wire [(2*XW)-1:0] mul_addend_wire;
-    wire [(2*XW)-1:0] mul_acc_next_wire;
+    wire [PW:0]       mul_sat_limit_wire;
+    wire [PW:0]       mul_addend_sat_wire;
+    wire [PW+1:0]     mul_acc_sum_wire;
+    wire [PW:0]       mul_acc_next_sat_wire;
+    wire [PW+1:0]     mul_mcand_shift_wire;
+    wire [PW:0]       mul_mcand_next_sat_wire;
+    wire signed [XW:0] add_true_wire;
+    wire signed [XW:0] sub_true_wire;
+    wire signed [XW:0] half_range_xw_wire;
+    wire signed [XW:0] neg_half_range_xw_wire;
+    wire              add_range_error_wire;
+    wire              sub_range_error_wire;
 
     reg  [WM-1:0] z0_reg, z1_reg, z2_reg, z3_reg, z4_reg, z5_reg;
     wire [6*WM-1:0] z_res_flat;
@@ -135,8 +148,24 @@ module final_alu_runtime_top #(
     wire [3:0] op_state_dbg_wire;
 
     assign z_res_flat = {z5_reg, z4_reg, z3_reg, z2_reg, z1_reg, z0_reg};
-    assign mul_addend_wire   = mul_mult_reg[0] ? mul_mcand_reg : {(2*XW){1'b0}};
-    assign mul_acc_next_wire = mul_acc_reg + mul_addend_wire;
+
+    assign mul_sat_limit_wire      = {1'b0, half_range_reg} + {{PW{1'b0}}, 1'b1};
+    assign mul_addend_sat_wire     = mul_mult_reg[0] ? mul_mcand_sat_reg : {(PW+1){1'b0}};
+    assign mul_acc_sum_wire        = {1'b0, mul_acc_sat_reg} + {1'b0, mul_addend_sat_wire};
+    assign mul_acc_next_sat_wire   = (mul_acc_sum_wire > {1'b0, mul_sat_limit_wire}) ?
+                                     mul_sat_limit_wire : mul_acc_sum_wire[PW:0];
+    assign mul_mcand_shift_wire    = {1'b0, mul_mcand_sat_reg} << 1;
+    assign mul_mcand_next_sat_wire = (mul_mcand_shift_wire > {1'b0, mul_sat_limit_wire}) ?
+                                     mul_sat_limit_wire : mul_mcand_shift_wire[PW:0];
+
+    assign add_true_wire           = {A_in[XW-1], A_in} + {B_in[XW-1], B_in};
+    assign sub_true_wire           = {A_in[XW-1], A_in} - {B_in[XW-1], B_in};
+    assign half_range_xw_wire      = $signed({1'b0, {{(XW-PW){1'b0}}, half_range_reg}});
+    assign neg_half_range_xw_wire  = -half_range_xw_wire;
+    assign add_range_error_wire    = (add_true_wire > half_range_xw_wire) ||
+                                     (add_true_wire < neg_half_range_xw_wire);
+    assign sub_range_error_wire    = (sub_true_wire > half_range_xw_wire) ||
+                                     (sub_true_wire < neg_half_range_xw_wire);
 
     assign Busy              = config_busy_reg | op_busy_reg;
     assign Config_Valid      = config_valid_reg;
@@ -256,7 +285,7 @@ module final_alu_runtime_top #(
     );
 
     final_alu_range_check #(.XW(XW), .PW(PW)) u_range (
-        .raw_true(raw_true_reg),
+        .raw_range_error(raw_range_error_reg),
         .M_base(M_base_reg),
         .half_range(half_range_reg),
         .candidate_base(corrector_candidate_base),
@@ -284,6 +313,25 @@ module final_alu_runtime_top #(
                 5: get_lane_res = flat[(5*WM)+:WM];
                 default: get_lane_res = {WM{1'b0}};
             endcase
+        end
+    endfunction
+
+    function [XW-1:0] abs_xw;
+        input signed [XW-1:0] val;
+        begin
+            abs_xw = val[XW-1] ? ((~val) + {{(XW-1){1'b0}}, 1'b1}) : val;
+        end
+    endfunction
+
+    function [PW:0] sat_abs_xw;
+        input signed [XW-1:0] val;
+        input [PW:0] limit;
+        reg [XW:0] mag_ext;
+        reg [XW:0] limit_ext;
+        begin
+            mag_ext   = {1'b0, abs_xw(val)};
+            limit_ext = {{(XW-PW){1'b0}}, limit};
+            sat_abs_xw = (mag_ext > limit_ext) ? limit : mag_ext[PW:0];
         end
     endfunction
 
@@ -378,16 +426,14 @@ module final_alu_runtime_top #(
                         op_sel_reg <= Op_Sel;
                         enc_select_b_reg <= 1'b0;
                         case (Op_Sel)
-                            2'b00: raw_true_reg <= {{XW{A_in[XW-1]}}, A_in} + {{XW{B_in[XW-1]}}, B_in};
-                            2'b01: raw_true_reg <= {{XW{A_in[XW-1]}}, A_in} - {{XW{B_in[XW-1]}}, B_in};
-                            default: raw_true_reg <= {(2*XW){1'b0}};
+                            2'b00: raw_range_error_reg <= add_range_error_wire;
+                            2'b01: raw_range_error_reg <= sub_range_error_wire;
+                            default: raw_range_error_reg <= 1'b0;
                         endcase
-                        mul_acc_reg   <= {(2*XW){1'b0}};
-                        mul_mcand_reg <= A_in[XW-1] ? {{XW{1'b0}}, ((~A_in) + {{(XW-1){1'b0}},1'b1})}
-                                                   : {{XW{1'b0}}, A_in};
-                        mul_mult_reg  <= B_in[XW-1] ? ((~B_in) + {{(XW-1){1'b0}},1'b1}) : B_in;
-                        mul_neg_reg   <= A_in[XW-1] ^ B_in[XW-1];
-                        mul_count_reg <= 6'd0;
+                        mul_acc_sat_reg   <= {(PW+1){1'b0}};
+                        mul_mcand_sat_reg <= sat_abs_xw(A_in, mul_sat_limit_wire);
+                        mul_mult_reg      <= abs_xw(B_in);
+                        mul_count_reg     <= 6'd0;
                         z0_reg                       <= {WM{1'b0}};
                         z1_reg                       <= {WM{1'b0}};
                         z2_reg                       <= {WM{1'b0}};
@@ -443,13 +489,13 @@ module final_alu_runtime_top #(
 
 
                 MS_OP_MUL_STEP: begin
-                    op_state_dbg <= 4'd1;
-                    mul_acc_reg   <= mul_acc_next_wire;
-                    mul_mcand_reg <= mul_mcand_reg << 1;
-                    mul_mult_reg  <= {1'b0, mul_mult_reg[XW-1:1]};
+                    op_state_dbg       <= 4'd1;
+                    mul_acc_sat_reg    <= mul_acc_next_sat_wire;
+                    mul_mcand_sat_reg  <= mul_mcand_next_sat_wire;
+                    mul_mult_reg       <= {1'b0, mul_mult_reg[XW-1:1]};
                     if (mul_count_reg == (XW-1)) begin
-                        raw_true_reg  <= mul_neg_reg ? -$signed(mul_acc_next_wire) : $signed(mul_acc_next_wire);
-                        main_state    <= MS_OP_START_ENC;
+                        raw_range_error_reg <= (mul_acc_next_sat_wire > {1'b0, half_range_reg});
+                        main_state          <= MS_OP_START_ENC;
                     end else begin
                         mul_count_reg <= mul_count_reg + 6'd1;
                     end
