@@ -27,9 +27,21 @@ module final_alu_corrector_search #(
     output reg  [PW-1:0]        corrected_candidate_base
 );
 
-    // Manual one-hot FSM. V11A still produced a large corrector-start/state
-    // mux-select net after routing. One-hot keeps each init/scan/done enable
-    // physically smaller and less shared.
+    /*
+     * V15 physical-signoff patch:
+     *   - Keep the one-hot sequential candidate scan.
+     *   - Remove the large corrector input-capture bank from V14.
+     *
+     * The top-level wrapper locks configuration writes while Busy is high, so
+     * M_base, m0..m5, enable_detection/enable_correction, and z_res_flat are
+     * stable for the whole correction operation.  Therefore the corrector does
+     * not need to copy those inputs into lm, lz, or M_base_q registers.
+     *
+     * Removing that capture bank directly attacks the V14 _01541_ mux-select
+     * slew cluster.  The datapath also advances its residue counters without
+     * using last_candidate as the hold/update select, which attacks the V14
+     * _01641_ comparator fanout cluster.
+     */
     localparam [6:0] ST_IDLE      = 7'b0000001;
     localparam [6:0] ST_INIT_CTRL = 7'b0000010;
     localparam [6:0] ST_INIT_L01  = 7'b0000100;
@@ -45,14 +57,7 @@ module final_alu_corrector_search #(
     wire [WM-1:0] z4 = z_res_flat[(4*WM)+:WM];
     wire [WM-1:0] z5 = z_res_flat[(5*WM)+:WM];
 
-    reg          enable_detection_q;
-    reg          enable_correction_q;
-    reg [PW-1:0] M_base_q;
-    reg [PW-1:0] half_base_q;
-    reg [WM-1:0] lm0, lm1, lm2, lm3, lm4, lm5;
-    reg [WM-1:0] lz0, lz1, lz2, lz3, lz4, lz5;
-
-    (* keep = "true" *) reg [6:0]    state;
+    (* keep = "true" *) reg [6:0] state;
     reg [PW-1:0] cand;
 
     reg [WM-1:0] p0;
@@ -62,15 +67,6 @@ module final_alu_corrector_search #(
     reg [WM-1:0] p4;
     reg [WM-1:0] p5;
 
-    /*
-     * Physical-signoff patch:
-     * Keep lane-local half-hit controls and, in this version, also stagger the
-     * start-time input capture across three small lane groups.  The V10 netlist
-     * still produced one very slow corrector-start mux-select net because the
-     * old single-cycle start captured all six z/lm lanes and several status
-     * banks at once.  These extra init states add only a few cycles, but reduce
-     * the load driven by any one state/start decode.
-     */
     (* keep = "true", dont_touch = "true" *) reg half_hit0_q;
     (* keep = "true", dont_touch = "true" *) reg half_hit1_q;
     (* keep = "true", dont_touch = "true" *) reg half_hit2_q;
@@ -92,14 +88,16 @@ module final_alu_corrector_search #(
     reg [2:0] cmp_count;
 
     wire [PW-1:0] zero_pw = {PW{1'b0}};
-    wire [PW-1:0] one_pw = {{(PW-1){1'b0}}, 1'b1};
+    wire [PW-1:0] one_pw  = {{(PW-1){1'b0}}, 1'b1};
     wire [PW-1:0] cand_plus_one = cand + one_pw;
-    wire          last_candidate = (cand_plus_one >= M_base_q);
-    wire          next_half_hit = (cand_plus_one == half_base_q);
-    wire          base_match = (p0 == lz0) && (p1 == lz1) && (p2 == lz2) && (p3 == lz3);
-    wire          corr_this = enable_correction_q && (cmp_count == 3'd1);
+    wire [PW-1:0] half_base_wire = (M_base >> 1);
+    wire          last_candidate = (cand_plus_one >= M_base);
+    wire          next_half_hit  = (cand_plus_one == half_base_wire);
+
+    wire          base_match = (p0 == z0) && (p1 == z1) && (p2 == z2) && (p3 == z3);
+    wire          corr_this = enable_correction && (cmp_count == 3'd1);
     wire          corr_conflict_final = corr_conflict || (corr_found && corr_this && (cand != corr_candidate));
-    wire          corr_valid_final = enable_correction_q && (corr_found || corr_this) && !corr_conflict_final;
+    wire          corr_valid_final = enable_correction && (corr_found || corr_this) && !corr_conflict_final;
     wire [PW-1:0] corr_candidate_final = corr_found ? corr_candidate : cand;
     wire [5:0]    corr_mask_final = corr_found ? corr_mask : cmp_mask;
     wire          base_found_final = base_found || base_match;
@@ -107,20 +105,20 @@ module final_alu_corrector_search #(
     wire [5:0]    base_mask_final = base_found ? base_mask : cmp_mask;
     wire [2:0]    base_count_final = base_found ? base_count : cmp_count;
 
-    // usable_subset_bitmap is intentionally retained in the interface for
-    // compatibility with older wrappers. The current sequential corrector scans
-    // candidates directly and does not need the precomputed subset mask.
+    // Retained for wrapper compatibility.  The current scan engine does not
+    // need the precomputed subset bitmap.
+    wire unused_subset_bitmap = |usable_subset_bitmap;
 
     always @(*) begin
         cmp_mask  = 6'd0;
         cmp_count = 3'd0;
 
-        if (p0 != lz0) begin cmp_mask[0] = 1'b1; cmp_count = cmp_count + 3'd1; end
-        if (p1 != lz1) begin cmp_mask[1] = 1'b1; cmp_count = cmp_count + 3'd1; end
-        if (p2 != lz2) begin cmp_mask[2] = 1'b1; cmp_count = cmp_count + 3'd1; end
-        if (p3 != lz3) begin cmp_mask[3] = 1'b1; cmp_count = cmp_count + 3'd1; end
-        if (p4 != lz4) begin cmp_mask[4] = 1'b1; cmp_count = cmp_count + 3'd1; end
-        if (p5 != lz5) begin cmp_mask[5] = 1'b1; cmp_count = cmp_count + 3'd1; end
+        if (p0 != z0) begin cmp_mask[0] = 1'b1; cmp_count = cmp_count + 3'd1; end
+        if (p1 != z1) begin cmp_mask[1] = 1'b1; cmp_count = cmp_count + 3'd1; end
+        if (p2 != z2) begin cmp_mask[2] = 1'b1; cmp_count = cmp_count + 3'd1; end
+        if (p3 != z3) begin cmp_mask[3] = 1'b1; cmp_count = cmp_count + 3'd1; end
+        if (p4 != z4) begin cmp_mask[4] = 1'b1; cmp_count = cmp_count + 3'd1; end
+        if (p5 != z5) begin cmp_mask[5] = 1'b1; cmp_count = cmp_count + 3'd1; end
     end
 
     /* Reset-minimal control block.  Only state/done reset. */
@@ -158,7 +156,7 @@ module final_alu_corrector_search #(
                 end
 
                 ST_SCAN: begin
-                    if (!enable_detection_q) begin
+                    if (!enable_detection) begin
                         state <= ST_DONE;
                     end else if (cmp_count == 3'd0) begin
                         state <= ST_DONE;
@@ -194,11 +192,6 @@ module final_alu_corrector_search #(
                 base_mask      <= 6'd0;
                 base_count     <= 3'd0;
 
-                enable_detection_q  <= enable_detection;
-                enable_correction_q <= enable_correction;
-                M_base_q            <= M_base;
-                half_base_q         <= (M_base >> 1);
-
                 if (M_base == zero_pw) begin
                     residue_error            <= 1'b1;
                     corrected_success        <= 1'b0;
@@ -211,40 +204,28 @@ module final_alu_corrector_search #(
             end
 
             ST_INIT_L01: begin
-                lm0 <= m0;
-                lm1 <= m1;
-                lz0 <= z0;
-                lz1 <= z1;
-                p0  <= {WM{1'b0}};
-                p1  <= {WM{1'b0}};
-                half_hit0_q <= (zero_pw == half_base_q);
-                half_hit1_q <= (zero_pw == half_base_q);
+                p0 <= {WM{1'b0}};
+                p1 <= {WM{1'b0}};
+                half_hit0_q <= (zero_pw == half_base_wire);
+                half_hit1_q <= (zero_pw == half_base_wire);
             end
 
             ST_INIT_L23: begin
-                lm2 <= m2;
-                lm3 <= m3;
-                lz2 <= z2;
-                lz3 <= z3;
-                p2  <= {WM{1'b0}};
-                p3  <= {WM{1'b0}};
-                half_hit2_q <= (zero_pw == half_base_q);
-                half_hit3_q <= (zero_pw == half_base_q);
+                p2 <= {WM{1'b0}};
+                p3 <= {WM{1'b0}};
+                half_hit2_q <= (zero_pw == half_base_wire);
+                half_hit3_q <= (zero_pw == half_base_wire);
             end
 
             ST_INIT_L45: begin
-                lm4 <= m4;
-                lm5 <= m5;
-                lz4 <= z4;
-                lz5 <= z5;
-                p4  <= {WM{1'b0}};
-                p5  <= {WM{1'b0}};
-                half_hit4_q <= (zero_pw == half_base_q);
-                half_hit5_q <= (zero_pw == half_base_q);
+                p4 <= {WM{1'b0}};
+                p5 <= {WM{1'b0}};
+                half_hit4_q <= (zero_pw == half_base_wire);
+                half_hit5_q <= (zero_pw == half_base_wire);
             end
 
             ST_SCAN: begin
-                if (!enable_detection_q) begin
+                if (!enable_detection) begin
                     residue_error            <= 1'b0;
                     corrected_success        <= 1'b0;
                     uncorrectable            <= 1'b0;
@@ -291,7 +272,7 @@ module final_alu_corrector_search #(
                         end else if (base_found_final) begin
                             residue_error            <= (base_count_final != 3'd0);
                             corrected_success        <= 1'b0;
-                            uncorrectable            <= enable_correction_q && (base_count_final > 3'd1);
+                            uncorrectable            <= enable_correction && (base_count_final > 3'd1);
                             corrected_lane_mask      <= 6'd0;
                             mismatch_mask_out        <= base_mask_final;
                             mismatch_count_out       <= base_count_final;
@@ -299,56 +280,63 @@ module final_alu_corrector_search #(
                         end else begin
                             residue_error            <= 1'b1;
                             corrected_success        <= 1'b0;
-                            uncorrectable            <= enable_correction_q;
+                            uncorrectable            <= enable_correction;
                             corrected_lane_mask      <= 6'd0;
                             mismatch_mask_out        <= cmp_mask;
                             mismatch_count_out       <= cmp_count;
                             corrected_candidate_base <= cand;
                         end
+                    end
+
+                    /*
+                     * Advance the residue scan every active scan cycle, even
+                     * on the terminal candidate.  On the terminal cycle these
+                     * next residue/candidate values are unused because the FSM moves to
+                     * ST_DONE, but avoiding a last_candidate-controlled hold
+                     * mux removes that comparator from the lane-update cones.
+                     */
+                    cand <= cand_plus_one;
+                    half_hit0_q <= next_half_hit;
+                    half_hit1_q <= next_half_hit;
+                    half_hit2_q <= next_half_hit;
+                    half_hit3_q <= next_half_hit;
+                    half_hit4_q <= next_half_hit;
+                    half_hit5_q <= next_half_hit;
+
+                    if (half_hit0_q) begin
+                        if ((m0 <= 1) || (p0 == {WM{1'b0}})) p0 <= {WM{1'b0}}; else p0 <= m0 - p0;
                     end else begin
-                        cand <= cand_plus_one;
-                        half_hit0_q <= next_half_hit;
-                        half_hit1_q <= next_half_hit;
-                        half_hit2_q <= next_half_hit;
-                        half_hit3_q <= next_half_hit;
-                        half_hit4_q <= next_half_hit;
-                        half_hit5_q <= next_half_hit;
+                        if ((m0 <= 1) || ((p0 + {{(WM-1){1'b0}},1'b1}) >= m0)) p0 <= {WM{1'b0}}; else p0 <= p0 + {{(WM-1){1'b0}},1'b1};
+                    end
 
-                        if (half_hit0_q) begin
-                            if ((lm0 <= 1) || (p0 == {WM{1'b0}})) p0 <= {WM{1'b0}}; else p0 <= lm0 - p0;
-                        end else begin
-                            if ((lm0 <= 1) || ((p0 + {{(WM-1){1'b0}},1'b1}) >= lm0)) p0 <= {WM{1'b0}}; else p0 <= p0 + {{(WM-1){1'b0}},1'b1};
-                        end
+                    if (half_hit1_q) begin
+                        if ((m1 <= 1) || (p1 == {WM{1'b0}})) p1 <= {WM{1'b0}}; else p1 <= m1 - p1;
+                    end else begin
+                        if ((m1 <= 1) || ((p1 + {{(WM-1){1'b0}},1'b1}) >= m1)) p1 <= {WM{1'b0}}; else p1 <= p1 + {{(WM-1){1'b0}},1'b1};
+                    end
 
-                        if (half_hit1_q) begin
-                            if ((lm1 <= 1) || (p1 == {WM{1'b0}})) p1 <= {WM{1'b0}}; else p1 <= lm1 - p1;
-                        end else begin
-                            if ((lm1 <= 1) || ((p1 + {{(WM-1){1'b0}},1'b1}) >= lm1)) p1 <= {WM{1'b0}}; else p1 <= p1 + {{(WM-1){1'b0}},1'b1};
-                        end
+                    if (half_hit2_q) begin
+                        if ((m2 <= 1) || (p2 == {WM{1'b0}})) p2 <= {WM{1'b0}}; else p2 <= m2 - p2;
+                    end else begin
+                        if ((m2 <= 1) || ((p2 + {{(WM-1){1'b0}},1'b1}) >= m2)) p2 <= {WM{1'b0}}; else p2 <= p2 + {{(WM-1){1'b0}},1'b1};
+                    end
 
-                        if (half_hit2_q) begin
-                            if ((lm2 <= 1) || (p2 == {WM{1'b0}})) p2 <= {WM{1'b0}}; else p2 <= lm2 - p2;
-                        end else begin
-                            if ((lm2 <= 1) || ((p2 + {{(WM-1){1'b0}},1'b1}) >= lm2)) p2 <= {WM{1'b0}}; else p2 <= p2 + {{(WM-1){1'b0}},1'b1};
-                        end
+                    if (half_hit3_q) begin
+                        if ((m3 <= 1) || (p3 == {WM{1'b0}})) p3 <= {WM{1'b0}}; else p3 <= m3 - p3;
+                    end else begin
+                        if ((m3 <= 1) || ((p3 + {{(WM-1){1'b0}},1'b1}) >= m3)) p3 <= {WM{1'b0}}; else p3 <= p3 + {{(WM-1){1'b0}},1'b1};
+                    end
 
-                        if (half_hit3_q) begin
-                            if ((lm3 <= 1) || (p3 == {WM{1'b0}})) p3 <= {WM{1'b0}}; else p3 <= lm3 - p3;
-                        end else begin
-                            if ((lm3 <= 1) || ((p3 + {{(WM-1){1'b0}},1'b1}) >= lm3)) p3 <= {WM{1'b0}}; else p3 <= p3 + {{(WM-1){1'b0}},1'b1};
-                        end
+                    if (half_hit4_q) begin
+                        if ((m4 <= 1) || (p4 == {WM{1'b0}})) p4 <= {WM{1'b0}}; else p4 <= m4 - p4;
+                    end else begin
+                        if ((m4 <= 1) || ((p4 + {{(WM-1){1'b0}},1'b1}) >= m4)) p4 <= {WM{1'b0}}; else p4 <= p4 + {{(WM-1){1'b0}},1'b1};
+                    end
 
-                        if (half_hit4_q) begin
-                            if ((lm4 <= 1) || (p4 == {WM{1'b0}})) p4 <= {WM{1'b0}}; else p4 <= lm4 - p4;
-                        end else begin
-                            if ((lm4 <= 1) || ((p4 + {{(WM-1){1'b0}},1'b1}) >= lm4)) p4 <= {WM{1'b0}}; else p4 <= p4 + {{(WM-1){1'b0}},1'b1};
-                        end
-
-                        if (half_hit5_q) begin
-                            if ((lm5 <= 1) || (p5 == {WM{1'b0}})) p5 <= {WM{1'b0}}; else p5 <= lm5 - p5;
-                        end else begin
-                            if ((lm5 <= 1) || ((p5 + {{(WM-1){1'b0}},1'b1}) >= lm5)) p5 <= {WM{1'b0}}; else p5 <= p5 + {{(WM-1){1'b0}},1'b1};
-                        end
+                    if (half_hit5_q) begin
+                        if ((m5 <= 1) || (p5 == {WM{1'b0}})) p5 <= {WM{1'b0}}; else p5 <= m5 - p5;
+                    end else begin
+                        if ((m5 <= 1) || ((p5 + {{(WM-1){1'b0}},1'b1}) >= m5)) p5 <= {WM{1'b0}}; else p5 <= p5 + {{(WM-1){1'b0}},1'b1};
                     end
                 end
             end
