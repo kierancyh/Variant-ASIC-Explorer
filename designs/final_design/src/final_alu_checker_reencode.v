@@ -14,7 +14,7 @@
 // -----------------------------------------------------------------------------
 
 module final_alu_checker_reencode #(
-    parameter integer WM = 6,
+    parameter integer WM = 5,
     parameter integer PW = 32
 )(
     input  wire                 clk,
@@ -39,9 +39,7 @@ module final_alu_checker_reencode #(
     // accidentally instantiated by an older script/test.
     always @(posedge clk) begin
         if (!rst_n) begin
-            done           <= 1'b0;
-            mismatch_mask  <= 6'b000000;
-            mismatch_count <= 3'd0;
+            done <= 1'b0;
         end else begin
             done <= 1'b0;
             if (start) begin

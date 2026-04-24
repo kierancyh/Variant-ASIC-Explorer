@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
 module final_alu_cfg_precompute #(
-    parameter integer WM = 6,
+    parameter integer WM = 5,
     parameter integer PW = 32
 )(
     input  wire                 clk,
@@ -22,9 +22,8 @@ module final_alu_cfg_precompute #(
     // legality before this block is started. Keep precompute intentionally tiny.
     always @(posedge clk) begin
         if (!rst_n) begin
-            done                 <= 1'b0;
-            precomp_ok           <= 1'b0;
-            usable_subset_bitmap <= 15'd0;
+            done       <= 1'b0;
+            precomp_ok <= 1'b0;
         end else begin
             done <= 1'b0;
             if (start) begin

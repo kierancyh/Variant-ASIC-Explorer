@@ -1,4 +1,4 @@
-name: final_alu
+name: final_alu_configurable
 pdk: sky130A
 
 top_module: final_alu_top

@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
 module final_alu_corrector_search #(
-    parameter integer WM = 6,
+    parameter integer WM = 5,
     parameter integer PW = 32
 )(
     input  wire                 clk,
@@ -38,7 +38,12 @@ module final_alu_corrector_search #(
     wire [WM-1:0] z4 = z_res_flat[(4*WM)+:WM];
     wire [WM-1:0] z5 = z_res_flat[(5*WM)+:WM];
 
-    wire [PW-1:0] half_base = (M_base >> 1);
+    reg          enable_detection_q;
+    reg          enable_correction_q;
+    reg [PW-1:0] M_base_q;
+    reg [PW-1:0] half_base_q;
+    reg [WM-1:0] lm0, lm1, lm2, lm3, lm4, lm5;
+    reg [WM-1:0] lz0, lz1, lz2, lz3, lz4, lz5;
 
     reg [2:0]  state;
     reg [PW-1:0] cand;
@@ -72,31 +77,18 @@ module final_alu_corrector_search #(
         cmp_mask  = 6'd0;
         cmp_count = 3'd0;
 
-        if (p0 != z0) begin cmp_mask[0] = 1'b1; cmp_count = cmp_count + 3'd1; end
-        if (p1 != z1) begin cmp_mask[1] = 1'b1; cmp_count = cmp_count + 3'd1; end
-        if (p2 != z2) begin cmp_mask[2] = 1'b1; cmp_count = cmp_count + 3'd1; end
-        if (p3 != z3) begin cmp_mask[3] = 1'b1; cmp_count = cmp_count + 3'd1; end
-        if (p4 != z4) begin cmp_mask[4] = 1'b1; cmp_count = cmp_count + 3'd1; end
-        if (p5 != z5) begin cmp_mask[5] = 1'b1; cmp_count = cmp_count + 3'd1; end
+        if (p0 != lz0) begin cmp_mask[0] = 1'b1; cmp_count = cmp_count + 3'd1; end
+        if (p1 != lz1) begin cmp_mask[1] = 1'b1; cmp_count = cmp_count + 3'd1; end
+        if (p2 != lz2) begin cmp_mask[2] = 1'b1; cmp_count = cmp_count + 3'd1; end
+        if (p3 != lz3) begin cmp_mask[3] = 1'b1; cmp_count = cmp_count + 3'd1; end
+        if (p4 != lz4) begin cmp_mask[4] = 1'b1; cmp_count = cmp_count + 3'd1; end
+        if (p5 != lz5) begin cmp_mask[5] = 1'b1; cmp_count = cmp_count + 3'd1; end
     end
 
     always @(posedge clk) begin
         if (!rst_n) begin
-            state                    <= ST_IDLE;
-            done                     <= 1'b0;
-            residue_error            <= 1'b0;
-            corrected_success        <= 1'b0;
-            uncorrectable            <= 1'b0;
-            corrected_lane_mask      <= 6'd0;
-            mismatch_mask_out        <= 6'd0;
-            mismatch_count_out       <= 3'd0;
-            corrected_candidate_base <= {PW{1'b0}};
-            cand                     <= {PW{1'b0}};
-            p0 <= {WM{1'b0}}; p1 <= {WM{1'b0}}; p2 <= {WM{1'b0}};
-            p3 <= {WM{1'b0}}; p4 <= {WM{1'b0}}; p5 <= {WM{1'b0}};
-            clean_found <= 1'b0; clean_conflict <= 1'b0; clean_candidate <= {PW{1'b0}}; clean_mask <= 6'd0;
-            corr_found  <= 1'b0; corr_conflict  <= 1'b0; corr_candidate  <= {PW{1'b0}}; corr_mask  <= 6'd0;
-            base_found  <= 1'b0; base_candidate <= {PW{1'b0}}; base_mask <= 6'd0; base_count <= 3'd0;
+            state <= ST_IDLE;
+            done  <= 1'b0;
         end else begin
             done <= 1'b0;
 
@@ -120,6 +112,15 @@ module final_alu_corrector_search #(
                         base_mask <= 6'd0;
                         base_count <= 3'd0;
 
+                        enable_detection_q <= enable_detection;
+                        enable_correction_q <= enable_correction;
+                        M_base_q            <= M_base;
+                        half_base_q         <= (M_base >> 1);
+                        lm0 <= m0; lm1 <= m1; lm2 <= m2;
+                        lm3 <= m3; lm4 <= m4; lm5 <= m5;
+                        lz0 <= z0; lz1 <= z1; lz2 <= z2;
+                        lz3 <= z3; lz4 <= z4; lz5 <= z5;
+
                         if (M_base == 0) begin
                             residue_error            <= 1'b1;
                             corrected_success        <= 1'b0;
@@ -136,7 +137,7 @@ module final_alu_corrector_search #(
                 end
 
                 ST_SCAN: begin
-                    if (!enable_detection) begin
+                    if (!enable_detection_q) begin
                         residue_error            <= 1'b0;
                         corrected_success        <= 1'b0;
                         uncorrectable            <= 1'b0;
@@ -160,14 +161,14 @@ module final_alu_corrector_search #(
                         // This preserves range-error behaviour: base lanes may reconstruct a valid
                         // modulo-M_base scalar even when redundant lanes disagree because the true
                         // arithmetic result exceeded the signed RRNS range.
-                        if (!base_found && (p0 == z0) && (p1 == z1) && (p2 == z2) && (p3 == z3)) begin
+                        if (!base_found && (p0 == lz0) && (p1 == lz1) && (p2 == lz2) && (p3 == lz3)) begin
                             base_found     <= 1'b1;
                             base_candidate <= cand;
                             base_mask      <= cmp_mask;
                             base_count     <= cmp_count;
                         end
 
-                        if (enable_correction && (cmp_count == 3'd1)) begin
+                        if (enable_correction_q && (cmp_count == 3'd1)) begin
                             if (!corr_found) begin
                                 corr_found     <= 1'b1;
                                 corr_candidate <= cand;
@@ -177,8 +178,8 @@ module final_alu_corrector_search #(
                             end
                         end
 
-                        if ((cand + {{(PW-1){1'b0}},1'b1}) >= M_base) begin
-                            if (enable_correction && corr_found && !corr_conflict) begin
+                        if ((cand + {{(PW-1){1'b0}},1'b1}) >= M_base_q) begin
+                            if (enable_correction_q && corr_found && !corr_conflict) begin
                                 residue_error            <= 1'b1;
                                 corrected_success        <= 1'b1;
                                 uncorrectable            <= 1'b0;
@@ -189,7 +190,7 @@ module final_alu_corrector_search #(
                             end else if (base_found) begin
                                 residue_error            <= (base_count != 3'd0);
                                 corrected_success        <= 1'b0;
-                                uncorrectable            <= enable_correction && (base_count > 3'd1);
+                                uncorrectable            <= enable_correction_q && (base_count > 3'd1);
                                 corrected_lane_mask      <= 6'd0;
                                 mismatch_mask_out        <= base_mask;
                                 mismatch_count_out       <= base_count;
@@ -197,7 +198,7 @@ module final_alu_corrector_search #(
                             end else begin
                                 residue_error            <= 1'b1;
                                 corrected_success        <= 1'b0;
-                                uncorrectable            <= enable_correction;
+                                uncorrectable            <= enable_correction_q;
                                 corrected_lane_mask      <= 6'd0;
                                 mismatch_mask_out        <= cmp_mask;
                                 mismatch_count_out       <= cmp_count;
@@ -207,20 +208,20 @@ module final_alu_corrector_search #(
                         end else begin
                             cand <= cand + {{(PW-1){1'b0}},1'b1};
 
-                            if (cand == half_base) begin
-                                if ((m0 <= 1) || (p0 == {WM{1'b0}})) p0 <= {WM{1'b0}}; else p0 <= m0 - p0;
-                                if ((m1 <= 1) || (p1 == {WM{1'b0}})) p1 <= {WM{1'b0}}; else p1 <= m1 - p1;
-                                if ((m2 <= 1) || (p2 == {WM{1'b0}})) p2 <= {WM{1'b0}}; else p2 <= m2 - p2;
-                                if ((m3 <= 1) || (p3 == {WM{1'b0}})) p3 <= {WM{1'b0}}; else p3 <= m3 - p3;
-                                if ((m4 <= 1) || (p4 == {WM{1'b0}})) p4 <= {WM{1'b0}}; else p4 <= m4 - p4;
-                                if ((m5 <= 1) || (p5 == {WM{1'b0}})) p5 <= {WM{1'b0}}; else p5 <= m5 - p5;
+                            if (cand == half_base_q) begin
+                                if ((lm0 <= 1) || (p0 == {WM{1'b0}})) p0 <= {WM{1'b0}}; else p0 <= lm0 - p0;
+                                if ((lm1 <= 1) || (p1 == {WM{1'b0}})) p1 <= {WM{1'b0}}; else p1 <= lm1 - p1;
+                                if ((lm2 <= 1) || (p2 == {WM{1'b0}})) p2 <= {WM{1'b0}}; else p2 <= lm2 - p2;
+                                if ((lm3 <= 1) || (p3 == {WM{1'b0}})) p3 <= {WM{1'b0}}; else p3 <= lm3 - p3;
+                                if ((lm4 <= 1) || (p4 == {WM{1'b0}})) p4 <= {WM{1'b0}}; else p4 <= lm4 - p4;
+                                if ((lm5 <= 1) || (p5 == {WM{1'b0}})) p5 <= {WM{1'b0}}; else p5 <= lm5 - p5;
                             end else begin
-                                if ((m0 <= 1) || ((p0 + {{(WM-1){1'b0}},1'b1}) >= m0)) p0 <= {WM{1'b0}}; else p0 <= p0 + {{(WM-1){1'b0}},1'b1};
-                                if ((m1 <= 1) || ((p1 + {{(WM-1){1'b0}},1'b1}) >= m1)) p1 <= {WM{1'b0}}; else p1 <= p1 + {{(WM-1){1'b0}},1'b1};
-                                if ((m2 <= 1) || ((p2 + {{(WM-1){1'b0}},1'b1}) >= m2)) p2 <= {WM{1'b0}}; else p2 <= p2 + {{(WM-1){1'b0}},1'b1};
-                                if ((m3 <= 1) || ((p3 + {{(WM-1){1'b0}},1'b1}) >= m3)) p3 <= {WM{1'b0}}; else p3 <= p3 + {{(WM-1){1'b0}},1'b1};
-                                if ((m4 <= 1) || ((p4 + {{(WM-1){1'b0}},1'b1}) >= m4)) p4 <= {WM{1'b0}}; else p4 <= p4 + {{(WM-1){1'b0}},1'b1};
-                                if ((m5 <= 1) || ((p5 + {{(WM-1){1'b0}},1'b1}) >= m5)) p5 <= {WM{1'b0}}; else p5 <= p5 + {{(WM-1){1'b0}},1'b1};
+                                if ((lm0 <= 1) || ((p0 + {{(WM-1){1'b0}},1'b1}) >= lm0)) p0 <= {WM{1'b0}}; else p0 <= p0 + {{(WM-1){1'b0}},1'b1};
+                                if ((lm1 <= 1) || ((p1 + {{(WM-1){1'b0}},1'b1}) >= lm1)) p1 <= {WM{1'b0}}; else p1 <= p1 + {{(WM-1){1'b0}},1'b1};
+                                if ((lm2 <= 1) || ((p2 + {{(WM-1){1'b0}},1'b1}) >= lm2)) p2 <= {WM{1'b0}}; else p2 <= p2 + {{(WM-1){1'b0}},1'b1};
+                                if ((lm3 <= 1) || ((p3 + {{(WM-1){1'b0}},1'b1}) >= lm3)) p3 <= {WM{1'b0}}; else p3 <= p3 + {{(WM-1){1'b0}},1'b1};
+                                if ((lm4 <= 1) || ((p4 + {{(WM-1){1'b0}},1'b1}) >= lm4)) p4 <= {WM{1'b0}}; else p4 <= p4 + {{(WM-1){1'b0}},1'b1};
+                                if ((lm5 <= 1) || ((p5 + {{(WM-1){1'b0}},1'b1}) >= lm5)) p5 <= {WM{1'b0}}; else p5 <= p5 + {{(WM-1){1'b0}},1'b1};
                             end
                         end
                     end

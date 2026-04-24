@@ -9,7 +9,7 @@
 //   - this module now reduces one input bit per clock, one lane at a time
 //   - latency is higher, but area is much smaller and Yosys-friendly
 module final_alu_encoder_runtime #(
-    parameter integer WM = 6,
+    parameter integer WM = 5,
     parameter integer XW = 24
 )(
     input  wire                 clk,
@@ -64,16 +64,10 @@ module final_alu_encoder_runtime #(
 
     always @(posedge clk) begin
         if (!rst_n) begin
-            state       <= ST_IDLE;
-            lane_idx    <= 3'd0;
-            bit_count   <= 6'd0;
-            mag_reg     <= {XW{1'b0}};
-            shift_reg   <= {XW{1'b0}};
-            neg_reg     <= 1'b0;
-            modulus_reg <= {WM{1'b0}};
-            rem_reg     <= {(WM+1){1'b0}};
-            done        <= 1'b0;
-            res_flat    <= {(6*WM){1'b0}};
+            state     <= ST_IDLE;
+            lane_idx  <= 3'd0;
+            bit_count <= 6'd0;
+            done      <= 1'b0;
         end else begin
             done <= 1'b0;
 

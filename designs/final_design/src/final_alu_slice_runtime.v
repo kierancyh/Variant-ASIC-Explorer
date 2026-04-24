@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
 module final_alu_slice_runtime #(
-    parameter integer WM = 6
+    parameter integer WM = 5
 )(
     input  wire                 clk,
     input  wire                 rst_n,
@@ -38,12 +38,8 @@ module final_alu_slice_runtime #(
 
     always @(posedge clk) begin
         if (!rst_n) begin
-            state  <= ST_IDLE;
-            done   <= 1'b0;
-            z_res  <= {WM{1'b0}};
-            work_s <= {IW{1'b0}};
-            work_u <= {IW{1'b0}};
-            mod_u  <= {IW{1'b0}};
+            state <= ST_IDLE;
+            done  <= 1'b0;
         end else begin
             done <= 1'b0;
 

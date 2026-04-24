@@ -36,7 +36,7 @@ ll_policy:
   sdc: ../_shared/ll_policy/constraints.sdc
   power_fair_tcl: ../_shared/ll_policy/power_fair.tcl
   power_activity_tcl: ../_shared/ll_policy/power_activity.tcl
-  gpl_cell_padding: 2
+  gpl_cell_padding: 1
   run_antenna_repair: true
   run_post_grt_design_repair: true
   run_post_grt_resizer_timing: true

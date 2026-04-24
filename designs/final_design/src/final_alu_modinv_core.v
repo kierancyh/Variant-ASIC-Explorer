@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
 module final_alu_modinv_core #(
-    parameter integer WM = 6
+    parameter integer WM = 5
 )(
     input  wire            clk,
     input  wire            rst_n,
@@ -25,10 +25,6 @@ module final_alu_modinv_core #(
             running <= 1'b0;
             done    <= 1'b0;
             valid   <= 1'b0;
-            inv_out <= {WM{1'b0}};
-            a_reg   <= {WM{1'b0}};
-            m_reg   <= {WM{1'b0}};
-            cand_reg<= {{(WM-1){1'b0}},1'b1};
         end else begin
             done <= 1'b0;
             if (start && !running) begin

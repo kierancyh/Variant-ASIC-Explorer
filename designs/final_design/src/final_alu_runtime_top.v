@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
 module final_alu_runtime_top #(
-    parameter integer WM = 6,
+    parameter integer WM = 5,
     parameter integer XW = 24,
     parameter integer PW = 32
 )(
@@ -333,17 +333,12 @@ module final_alu_runtime_top #(
             precomp_start_reg            <= 1'b0;
             enc_start_reg                <= 1'b0;
             enc_select_b_reg             <= 1'b0;
-            a_res_flat_reg               <= {(6*WM){1'b0}};
-            b_res_flat_reg               <= {(6*WM){1'b0}};
             slice_start_reg              <= 1'b0;
             corrector_start_reg          <= 1'b0;
             config_valid_reg             <= 1'b0;
             config_busy_reg              <= 1'b0;
             config_error_reg             <= 1'b0;
             config_error_code_reg        <= 4'd0;
-            M_base_reg                   <= {PW{1'b0}};
-            half_range_reg               <= {PW{1'b0}};
-            usable_subset_bitmap_reg     <= 15'd0;
             op_busy_reg                  <= 1'b0;
             error_detected_reg           <= 1'b0;
             corrected_reg                <= 1'b0;
@@ -354,22 +349,6 @@ module final_alu_runtime_top #(
             last_corrected_lane_mask_reg <= 6'd0;
             residue_error_reg            <= 1'b0;
             range_error_reg              <= 1'b0;
-            A_reg                        <= {XW{1'b0}};
-            B_reg                        <= {XW{1'b0}};
-            raw_true_reg                 <= {(2*XW){1'b0}};
-            mul_acc_reg                  <= {(2*XW){1'b0}};
-            mul_mcand_reg                <= {(2*XW){1'b0}};
-            mul_mult_reg                 <= {XW{1'b0}};
-            mul_neg_reg                  <= 1'b0;
-            mul_count_reg                <= 6'd0;
-            op_sel_reg                   <= 2'b00;
-            z0_reg                       <= {WM{1'b0}};
-            z1_reg                       <= {WM{1'b0}};
-            z2_reg                       <= {WM{1'b0}};
-            z3_reg                       <= {WM{1'b0}};
-            z4_reg                       <= {WM{1'b0}};
-            z5_reg                       <= {WM{1'b0}};
-            X_out                        <= {XW{1'b0}};
             Done                         <= 1'b0;
         end else begin
             cfg_clear_loaded    <= 1'b0;

@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
 module final_alu_cfg_checker #(
-    parameter integer WM = 6,
+    parameter integer WM = 5,
     parameter integer XW = 24,
     parameter integer PW = 32
 )(
@@ -160,26 +160,6 @@ module final_alu_cfg_checker #(
             done           <= 1'b0;
             cfg_ok         <= 1'b0;
             cfg_error_code <= 4'd0;
-            M_base         <= {PW{1'b0}};
-            half_range     <= {PW{1'b0}};
-            lm0            <= {WM{1'b0}};
-            lm1            <= {WM{1'b0}};
-            lm2            <= {WM{1'b0}};
-            lm3            <= {WM{1'b0}};
-            lm4            <= {WM{1'b0}};
-            lm5            <= {WM{1'b0}};
-            mod_idx        <= 3'd0;
-            pair_i         <= 3'd0;
-            pair_j         <= 3'd1;
-            gcd_a          <= {WM{1'b0}};
-            gcd_b          <= {WM{1'b0}};
-            si             <= 3'd0;
-            sj             <= 3'd1;
-            sk             <= 3'd2;
-            sl             <= 3'd3;
-            mul_stage      <= 2'd0;
-            base_acc       <= {PW{1'b0}};
-            subset_acc     <= {PW{1'b0}};
         end else begin
             done <= 1'b0;
 
