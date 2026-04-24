@@ -37,7 +37,7 @@ module final_alu_checker_reencode #(
     // Inputs are intentionally unused in this compatibility shell.
     // Keep a small synchronous handshake so the module remains harmless if
     // accidentally instantiated by an older script/test.
-    always @(posedge clk or negedge rst_n) begin
+    always @(posedge clk) begin
         if (!rst_n) begin
             done           <= 1'b0;
             mismatch_mask  <= 6'b000000;

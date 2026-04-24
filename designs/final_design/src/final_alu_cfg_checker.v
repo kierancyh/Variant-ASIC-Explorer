@@ -154,7 +154,7 @@ module final_alu_cfg_checker #(
         endcase
     end
 
-    always @(posedge clk or negedge rst_n) begin
+    always @(posedge clk) begin
         if (!rst_n) begin
             state          <= ST_IDLE;
             done           <= 1'b0;

@@ -115,7 +115,7 @@ module final_alu_recon_garner #(
     integer acc;
     integer term;
 
-    always @(posedge clk or negedge rst_n) begin
+    always @(posedge clk) begin
         if (!rst_n) begin
             done             <= 1'b0;
             subset_candidate <= {PW{1'b0}};

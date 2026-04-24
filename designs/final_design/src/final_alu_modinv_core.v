@@ -20,7 +20,7 @@ module final_alu_modinv_core #(
     integer cc_i;
     integer prod_i;
 
-    always @(posedge clk or negedge rst_n) begin
+    always @(posedge clk) begin
         if (!rst_n) begin
             running <= 1'b0;
             done    <= 1'b0;

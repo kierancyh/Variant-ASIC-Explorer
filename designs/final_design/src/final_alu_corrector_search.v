@@ -80,7 +80,7 @@ module final_alu_corrector_search #(
         if (p5 != z5) begin cmp_mask[5] = 1'b1; cmp_count = cmp_count + 3'd1; end
     end
 
-    always @(posedge clk or negedge rst_n) begin
+    always @(posedge clk) begin
         if (!rst_n) begin
             state                    <= ST_IDLE;
             done                     <= 1'b0;

@@ -37,7 +37,7 @@ ll_policy:
   power_fair_tcl: ../_shared/ll_policy/power_fair.tcl
   power_activity_tcl: ../_shared/ll_policy/power_activity.tcl
   gpl_cell_padding: 2
+  run_antenna_repair: true
   run_post_grt_design_repair: true
   run_post_grt_resizer_timing: true
-  run_antenna_repair: true
   run_heuristic_diode_insertion: true

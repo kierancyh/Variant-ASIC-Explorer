@@ -62,7 +62,7 @@ module final_alu_encoder_runtime #(
         end
     end
 
-    always @(posedge clk or negedge rst_n) begin
+    always @(posedge clk) begin
         if (!rst_n) begin
             state       <= ST_IDLE;
             lane_idx    <= 3'd0;

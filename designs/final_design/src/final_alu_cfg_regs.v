@@ -22,7 +22,7 @@ module final_alu_cfg_regs #(
     output reg                  cfg_loaded_reg
 );
 
-    always @(posedge clk or negedge rst_n) begin
+    always @(posedge clk) begin
         if (!rst_n) begin
             m0_reg         <= {WM{1'b0}};
             m1_reg         <= {WM{1'b0}};

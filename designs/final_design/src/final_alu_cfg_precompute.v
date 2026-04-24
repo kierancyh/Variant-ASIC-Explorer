@@ -20,7 +20,7 @@ module final_alu_cfg_precompute #(
 
     // The config checker already guarantees the required 4-of-6 subset-product
     // legality before this block is started. Keep precompute intentionally tiny.
-    always @(posedge clk or negedge rst_n) begin
+    always @(posedge clk) begin
         if (!rst_n) begin
             done                 <= 1'b0;
             precomp_ok           <= 1'b0;

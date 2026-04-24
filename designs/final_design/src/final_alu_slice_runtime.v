@@ -36,7 +36,7 @@ module final_alu_slice_runtime #(
     reg        [IW-1:0] work_u;
     reg        [IW-1:0] mod_u;
 
-    always @(posedge clk or negedge rst_n) begin
+    always @(posedge clk) begin
         if (!rst_n) begin
             state  <= ST_IDLE;
             done   <= 1'b0;

@@ -322,7 +322,7 @@ module final_alu_runtime_top #(
         end
     end
 
-    always @(posedge clk or negedge rst_n) begin
+    always @(posedge clk) begin
         if (!rst_n) begin
             main_state                   <= MS_IDLE;
             cfg_state_dbg                <= 3'd0;
