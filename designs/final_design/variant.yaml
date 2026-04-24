@@ -20,7 +20,7 @@ precheck:
     testbench_sources:
       - tb/**/*.v
       - tb/**/*.sv
-    vcd_name: rtl_precheck.vcd
+    vcd_name: final_alu_runtime_rtl.vcd
     stop_on_fail: true
   yosys:
     enabled: true
