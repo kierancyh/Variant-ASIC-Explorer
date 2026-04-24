@@ -47,6 +47,27 @@ module final_alu_runtime_top #(
     reg [3:0] op_state_dbg;
     reg [2:0] lane_idx;
 
+    /*
+       Physical-design reset fanout isolation.
+
+       Earlier variants used the external rst_n net directly in the top FSM and
+       every child sequential block.  That functionally works, but in the ASIC
+       flow it creates one very large reset-distribution net.  The resulting
+       post-route failures were dominated by max-slew violations on reset-gated
+       logic, especially around the slice, encoder, and checker modules.
+
+       These local reset copies intentionally trade a few small flops for much
+       lower reset fanout.  The testbenches hold rst_n low for several cycles,
+       so the one-cycle synchronous release is safe.
+    */
+    (* keep = "true" *) reg rst_main_n;
+    (* keep = "true" *) reg rst_cfgregs_n;
+    (* keep = "true" *) reg rst_cfgchk_n;
+    (* keep = "true" *) reg rst_precomp_n;
+    (* keep = "true" *) reg rst_encoder_n;
+    (* keep = "true" *) reg rst_slice_n;
+    (* keep = "true" *) reg rst_corrector_n;
+
     wire [WM-1:0] m0_cfg, m1_cfg, m2_cfg, m3_cfg, m4_cfg, m5_cfg;
     wire detect_en_cfg;
     wire correct_en_cfg;
@@ -191,7 +212,7 @@ module final_alu_runtime_top #(
 
     final_alu_cfg_regs #(.WM(WM)) u_cfg_regs (
         .clk(clk),
-        .rst_n(rst_n),
+        .rst_n(rst_cfgregs_n),
         .cfg_we(cfg_we),
         .cfg_addr(cfg_addr),
         .cfg_wdata(cfg_wdata),
@@ -211,7 +232,7 @@ module final_alu_runtime_top #(
 
     final_alu_cfg_checker #(.WM(WM), .XW(XW), .PW(PW)) u_cfg_checker (
         .clk(clk),
-        .rst_n(rst_n),
+        .rst_n(rst_cfgchk_n),
         .start(checker_start_reg),
         .m0(m0_cfg),
         .m1(m1_cfg),
@@ -228,7 +249,7 @@ module final_alu_runtime_top #(
 
     final_alu_cfg_precompute #(.WM(WM), .PW(PW)) u_cfg_precompute (
         .clk(clk),
-        .rst_n(rst_n),
+        .rst_n(rst_precomp_n),
         .start(precomp_start_reg),
         .m0(m0_cfg),
         .m1(m1_cfg),
@@ -244,7 +265,7 @@ module final_alu_runtime_top #(
 
     final_alu_encoder_runtime #(.WM(WM), .XW(XW)) u_encoder (
         .clk(clk),
-        .rst_n(rst_n),
+        .rst_n(rst_encoder_n),
         .start(enc_start_reg),
         .x_in(enc_select_b_reg ? B_reg : A_reg),
         .m0(m0_cfg),
@@ -259,7 +280,7 @@ module final_alu_runtime_top #(
 
     final_alu_slice_runtime #(.WM(WM)) u_slice (
         .clk(clk),
-        .rst_n(rst_n),
+        .rst_n(rst_slice_n),
         .start(slice_start_reg),
         .op_sel(op_sel_reg),
         .a_res(slice_a_sel),
@@ -271,7 +292,7 @@ module final_alu_runtime_top #(
 
     final_alu_corrector_search #(.WM(WM), .PW(PW)) u_corrector (
         .clk(clk),
-        .rst_n(rst_n),
+        .rst_n(rst_corrector_n),
         .start(corrector_start_reg),
         .enable_detection(detect_en_cfg),
         .enable_correction(correct_en_cfg),
@@ -362,6 +383,26 @@ module final_alu_runtime_top #(
 
     always @(posedge clk) begin
         if (!rst_n) begin
+            rst_main_n      <= 1'b0;
+            rst_cfgregs_n   <= 1'b0;
+            rst_cfgchk_n    <= 1'b0;
+            rst_precomp_n   <= 1'b0;
+            rst_encoder_n   <= 1'b0;
+            rst_slice_n     <= 1'b0;
+            rst_corrector_n <= 1'b0;
+        end else begin
+            rst_main_n      <= 1'b1;
+            rst_cfgregs_n   <= 1'b1;
+            rst_cfgchk_n    <= 1'b1;
+            rst_precomp_n   <= 1'b1;
+            rst_encoder_n   <= 1'b1;
+            rst_slice_n     <= 1'b1;
+            rst_corrector_n <= 1'b1;
+        end
+    end
+
+    always @(posedge clk) begin
+        if (!rst_main_n) begin
             main_state                   <= MS_IDLE;
             cfg_state_dbg                <= 3'd0;
             op_state_dbg                 <= 4'd0;
