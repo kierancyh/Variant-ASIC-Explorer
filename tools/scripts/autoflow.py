@@ -719,7 +719,7 @@ def main() -> None:
     ap.add_argument("--run-antenna-repair", default="true")
     ap.add_argument("--run-heuristic-diode-insertion", default="true")
     ap.add_argument("--run-post-grt-design-repair", default="true")
-    ap.add_argument("--run-post-grt-resizer-timing", default="false")
+    ap.add_argument("--run-post-grt-resizer-timing", default="true")
     ap.add_argument("--out-root", default="ci_out/designs_rns_crt")
     args = ap.parse_args()
 
