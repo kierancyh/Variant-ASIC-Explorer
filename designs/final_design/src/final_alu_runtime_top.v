@@ -47,26 +47,21 @@ module final_alu_runtime_top #(
     reg [3:0] op_state_dbg;
     reg [2:0] lane_idx;
 
-    /*
-       Physical-design reset fanout isolation.
 
-       Earlier variants used the external rst_n net directly in the top FSM and
-       every child sequential block.  That functionally works, but in the ASIC
-       flow it creates one very large reset-distribution net.  The resulting
-       post-route failures were dominated by max-slew violations on reset-gated
-       logic, especially around the slice, encoder, and checker modules.
-
-       These local reset copies intentionally trade a few small flops for much
-       lower reset fanout.  The testbenches hold rst_n low for several cycles,
-       so the one-cycle synchronous release is safe.
-    */
-    (* keep = "true" *) reg rst_main_n;
-    (* keep = "true" *) reg rst_cfgregs_n;
-    (* keep = "true" *) reg rst_cfgchk_n;
-    (* keep = "true" *) reg rst_precomp_n;
-    (* keep = "true" *) reg rst_encoder_n;
-    (* keep = "true" *) reg rst_slice_n;
-    (* keep = "true" *) reg rst_corrector_n;
+    /* Physical-design reset fanout isolation.
+       External rst_n is first captured into a few local reset copies.  The
+       child modules and the top FSM use those local copies rather than the
+       package/top reset net directly.  This is intended to stop rst_n becoming
+       one huge high-slew distribution net after synthesis/PnR.  The testbench
+       and console already hold rst_n low for multiple clocks, so the one-cycle
+       synchronous release is safe for this design. */
+    (* keep = "true", dont_touch = "true" *) reg rst_main_n;
+    (* keep = "true", dont_touch = "true" *) reg rst_cfgregs_n;
+    (* keep = "true", dont_touch = "true" *) reg rst_cfgchk_n;
+    (* keep = "true", dont_touch = "true" *) reg rst_precomp_n;
+    (* keep = "true", dont_touch = "true" *) reg rst_encoder_n;
+    (* keep = "true", dont_touch = "true" *) reg rst_slice_n;
+    (* keep = "true", dont_touch = "true" *) reg rst_corrector_n;
 
     wire [WM-1:0] m0_cfg, m1_cfg, m2_cfg, m3_cfg, m4_cfg, m5_cfg;
     wire detect_en_cfg;
@@ -131,13 +126,9 @@ module final_alu_runtime_top #(
     reg               raw_range_error_reg;
     reg  [PW:0]       mul_acc_sat_reg;
     reg  [PW:0]       mul_mcand_sat_reg;
-    reg  [PW:0]       mul_mult_sat_reg;
+    reg  [XW-1:0]     mul_mult_reg;
     reg  [5:0]        mul_count_reg;
     wire [PW:0]       mul_sat_limit_wire;
-    wire [XW-1:0]     a_abs_wire;
-    wire [XW-1:0]     b_abs_wire;
-    wire [PW:0]       a_abs_sat_wire;
-    wire [PW:0]       b_abs_sat_wire;
     wire [PW:0]       mul_addend_sat_wire;
     wire [PW+1:0]     mul_acc_sum_wire;
     wire [PW:0]       mul_acc_next_sat_wire;
@@ -175,13 +166,7 @@ module final_alu_runtime_top #(
     assign z_res_flat = {z5_reg, z4_reg, z3_reg, z2_reg, z1_reg, z0_reg};
 
     assign mul_sat_limit_wire      = {1'b0, half_range_reg} + {{PW{1'b0}}, 1'b1};
-    assign a_abs_wire              = A_in[XW-1] ? ((~A_in) + {{(XW-1){1'b0}}, 1'b1}) : A_in;
-    assign b_abs_wire              = B_in[XW-1] ? ((~B_in) + {{(XW-1){1'b0}}, 1'b1}) : B_in;
-    assign a_abs_sat_wire          = ({1'b0, a_abs_wire} > {{(XW-PW){1'b0}}, mul_sat_limit_wire}) ?
-                                     mul_sat_limit_wire : a_abs_wire[PW:0];
-    assign b_abs_sat_wire          = ({1'b0, b_abs_wire} > {{(XW-PW){1'b0}}, mul_sat_limit_wire}) ?
-                                     mul_sat_limit_wire : b_abs_wire[PW:0];
-    assign mul_addend_sat_wire     = mul_mult_sat_reg[0] ? mul_mcand_sat_reg : {(PW+1){1'b0}};
+    assign mul_addend_sat_wire     = mul_mult_reg[0] ? mul_mcand_sat_reg : {(PW+1){1'b0}};
     assign mul_acc_sum_wire        = {1'b0, mul_acc_sat_reg} + {1'b0, mul_addend_sat_wire};
     assign mul_acc_next_sat_wire   = (mul_acc_sum_wire > {1'b0, mul_sat_limit_wire}) ?
                                      mul_sat_limit_wire : mul_acc_sum_wire[PW:0];
@@ -346,6 +331,26 @@ module final_alu_runtime_top #(
             endcase
         end
     endfunction
+
+    function [XW-1:0] abs_xw;
+        input signed [XW-1:0] val;
+        begin
+            abs_xw = val[XW-1] ? ((~val) + {{(XW-1){1'b0}}, 1'b1}) : val;
+        end
+    endfunction
+
+    function [PW:0] sat_abs_xw;
+        input signed [XW-1:0] val;
+        input [PW:0] limit;
+        reg [XW:0] mag_ext;
+        reg [XW:0] limit_ext;
+        begin
+            mag_ext   = {1'b0, abs_xw(val)};
+            limit_ext = {{(XW-PW){1'b0}}, limit};
+            sat_abs_xw = (mag_ext > limit_ext) ? limit : mag_ext[PW:0];
+        end
+    endfunction
+
     assign slice_a_sel = get_lane_res(a_res_flat_reg, lane_idx);
     assign slice_b_sel = get_lane_res(b_res_flat_reg, lane_idx);
     assign slice_m_sel = (lane_idx == 3'd0) ? m0_cfg :
@@ -380,6 +385,7 @@ module final_alu_runtime_top #(
             endcase
         end
     end
+
 
     always @(posedge clk) begin
         if (!rst_n) begin
@@ -462,8 +468,8 @@ module final_alu_runtime_top #(
                             default: raw_range_error_reg <= 1'b0;
                         endcase
                         mul_acc_sat_reg   <= {(PW+1){1'b0}};
-                        mul_mcand_sat_reg <= a_abs_sat_wire;
-                        mul_mult_sat_reg  <= b_abs_sat_wire;
+                        mul_mcand_sat_reg <= sat_abs_xw(A_in, mul_sat_limit_wire);
+                        mul_mult_reg      <= abs_xw(B_in);
                         mul_count_reg     <= 6'd0;
                         z0_reg                       <= {WM{1'b0}};
                         z1_reg                       <= {WM{1'b0}};
@@ -523,8 +529,8 @@ module final_alu_runtime_top #(
                     op_state_dbg       <= 4'd1;
                     mul_acc_sat_reg    <= mul_acc_next_sat_wire;
                     mul_mcand_sat_reg  <= mul_mcand_next_sat_wire;
-                    mul_mult_sat_reg   <= {1'b0, mul_mult_sat_reg[PW:1]};
-                    if ((mul_count_reg == PW) || (mul_acc_next_sat_wire > {1'b0, half_range_reg})) begin
+                    mul_mult_reg       <= {1'b0, mul_mult_reg[XW-1:1]};
+                    if (mul_count_reg == (XW-1)) begin
                         raw_range_error_reg <= (mul_acc_next_sat_wire > {1'b0, half_range_reg});
                         main_state          <= MS_OP_START_ENC;
                     end else begin
