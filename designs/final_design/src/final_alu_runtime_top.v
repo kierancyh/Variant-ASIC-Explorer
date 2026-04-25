@@ -1,6 +1,7 @@
 `timescale 1ns/1ps
-// V28 source marker: based on V27, with corrector scan update gating cleaned.
-// V28 keeps V27's MUL helper chunking and removes the corrector cmp_count/detect-driven p-counter update select.
+// V29 source marker: V20 baseline plus non-saturating MUL range checker.
+// The saturated MUL helper was the remaining post-PnR max-slew hotspot; V29
+// keeps the bit-serial range check but removes the all-bits saturation mux.
 module final_alu_runtime_top #(
     parameter integer WM = 5,
     parameter integer XW = 24,
@@ -39,70 +40,61 @@ module final_alu_runtime_top #(
      * each capture/init/update state its own local select bit instead of
      * one shared high-load binary decode net.
      */
-    localparam integer MAIN_STATE_W = 38;
+    localparam integer MAIN_STATE_W = 34;
     localparam [MAIN_STATE_W-1:0]
-        MS_IDLE              = 38'h0000000001,
-        MS_CFG_WAIT_CHK      = 38'h0000000002,
-        MS_CFG_WAIT_PRE      = 38'h0000000004,
+        MS_IDLE           = 34'h000000001,
+        MS_CFG_WAIT_CHK   = 34'h000000002,
+        MS_CFG_WAIT_PRE   = 34'h000000004,
 
         /* Byte-wide operation-capture states. */
-        MS_OP_CAP_A0         = 38'h0000000008,
-        MS_OP_CAP_A1         = 38'h0000000010,
-        MS_OP_CAP_A2         = 38'h0000000020,
-        MS_OP_CAP_B0         = 38'h0000000040,
-        MS_OP_CAP_B1         = 38'h0000000080,
-        MS_OP_CAP_B2         = 38'h0000000100,
-        MS_OP_INIT_FLAGS     = 38'h0000000200,
-        MS_OP_INIT_RANGE     = 38'h0000000400,
-        MS_OP_INIT_MUL0      = 38'h0000000800,
-        MS_OP_INIT_MUL1      = 38'h0000001000,
-        MS_OP_INIT_MUL2      = 38'h0000002000,
+        MS_OP_CAP_A0      = 34'h000000008,
+        MS_OP_CAP_A1      = 34'h000000010,
+        MS_OP_CAP_A2      = 34'h000000020,
+        MS_OP_CAP_B0      = 34'h000000040,
+        MS_OP_CAP_B1      = 34'h000000080,
+        MS_OP_CAP_B2      = 34'h000000100,
+        MS_OP_INIT_FLAGS  = 34'h000000200,
+        MS_OP_INIT_RANGE  = 34'h000000400,
+        MS_OP_INIT_MUL0   = 34'h000000800,
+        MS_OP_INIT_MUL1   = 34'h000001000,
+        MS_OP_INIT_MUL2   = 34'h000002000,
 
-        /* V27: keep V20's simple MUL range-helper algorithm, but write the
-         * two 21-bit shift banks in 7-bit chunks.  The V20 post-route report
-         * showed the full-width MS_OP_MUL_MCAND/MS_OP_MUL_MULT updates as the
-         * remaining max-slew/max-cap cluster. */
-        MS_OP_MUL_ACC        = 38'h0000004000,
-        MS_OP_MUL_MCAND_LO   = 38'h0000008000,
-        MS_OP_MUL_MCAND_MID  = 38'h0000010000,
-        MS_OP_MUL_MCAND_HI   = 38'h0000020000,
-        MS_OP_MUL_MULT_LO    = 38'h0000040000,
-        MS_OP_MUL_MULT_MID   = 38'h0000080000,
-        MS_OP_MUL_MULT_HI    = 38'h0000100000,
-        MS_OP_START_ENC      = 38'h0000200000,
-        MS_OP_WAIT_ENC       = 38'h0000400000,
+        /* Split saturated-MUL range tracker states. */
+        MS_OP_MUL_ACC     = 34'h000004000,
+        MS_OP_MUL_MCAND   = 34'h000008000,
+        MS_OP_MUL_MULT    = 34'h000010000,
+        MS_OP_START_ENC   = 34'h000020000,
+        MS_OP_WAIT_ENC    = 34'h000040000,
 
         /* V20: copy encoder residues into the A/B holding banks in
          * 10-bit chunks.  V19 copied all 30 residue bits in one cycle and
          * the post-PnR report showed that mux select as a new max-slew net. */
-        MS_OP_STORE_A0       = 38'h0000800000,
-        MS_OP_STORE_A1       = 38'h0001000000,
-        MS_OP_STORE_A2       = 38'h0002000000,
-        MS_OP_STORE_B0       = 38'h0004000000,
-        MS_OP_STORE_B1       = 38'h0008000000,
-        MS_OP_STORE_B2       = 38'h0010000000,
+        MS_OP_STORE_A0    = 34'h000080000,
+        MS_OP_STORE_A1    = 34'h000100000,
+        MS_OP_STORE_A2    = 34'h000200000,
+        MS_OP_STORE_B0    = 34'h000400000,
+        MS_OP_STORE_B1    = 34'h000800000,
+        MS_OP_STORE_B2    = 34'h001000000,
 
-        /* Keep the V20 lane/corrector structure.  Later lane rewrites reduced
-         * one mux but exposed worse route/cap hotspots, so V27 deliberately
-         * does not change this part. */
-        MS_OP_PREP_LANE      = 38'h0020000000,
-        MS_OP_START_LANE     = 38'h0040000000,
-        MS_OP_WAIT_LANE      = 38'h0080000000,
-        MS_OP_START_CORR     = 38'h0100000000,
-        MS_OP_WAIT_CORR      = 38'h0200000000,
-        MS_OP_FINAL          = 38'h0400000000,
+        /* Lane input pre-capture: breaks the lane_idx decode net away from
+         * the active slice datapath and z-register store cone. */
+        MS_OP_PREP_LANE   = 34'h002000000,
+        MS_OP_START_LANE  = 34'h004000000,
+        MS_OP_WAIT_LANE   = 34'h008000000,
+        MS_OP_START_CORR  = 34'h010000000,
+        MS_OP_WAIT_CORR   = 34'h020000000,
+        MS_OP_FINAL       = 34'h040000000,
 
         /* Legacy/unreachable config-commit fallbacks. */
-        MS_CFG_COMMIT0       = 38'h0800000000,
-        MS_CFG_COMMIT1       = 38'h1000000000,
-        MS_CFG_COMMIT2       = 38'h2000000000;
+        MS_CFG_COMMIT0    = 34'h080000000,
+        MS_CFG_COMMIT1    = 34'h100000000,
+        MS_CFG_COMMIT2    = 34'h200000000;
 
     /* Range multiplier side-path constants.
-       For 5-bit moduli, the largest base product is below 2^PW.
-       Saturating at 2^PW is therefore always above half_range, so it is
-       sufficient for overflow/range detection without a 24-bit multiplier. */
-    localparam [PW:0] MUL_SAT_MAX    = {1'b1, {PW{1'b0}}};
-    localparam [5:0]  MUL_LAST_COUNT = PW;
+       V29 uses a non-saturating sticky-overflow bit-serial range checker.
+       The base product is below 2^PW, so comparing the running product
+       against half_range_live is sufficient for the true-result range flag. */
+    localparam [5:0]  MUL_LAST_COUNT = PW - 1;
 
     (* keep = "true", dont_touch = "true", fsm_encoding = "none" *) reg [MAIN_STATE_W-1:0] main_state;
     reg [2:0] cfg_state_dbg;
@@ -117,7 +109,7 @@ module final_alu_runtime_top #(
        one huge high-slew distribution net after synthesis/PnR.  The testbench
        and console already hold rst_n low for multiple clocks, so the one-cycle
        synchronous release is safe for this design. */
-    (* keep = "true" *) reg rst_main_n;  // V28: allow post-route repair/buffering of top reset
+    (* keep = "true", dont_touch = "true" *) reg rst_main_n;
     (* keep = "true", dont_touch = "true" *) reg rst_cfgregs_n;
     (* keep = "true", dont_touch = "true" *) reg rst_cfgchk_n;
     (* keep = "true", dont_touch = "true" *) reg rst_precomp_n;
@@ -200,32 +192,32 @@ module final_alu_runtime_top #(
     reg  signed [XW-1:0] A_reg;
     reg  signed [XW-1:0] B_reg;
 
-    /* Saturated true-range tracker.
-       The residue datapath still performs the actual RRNS operation, while this
-       small side-path only decides whether the mathematical result is outside
-       the signed base range. With 5-bit runtime moduli, the base product fits
-       in PW=20, so a 48-bit range multiplier is unnecessary and physically
-       expensive. */
+    /* V29 true-range tracker.
+       The residue datapath performs the actual RRNS operation.  This side-path
+       only decides whether the mathematical MUL result is outside the signed
+       base range.  Earlier versions saturated the accumulator/addend banks to
+       all-ones; the post-PnR report showed that the saturation flag became a
+       high-load mux select.  V29 instead keeps a sticky error flag and lets the
+       internal product registers wrap after the range violation has been seen. */
     reg               raw_range_error_reg;
-    reg  [PW:0]       mul_acc_sat_reg;
-    reg  [PW:0]       mul_mcand_sat_reg;
-    reg  [PW:0]       mul_mult_sat_reg;
+    reg  [PW-1:0]     mul_range_acc_reg;
+    reg  [PW-1:0]     mul_range_addend_reg;
+    reg  [PW-1:0]     mul_range_bits_reg;
+    reg               mul_range_addend_over_reg;
     reg  [5:0]        mul_count_reg;
-    wire [PW:0]       mul_addend_sat_wire;
-    wire [PW+1:0]     mul_acc_sum_wire;
-    wire [PW:0]       mul_acc_next_sat_wire;
-    wire [PW:0]       mul_mult_shift_next_wire;
-    wire [PW:0]       mul_mcand_shift_next_wire;
-    reg               mul_mcand_sat_lo_q;
-    reg               mul_mcand_sat_mid_q;
-    reg               mul_mcand_sat_hi_q;
+    wire              mul_range_bit_wire;
+    wire [PW:0]       mul_range_addend_ext_wire;
+    wire [PW:0]       mul_range_sum_wire;
+    wire              mul_range_step_error_wire;
     wire [XW-1:0]     a_abs_wire;
     wire [XW-1:0]     b_abs_wire;
     wire [XW:0]       a_abs_ext_wire;
     wire [XW:0]       b_abs_ext_wire;
-    wire [XW:0]       mul_sat_max_ext_wire;
-    wire [PW:0]       a_abs_sat_wire;
-    wire [PW:0]       b_abs_sat_wire;
+    wire              a_abs_too_wide_wire;
+    wire              b_abs_too_wide_wire;
+    wire [PW-1:0]     a_abs_pw_wire;
+    wire [PW-1:0]     b_abs_pw_wire;
+    wire              mul_initial_big_error_wire;
     wire signed [XW:0] add_true_wire;
     wire signed [XW:0] sub_true_wire;
     wire signed [XW:0] half_range_xw_wire;
@@ -265,24 +257,23 @@ module final_alu_runtime_top #(
     assign half_range_reg           = half_range_live;
     assign usable_subset_bitmap_reg = usable_subset_bitmap_live;
 
-    assign mul_addend_sat_wire       = mul_mult_sat_reg[0] ? mul_mcand_sat_reg : {(PW+1){1'b0}};
-    assign mul_acc_sum_wire          = {1'b0, mul_acc_sat_reg} + {1'b0, mul_addend_sat_wire};
-    assign mul_acc_next_sat_wire     = (mul_acc_sum_wire > {1'b0, MUL_SAT_MAX}) ?
-                                       MUL_SAT_MAX : mul_acc_sum_wire[PW:0];
-
-    /* V27: no full-width conditional next-multiplicand mux.  The chunk states
-     * below use replicated saturation bits so one control net does not drive
-     * the whole 21-bit bank. */
-    assign mul_mult_shift_next_wire  = {1'b0, mul_mult_sat_reg[PW:1]};
-    assign mul_mcand_shift_next_wire = {mul_mcand_sat_reg[PW-1:0], 1'b0};
-
     assign a_abs_wire              = A_reg[XW-1] ? ((~A_reg) + {{(XW-1){1'b0}}, 1'b1}) : A_reg;
     assign b_abs_wire              = B_reg[XW-1] ? ((~B_reg) + {{(XW-1){1'b0}}, 1'b1}) : B_reg;
     assign a_abs_ext_wire          = {1'b0, a_abs_wire};
     assign b_abs_ext_wire          = {1'b0, b_abs_wire};
-    assign mul_sat_max_ext_wire    = {{(XW-PW){1'b0}}, MUL_SAT_MAX};
-    assign a_abs_sat_wire          = (a_abs_ext_wire > mul_sat_max_ext_wire) ? MUL_SAT_MAX : a_abs_ext_wire[PW:0];
-    assign b_abs_sat_wire          = (b_abs_ext_wire > mul_sat_max_ext_wire) ? MUL_SAT_MAX : b_abs_ext_wire[PW:0];
+    assign a_abs_too_wide_wire     = |a_abs_ext_wire[XW:PW];
+    assign b_abs_too_wide_wire     = |b_abs_ext_wire[XW:PW];
+    assign a_abs_pw_wire           = a_abs_too_wide_wire ? {PW{1'b1}} : a_abs_ext_wire[PW-1:0];
+    assign b_abs_pw_wire           = b_abs_too_wide_wire ? {PW{1'b1}} : b_abs_ext_wire[PW-1:0];
+    assign mul_initial_big_error_wire = (a_abs_too_wide_wire && (b_abs_ext_wire != {(XW+1){1'b0}})) ||
+                                        (b_abs_too_wide_wire && (a_abs_ext_wire != {(XW+1){1'b0}}));
+
+    assign mul_range_bit_wire         = mul_range_bits_reg[0];
+    assign mul_range_addend_ext_wire  = mul_range_bit_wire ? {1'b0, mul_range_addend_reg} : {(PW+1){1'b0}};
+    assign mul_range_sum_wire         = {1'b0, mul_range_acc_reg} + mul_range_addend_ext_wire;
+    assign mul_range_step_error_wire  = (mul_range_bit_wire && mul_range_addend_over_reg) ||
+                                        mul_range_sum_wire[PW] ||
+                                        (mul_range_sum_wire[PW-1:0] > half_range_live);
 
     assign add_true_wire           = {A_reg[XW-1], A_reg} + {B_reg[XW-1], B_reg};
     assign sub_true_wire           = {A_reg[XW-1], A_reg} - {B_reg[XW-1], B_reg};
@@ -389,7 +380,7 @@ module final_alu_runtime_top #(
         .z_res(slice_z_res)
     );
 
-    final_alu_corrector_search_v28 #(.WM(WM), .PW(PW)) u_corrector (
+    final_alu_corrector_search_v18 #(.WM(WM), .PW(PW)) u_corrector (
         .clk(clk),
         .rst_n(rst_corrector_n),
         .start(corrector_start_reg),
@@ -668,82 +659,49 @@ module final_alu_runtime_top #(
                 end
 
                 MS_OP_INIT_MUL0: begin
-                    op_state_dbg        <= 4'd1;
-                    raw_range_error_reg <= 1'b0;
-                    mul_acc_sat_reg     <= {(PW+1){1'b0}};
-                    mul_count_reg       <= 6'd0;
-                    main_state          <= MS_OP_INIT_MUL1;
+                    op_state_dbg               <= 4'd1;
+                    raw_range_error_reg        <= 1'b0;
+                    mul_range_acc_reg          <= {PW{1'b0}};
+                    mul_range_addend_over_reg  <= 1'b0;
+                    mul_count_reg              <= 6'd0;
+                    main_state                 <= MS_OP_INIT_MUL1;
                 end
 
                 MS_OP_INIT_MUL1: begin
-                    op_state_dbg      <= 4'd1;
-                    mul_mcand_sat_reg <= a_abs_sat_wire;
-                    main_state        <= MS_OP_INIT_MUL2;
+                    op_state_dbg              <= 4'd1;
+                    mul_range_addend_reg      <= a_abs_pw_wire;
+                    mul_range_addend_over_reg <= a_abs_too_wide_wire;
+                    main_state                <= MS_OP_INIT_MUL2;
                 end
 
                 MS_OP_INIT_MUL2: begin
-                    op_state_dbg     <= 4'd1;
-                    mul_mult_sat_reg <= b_abs_sat_wire;
-                    main_state       <= MS_OP_MUL_ACC;
+                    op_state_dbg        <= 4'd1;
+                    mul_range_bits_reg  <= b_abs_pw_wire;
+                    raw_range_error_reg <= mul_initial_big_error_wire;
+                    main_state          <= MS_OP_MUL_ACC;
                 end
 
                 MS_OP_MUL_ACC: begin
-                    op_state_dbg          <= 4'd1;
-                    mul_acc_sat_reg       <= mul_acc_next_sat_wire;
-                    /* A left shift saturates only when the current saturated
-                     * multiplicand already has bit PW set.  Replicate that
-                     * one decision into three kept flops so each following
-                     * chunk state drives only a small local mux cone. */
-                    mul_mcand_sat_lo_q    <= mul_mcand_sat_reg[PW];
-                    mul_mcand_sat_mid_q   <= mul_mcand_sat_reg[PW];
-                    mul_mcand_sat_hi_q    <= mul_mcand_sat_reg[PW];
-                    main_state            <= MS_OP_MUL_MCAND_HI;
+                    op_state_dbg        <= 4'd1;
+                    raw_range_error_reg <= raw_range_error_reg | mul_range_step_error_wire;
+                    if (mul_range_bit_wire) begin
+                        mul_range_acc_reg <= mul_range_sum_wire[PW-1:0];
+                    end
+                    main_state <= MS_OP_MUL_MCAND;
                 end
 
-                MS_OP_MUL_MCAND_HI: begin
-                    op_state_dbg <= 4'd1;
-                    /* Update high-to-low.  A left shift's high chunk depends
-                     * only on old high/mid bits, so changing it first does not
-                     * corrupt the following mid/low chunks. */
-                    mul_mcand_sat_reg[PW:14] <= mul_mcand_sat_hi_q ? 7'b1000000 :
-                                                mul_mcand_shift_next_wire[PW:14];
-                    main_state <= MS_OP_MUL_MCAND_MID;
+                MS_OP_MUL_MCAND: begin
+                    op_state_dbg              <= 4'd1;
+                    mul_range_addend_over_reg <= mul_range_addend_over_reg | mul_range_addend_reg[PW-1];
+                    mul_range_addend_reg      <= {mul_range_addend_reg[PW-2:0], 1'b0};
+                    main_state                <= MS_OP_MUL_MULT;
                 end
 
-                MS_OP_MUL_MCAND_MID: begin
-                    op_state_dbg <= 4'd1;
-                    mul_mcand_sat_reg[13:7] <= mul_mcand_sat_mid_q ? 7'd0 :
-                                               mul_mcand_shift_next_wire[13:7];
-                    main_state <= MS_OP_MUL_MCAND_LO;
-                end
-
-                MS_OP_MUL_MCAND_LO: begin
-                    op_state_dbg <= 4'd1;
-                    mul_mcand_sat_reg[6:0] <= mul_mcand_sat_lo_q ? 7'd0 :
-                                              mul_mcand_shift_next_wire[6:0];
-                    main_state <= MS_OP_MUL_MULT_LO;
-                end
-
-                MS_OP_MUL_MULT_LO: begin
-                    op_state_dbg <= 4'd1;
-                    mul_mult_sat_reg[6:0] <= mul_mult_shift_next_wire[6:0];
-                    main_state <= MS_OP_MUL_MULT_MID;
-                end
-
-                MS_OP_MUL_MULT_MID: begin
-                    op_state_dbg <= 4'd1;
-                    mul_mult_sat_reg[13:7] <= mul_mult_shift_next_wire[13:7];
-                    main_state <= MS_OP_MUL_MULT_HI;
-                end
-
-                MS_OP_MUL_MULT_HI: begin
-                    op_state_dbg <= 4'd1;
-                    mul_mult_sat_reg[PW:14] <= mul_mult_shift_next_wire[PW:14];
+                MS_OP_MUL_MULT: begin
+                    op_state_dbg       <= 4'd1;
+                    mul_range_bits_reg <= {1'b0, mul_range_bits_reg[PW-1:1]};
                     if (mul_count_reg == MUL_LAST_COUNT) begin
-                        /* mul_acc_sat_reg already contains the accumulator
-                         * produced by the preceding MS_OP_MUL_ACC state. */
-                        raw_range_error_reg <= (mul_acc_sat_reg > {1'b0, half_range_live});
-                        main_state          <= MS_OP_START_ENC;
+                        main_state <= MS_OP_START_ENC;
                     end else begin
                         mul_count_reg <= mul_count_reg + 6'd1;
                         main_state    <= MS_OP_MUL_ACC;
