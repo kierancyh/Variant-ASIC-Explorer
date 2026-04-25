@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
-// V20 source marker: config checker has no wide enabled M_base commit mux.
-module final_alu_cfg_checker #(
+// V25 source marker: cfg_checker module renamed to final_alu_cfg_checker_v25; no wide enabled M_base commit mux.
+module final_alu_cfg_checker_v25 #(
     parameter integer WM = 5,
     parameter integer XW = 24,
     parameter integer PW = 20

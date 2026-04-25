@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
-// V19 source marker: small bit-serial modular slice, no wide signed reduce loop.
-module final_alu_slice_runtime #(
+// V25 source marker: slice module renamed to final_alu_slice_runtime_v25 to prevent stale old-slice synthesis.
+module final_alu_slice_runtime_v25 #(
     parameter integer WM = 5
 )(
     input  wire                 clk,
@@ -19,7 +19,7 @@ module final_alu_slice_runtime #(
      *
      * The previous slice used a signed IW-wide repeated add/subtract reducer.
      * The routed V18 report showed its shared update condition driving a long
-     * mux-select net for work_s/work_u bits.  Since runtime moduli are bounded
+     * mux-select net for the old wide work-register bits.  Since runtime moduli are bounded
      * to 5 bits and encoder residues are canonical, the lane operation can be
      * done with a tiny modular datapath:
      *   ADD: one modular add
