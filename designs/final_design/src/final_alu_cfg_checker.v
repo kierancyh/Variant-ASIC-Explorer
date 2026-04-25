@@ -1,4 +1,5 @@
 `timescale 1ns/1ps
+// V17 source marker: config checker uses explicit one-hot state encoding.
 module final_alu_cfg_checker #(
     parameter integer WM = 5,
     parameter integer XW = 24,
@@ -20,20 +21,22 @@ module final_alu_cfg_checker #(
     output reg  [PW-1:0]        half_range
 );
 
-    localparam [4:0]
-        ST_IDLE         = 5'd0,
-        ST_BASIC        = 5'd1,
-        ST_DISTINCT     = 5'd2,
-        ST_GCD_INIT     = 5'd3,
-        ST_GCD_STEP     = 5'd4,
-        ST_BASE_INIT    = 5'd5,
-        ST_BASE_MUL     = 5'd6,
-        ST_BASE_CHECK   = 5'd7,
-        ST_SUBSET_INIT  = 5'd8,
-        ST_SUBSET_MUL   = 5'd9,
-        ST_SUBSET_CHECK = 5'd10,
-        ST_DONE         = 5'd11,
-        ST_ERROR        = 5'd12;
+    // V17 physical-signoff patch:
+    // Use an explicit one-hot state register for the config checker.
+    localparam [12:0]
+        ST_IDLE         = 13'b0000000000001,
+        ST_BASIC        = 13'b0000000000010,
+        ST_DISTINCT     = 13'b0000000000100,
+        ST_GCD_INIT     = 13'b0000000001000,
+        ST_GCD_STEP     = 13'b0000000010000,
+        ST_BASE_INIT    = 13'b0000000100000,
+        ST_BASE_MUL     = 13'b0000001000000,
+        ST_BASE_CHECK   = 13'b0000010000000,
+        ST_SUBSET_INIT  = 13'b0000100000000,
+        ST_SUBSET_MUL   = 13'b0001000000000,
+        ST_SUBSET_CHECK = 13'b0010000000000,
+        ST_DONE         = 13'b0100000000000,
+        ST_ERROR        = 13'b1000000000000;
 
     // With WM=5, the largest legal 4-lane product is 31^4 = 923521,
     // so the internal product/candidate width can be reduced to PW=20.
@@ -41,7 +44,7 @@ module final_alu_cfg_checker #(
     // WM=5/PW=20 envelope: 31^4 = 923521 fits in 20 bits.  Removing that
     // impossible compare avoids a high-load comparator cone in signoff.
 
-    reg [4:0] state;
+    (* keep = "true" *) reg [12:0] state;
 
     reg [WM-1:0] lm0, lm1, lm2, lm3, lm4, lm5;
     reg [2:0]    mod_idx;

@@ -1,4 +1,5 @@
 `timescale 1ns/1ps
+// V17 source marker: corrector has no wide input-capture register bank.
 module final_alu_corrector_search #(
     parameter integer WM = 5,
     parameter integer PW = 20
@@ -34,11 +35,12 @@ module final_alu_corrector_search #(
      *
      * The top-level wrapper locks configuration writes while Busy is high, so
      * M_base, m0..m5, enable_detection/enable_correction, and z_res_flat are
-     * stable for the whole correction operation.  Therefore the corrector does
-     * not need to copy those inputs into lm, lz, or M_base_q registers.
+     * stable for the whole correction operation.  Therefore the corrector uses
+     * those stable inputs directly instead of copying them into a wide local
+     * input-register bank.
      *
-     * Removing that capture bank directly attacks the V14 _01541_ mux-select
-     * slew cluster.  The datapath also advances its residue counters without
+     * Removing that capture bank directly attacks the old wide input-capture
+     * mux-select slew cluster.  The datapath also advances its residue counters without
      * using last_candidate as the hold/update select, which attacks the V14
      * _01641_ comparator fanout cluster.
      */
