@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-// V19 source marker: config checker one-hot, no impossible base_acc zero compare.
+// V20 source marker: config checker has no wide enabled M_base commit mux.
 module final_alu_cfg_checker #(
     parameter integer WM = 5,
     parameter integer XW = 24,
@@ -46,19 +46,35 @@ module final_alu_cfg_checker #(
 
     (* keep = "true" *) reg [12:0] state;
 
+    /*
+     * V20 physical-signoff cleanup:
+     * The V19 post-PnR report showed the worst slew/cap net was the
+     * checker M_base commit select feeding all 20 output bits.  M_base is
+     * purely the product of the four base moduli, and WM=5 guarantees
+     * the product fits in PW=20.  Keep M_base/half_range in a tiny
+     * always-updated register bank instead of an enabled commit mux.
+     */
+    wire [(2*WM)-1:0] base_m01_wire;
+    wire [(2*WM)-1:0] base_m23_wire;
+    wire [(4*WM)-1:0] base_product_small_wire;
+    wire [PW-1:0]     base_product_wire;
+
+    assign base_m01_wire = m0 * m1;
+    assign base_m23_wire = m2 * m3;
+    assign base_product_small_wire = base_m01_wire * base_m23_wire;
+    assign base_product_wire = base_product_small_wire[PW-1:0];
+
     reg [WM-1:0] lm0, lm1, lm2, lm3, lm4, lm5;
     reg [2:0]    mod_idx;
     reg [2:0]    pair_i, pair_j;
     reg [WM-1:0] gcd_a, gcd_b;
     reg [2:0]    si, sj, sk, sl;
     reg [1:0]    mul_stage;
-    reg [PW-1:0] base_acc;
     reg [PW-1:0] subset_acc;
 
     reg [WM-1:0] mod_sel;
     reg [WM-1:0] pair_mod_i;
     reg [WM-1:0] pair_mod_j;
-    reg [WM-1:0] mul_mod_sel;
 
     always @* begin
         case (mod_idx)
@@ -96,20 +112,10 @@ module final_alu_cfg_checker #(
         endcase
     end
 
-    always @* begin
-        case (state)
-            ST_BASE_MUL: begin
-                case (mod_idx)
-                    3'd0: mul_mod_sel = lm0;
-                    3'd1: mul_mod_sel = lm1;
-                    3'd2: mul_mod_sel = lm2;
-                    3'd3: mul_mod_sel = lm3;
-                    default: mul_mod_sel = {WM{1'b0}};
-                endcase
-            end
 
-            default: mul_mod_sel = {WM{1'b0}};
-        endcase
+    always @(posedge clk) begin
+        M_base     <= base_product_wire;
+        half_range <= (base_product_wire >> 1);
     end
 
     always @(posedge clk) begin
@@ -132,8 +138,6 @@ module final_alu_cfg_checker #(
                         lm5            <= m5;
                         cfg_ok         <= 1'b0;
                         cfg_error_code <= 4'd0;
-                        M_base         <= {PW{1'b0}};
-                        half_range     <= {PW{1'b0}};
                         mod_idx        <= 3'd0;
                         pair_i         <= 3'd0;
                         pair_j         <= 3'd1;
@@ -144,7 +148,6 @@ module final_alu_cfg_checker #(
                         sk             <= 3'd2;
                         sl             <= 3'd3;
                         mul_stage      <= 2'd0;
-                        base_acc       <= {PW{1'b0}};
                         subset_acc     <= {PW{1'b0}};
                         state          <= ST_BASIC;
                     end
@@ -186,9 +189,11 @@ module final_alu_cfg_checker #(
                         cfg_error_code <= 4'd3;
                         state          <= ST_ERROR;
                     end else if (pair_i == 3'd4 && pair_j == 3'd5) begin
-                        mod_idx   <= 3'd0;
-                        base_acc  <= {{(PW-1){1'b0}}, 1'b1};
-                        state     <= ST_BASE_MUL;
+                        // All legal 5-bit base products fit in PW=20, so once
+                        // every pair has passed the GCD test the configuration
+                        // is accepted.  M_base/half_range are updated by the
+                        // small always-on register bank below.
+                        state     <= ST_DONE;
                     end else begin
                         if (pair_j == 3'd5) begin
                             pair_i <= pair_i + 3'd1;
@@ -198,26 +203,6 @@ module final_alu_cfg_checker #(
                         end
                         state <= ST_DISTINCT;
                     end
-                end
-
-                ST_BASE_MUL: begin
-                    base_acc <= base_acc * mul_mod_sel;
-                    if (mod_idx == 3'd3) begin
-                        state <= ST_BASE_CHECK;
-                    end else begin
-                        mod_idx <= mod_idx + 3'd1;
-                    end
-                end
-
-                ST_BASE_CHECK: begin
-                    M_base     <= base_acc;
-                    half_range <= (base_acc >> 1);
-                    // Physical-signoff cleanup:
-                    // For this design envelope all moduli have already passed the
-                    // >1 range check before base_acc is formed, so the 4-lane base
-                    // product cannot be zero.  Removing the impossible base_acc==0
-                    // compare deletes the last small cfg_checker slew hotspot.
-                    state      <= ST_DONE;
                 end
 
                 ST_SUBSET_MUL: begin

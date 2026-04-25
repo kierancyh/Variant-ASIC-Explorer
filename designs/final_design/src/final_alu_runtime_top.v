@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-// V19 source marker: lane operands are pre-captured and slice datapath is bit-serial/modular.
+// V20 source marker: cfg M_base commit and encoder result copy are physically split.
 module final_alu_runtime_top #(
     parameter integer WM = 5,
     parameter integer XW = 24,
@@ -38,45 +38,55 @@ module final_alu_runtime_top #(
      * each capture/init/update state its own local select bit instead of
      * one shared high-load binary decode net.
      */
-    localparam integer MAIN_STATE_W = 28;
+    localparam integer MAIN_STATE_W = 34;
     localparam [MAIN_STATE_W-1:0]
-        MS_IDLE           = 28'h0000001,
-        MS_CFG_WAIT_CHK   = 28'h0000002,
-        MS_CFG_WAIT_PRE   = 28'h0000004,
+        MS_IDLE           = 34'h000000001,
+        MS_CFG_WAIT_CHK   = 34'h000000002,
+        MS_CFG_WAIT_PRE   = 34'h000000004,
 
         /* Byte-wide operation-capture states. */
-        MS_OP_CAP_A0      = 28'h0000008,
-        MS_OP_CAP_A1      = 28'h0000010,
-        MS_OP_CAP_A2      = 28'h0000020,
-        MS_OP_CAP_B0      = 28'h0000040,
-        MS_OP_CAP_B1      = 28'h0000080,
-        MS_OP_CAP_B2      = 28'h0000100,
-        MS_OP_INIT_FLAGS  = 28'h0000200,
-        MS_OP_INIT_RANGE  = 28'h0000400,
-        MS_OP_INIT_MUL0   = 28'h0000800,
-        MS_OP_INIT_MUL1   = 28'h0001000,
-        MS_OP_INIT_MUL2   = 28'h0002000,
+        MS_OP_CAP_A0      = 34'h000000008,
+        MS_OP_CAP_A1      = 34'h000000010,
+        MS_OP_CAP_A2      = 34'h000000020,
+        MS_OP_CAP_B0      = 34'h000000040,
+        MS_OP_CAP_B1      = 34'h000000080,
+        MS_OP_CAP_B2      = 34'h000000100,
+        MS_OP_INIT_FLAGS  = 34'h000000200,
+        MS_OP_INIT_RANGE  = 34'h000000400,
+        MS_OP_INIT_MUL0   = 34'h000000800,
+        MS_OP_INIT_MUL1   = 34'h000001000,
+        MS_OP_INIT_MUL2   = 34'h000002000,
 
         /* Split saturated-MUL range tracker states. */
-        MS_OP_MUL_ACC     = 28'h0004000,
-        MS_OP_MUL_MCAND   = 28'h0008000,
-        MS_OP_MUL_MULT    = 28'h0010000,
-        MS_OP_START_ENC   = 28'h0020000,
-        MS_OP_WAIT_ENC    = 28'h0040000,
+        MS_OP_MUL_ACC     = 34'h000004000,
+        MS_OP_MUL_MCAND   = 34'h000008000,
+        MS_OP_MUL_MULT    = 34'h000010000,
+        MS_OP_START_ENC   = 34'h000020000,
+        MS_OP_WAIT_ENC    = 34'h000040000,
+
+        /* V20: copy encoder residues into the A/B holding banks in
+         * 10-bit chunks.  V19 copied all 30 residue bits in one cycle and
+         * the post-PnR report showed that mux select as a new max-slew net. */
+        MS_OP_STORE_A0    = 34'h000080000,
+        MS_OP_STORE_A1    = 34'h000100000,
+        MS_OP_STORE_A2    = 34'h000200000,
+        MS_OP_STORE_B0    = 34'h000400000,
+        MS_OP_STORE_B1    = 34'h000800000,
+        MS_OP_STORE_B2    = 34'h001000000,
 
         /* Lane input pre-capture: breaks the lane_idx decode net away from
          * the active slice datapath and z-register store cone. */
-        MS_OP_PREP_LANE   = 28'h0080000,
-        MS_OP_START_LANE  = 28'h0100000,
-        MS_OP_WAIT_LANE   = 28'h0200000,
-        MS_OP_START_CORR  = 28'h0400000,
-        MS_OP_WAIT_CORR   = 28'h0800000,
-        MS_OP_FINAL       = 28'h1000000,
+        MS_OP_PREP_LANE   = 34'h002000000,
+        MS_OP_START_LANE  = 34'h004000000,
+        MS_OP_WAIT_LANE   = 34'h008000000,
+        MS_OP_START_CORR  = 34'h010000000,
+        MS_OP_WAIT_CORR   = 34'h020000000,
+        MS_OP_FINAL       = 34'h040000000,
 
         /* Legacy/unreachable config-commit fallbacks. */
-        MS_CFG_COMMIT0    = 28'h2000000,
-        MS_CFG_COMMIT1    = 28'h4000000,
-        MS_CFG_COMMIT2    = 28'h8000000;
+        MS_CFG_COMMIT0    = 34'h080000000,
+        MS_CFG_COMMIT1    = 34'h100000000,
+        MS_CFG_COMMIT2    = 34'h200000000;
 
     /* Range multiplier side-path constants.
        For 5-bit moduli, the largest base product is below 2^PW.
@@ -700,15 +710,49 @@ module final_alu_runtime_top #(
                     op_state_dbg <= 4'd2;
                     if (enc_done) begin
                         if (!enc_select_b_reg) begin
-                            a_res_flat_reg   <= enc_res_flat;
-                            enc_select_b_reg <= 1'b1;
-                            main_state       <= MS_OP_START_ENC;
+                            main_state <= MS_OP_STORE_A0;
                         end else begin
-                            b_res_flat_reg <= enc_res_flat;
-                            lane_idx       <= 3'd0;
-                            main_state     <= MS_OP_PREP_LANE;
+                            main_state <= MS_OP_STORE_B0;
                         end
                     end
+                end
+
+                MS_OP_STORE_A0: begin
+                    op_state_dbg <= 4'd2;
+                    a_res_flat_reg[(0*WM)+:(2*WM)] <= enc_res_flat[(0*WM)+:(2*WM)];
+                    main_state <= MS_OP_STORE_A1;
+                end
+
+                MS_OP_STORE_A1: begin
+                    op_state_dbg <= 4'd2;
+                    a_res_flat_reg[(2*WM)+:(2*WM)] <= enc_res_flat[(2*WM)+:(2*WM)];
+                    main_state <= MS_OP_STORE_A2;
+                end
+
+                MS_OP_STORE_A2: begin
+                    op_state_dbg <= 4'd2;
+                    a_res_flat_reg[(4*WM)+:(2*WM)] <= enc_res_flat[(4*WM)+:(2*WM)];
+                    enc_select_b_reg <= 1'b1;
+                    main_state <= MS_OP_START_ENC;
+                end
+
+                MS_OP_STORE_B0: begin
+                    op_state_dbg <= 4'd2;
+                    b_res_flat_reg[(0*WM)+:(2*WM)] <= enc_res_flat[(0*WM)+:(2*WM)];
+                    main_state <= MS_OP_STORE_B1;
+                end
+
+                MS_OP_STORE_B1: begin
+                    op_state_dbg <= 4'd2;
+                    b_res_flat_reg[(2*WM)+:(2*WM)] <= enc_res_flat[(2*WM)+:(2*WM)];
+                    main_state <= MS_OP_STORE_B2;
+                end
+
+                MS_OP_STORE_B2: begin
+                    op_state_dbg <= 4'd2;
+                    b_res_flat_reg[(4*WM)+:(2*WM)] <= enc_res_flat[(4*WM)+:(2*WM)];
+                    lane_idx <= 3'd0;
+                    main_state <= MS_OP_PREP_LANE;
                 end
 
                 MS_OP_PREP_LANE: begin
