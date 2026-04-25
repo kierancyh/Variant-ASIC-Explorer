@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-// V17 source marker: config checker uses explicit one-hot state encoding.
+// V19 source marker: config checker one-hot, no impossible base_acc zero compare.
 module final_alu_cfg_checker #(
     parameter integer WM = 5,
     parameter integer XW = 24,
@@ -212,20 +212,12 @@ module final_alu_cfg_checker #(
                 ST_BASE_CHECK: begin
                     M_base     <= base_acc;
                     half_range <= (base_acc >> 1);
-                    if (base_acc == {PW{1'b0}}) begin
-                        cfg_error_code <= 4'd4;
-                        state          <= ST_ERROR;
-                    end else begin
-                        // Physical-signoff cleanup:
-                        // The runtime corrector now scans base candidates directly and
-                        // does not consume the historical 4-of-6 subset-product result.
-                        // Ending the checker here removes the large subset_acc/mul_stage
-                        // mux tree that showed up as a routed max-slew/max-cap hotspot,
-                        // while preserving the active legality checks: modulus range,
-                        // pairwise co-prime moduli, non-zero base product, and safe
-                        // base-range generation.
-                        state <= ST_DONE;
-                    end
+                    // Physical-signoff cleanup:
+                    // For this design envelope all moduli have already passed the
+                    // >1 range check before base_acc is formed, so the 4-lane base
+                    // product cannot be zero.  Removing the impossible base_acc==0
+                    // compare deletes the last small cfg_checker slew hotspot.
+                    state      <= ST_DONE;
                 end
 
                 ST_SUBSET_MUL: begin
