@@ -30,7 +30,7 @@ precheck:
 # Keep placement loose for the first ASIC run. The workflow generator currently
 # uses this as FP_CORE_UTIL when creating the OpenLane/LibreLane config.
 fp:
-  core_util: 10
+  core_util: 20
 
 ll_policy:
   sdc: ../_shared/ll_policy/constraints.sdc
