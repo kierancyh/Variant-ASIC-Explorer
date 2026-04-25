@@ -1,5 +1,6 @@
 `timescale 1ns/1ps
-// V26 source marker: V25 clean baseline plus fixed per-lane slice states and reduced corrector fanout.
+// V27 source marker: based on the clean V20 baseline; only the MUL range-helper shift banks are chunked.
+// V27 keeps the V20 lane/corrector structure because V21-V26 exposed worse lane/corrector mux hotspots.
 module final_alu_runtime_top #(
     parameter integer WM = 5,
     parameter integer XW = 24,
@@ -38,72 +39,63 @@ module final_alu_runtime_top #(
      * each capture/init/update state its own local select bit instead of
      * one shared high-load binary decode net.
      */
-    localparam integer MAIN_STATE_W = 51;
+    localparam integer MAIN_STATE_W = 38;
     localparam [MAIN_STATE_W-1:0]
-        MS_IDLE             = 51'h0000000000001,
-        MS_CFG_WAIT_CHK     = 51'h0000000000002,
-        MS_CFG_WAIT_PRE     = 51'h0000000000004,
+        MS_IDLE              = 38'h0000000001,
+        MS_CFG_WAIT_CHK      = 38'h0000000002,
+        MS_CFG_WAIT_PRE      = 38'h0000000004,
 
         /* Byte-wide operation-capture states. */
-        MS_OP_CAP_A0        = 51'h0000000000008,
-        MS_OP_CAP_A1        = 51'h0000000000010,
-        MS_OP_CAP_A2        = 51'h0000000000020,
-        MS_OP_CAP_B0        = 51'h0000000000040,
-        MS_OP_CAP_B1        = 51'h0000000000080,
-        MS_OP_CAP_B2        = 51'h0000000000100,
-        MS_OP_INIT_FLAGS    = 51'h0000000000200,
-        MS_OP_INIT_RANGE    = 51'h0000000000400,
-        MS_OP_INIT_MUL0     = 51'h0000000000800,
-        MS_OP_INIT_MUL1     = 51'h0000000001000,
-        MS_OP_INIT_MUL2     = 51'h0000000002000,
+        MS_OP_CAP_A0         = 38'h0000000008,
+        MS_OP_CAP_A1         = 38'h0000000010,
+        MS_OP_CAP_A2         = 38'h0000000020,
+        MS_OP_CAP_B0         = 38'h0000000040,
+        MS_OP_CAP_B1         = 38'h0000000080,
+        MS_OP_CAP_B2         = 38'h0000000100,
+        MS_OP_INIT_FLAGS     = 38'h0000000200,
+        MS_OP_INIT_RANGE     = 38'h0000000400,
+        MS_OP_INIT_MUL0      = 38'h0000000800,
+        MS_OP_INIT_MUL1      = 38'h0000001000,
+        MS_OP_INIT_MUL2      = 38'h0000002000,
 
-        /* V25: split the two remaining saturated-MUL helper bank updates. */
-        MS_OP_MUL_ACC       = 51'h0000000004000,
-        MS_OP_MUL_MCAND_HI  = 51'h0000000008000,
-        MS_OP_MUL_MCAND_LO  = 51'h0000000010000,
-        MS_OP_MUL_MULT_LO   = 51'h0000000020000,
-        MS_OP_MUL_MULT_HI   = 51'h0000000040000,
-        MS_OP_START_ENC     = 51'h0000000080000,
-        MS_OP_WAIT_ENC      = 51'h0000000100000,
+        /* V27: keep V20's simple MUL range-helper algorithm, but write the
+         * two 21-bit shift banks in 7-bit chunks.  The V20 post-route report
+         * showed the full-width MS_OP_MUL_MCAND/MS_OP_MUL_MULT updates as the
+         * remaining max-slew/max-cap cluster. */
+        MS_OP_MUL_ACC        = 38'h0000004000,
+        MS_OP_MUL_MCAND_LO   = 38'h0000008000,
+        MS_OP_MUL_MCAND_MID  = 38'h0000010000,
+        MS_OP_MUL_MCAND_HI   = 38'h0000020000,
+        MS_OP_MUL_MULT_LO    = 38'h0000040000,
+        MS_OP_MUL_MULT_MID   = 38'h0000080000,
+        MS_OP_MUL_MULT_HI    = 38'h0000100000,
+        MS_OP_START_ENC      = 38'h0000200000,
+        MS_OP_WAIT_ENC       = 38'h0000400000,
 
-        /* V20: copy encoder residues into the A/B holding banks in 10-bit chunks. */
-        MS_OP_STORE_A0      = 51'h0000000200000,
-        MS_OP_STORE_A1      = 51'h0000000400000,
-        MS_OP_STORE_A2      = 51'h0000000800000,
-        MS_OP_STORE_B0      = 51'h0000001000000,
-        MS_OP_STORE_B1      = 51'h0000002000000,
-        MS_OP_STORE_B2      = 51'h0000004000000,
+        /* V20: copy encoder residues into the A/B holding banks in
+         * 10-bit chunks.  V19 copied all 30 residue bits in one cycle and
+         * the post-PnR report showed that mux select as a new max-slew net. */
+        MS_OP_STORE_A0       = 38'h0000800000,
+        MS_OP_STORE_A1       = 38'h0001000000,
+        MS_OP_STORE_A2       = 38'h0002000000,
+        MS_OP_STORE_B0       = 38'h0004000000,
+        MS_OP_STORE_B1       = 38'h0008000000,
+        MS_OP_STORE_B2       = 38'h0010000000,
 
-        /* V26: fixed per-lane slice states.
-         * This removes the high-cap lane_idx decode/mux tree seen in V25
-         * around slice_a_reg/slice_b_reg/slice_m_reg preparation. */
-        MS_OP_PREP_L0       = 51'h0000008000000,
-        MS_OP_START_L0      = 51'h0000010000000,
-        MS_OP_WAIT_L0       = 51'h0000020000000,
-        MS_OP_PREP_L1       = 51'h0000040000000,
-        MS_OP_START_L1      = 51'h0000080000000,
-        MS_OP_WAIT_L1       = 51'h0000100000000,
-        MS_OP_PREP_L2       = 51'h0000200000000,
-        MS_OP_START_L2      = 51'h0000400000000,
-        MS_OP_WAIT_L2       = 51'h0000800000000,
-        MS_OP_PREP_L3       = 51'h0001000000000,
-        MS_OP_START_L3      = 51'h0002000000000,
-        MS_OP_WAIT_L3       = 51'h0004000000000,
-        MS_OP_PREP_L4       = 51'h0008000000000,
-        MS_OP_START_L4      = 51'h0010000000000,
-        MS_OP_WAIT_L4       = 51'h0020000000000,
-        MS_OP_PREP_L5       = 51'h0040000000000,
-        MS_OP_START_L5      = 51'h0080000000000,
-        MS_OP_WAIT_L5       = 51'h0100000000000,
-        MS_OP_START_CORR    = 51'h0200000000000,
-        MS_OP_WAIT_CORR     = 51'h0400000000000,
-        MS_OP_FINAL         = 51'h0800000000000,
+        /* Keep the V20 lane/corrector structure.  Later lane rewrites reduced
+         * one mux but exposed worse route/cap hotspots, so V27 deliberately
+         * does not change this part. */
+        MS_OP_PREP_LANE      = 38'h0020000000,
+        MS_OP_START_LANE     = 38'h0040000000,
+        MS_OP_WAIT_LANE      = 38'h0080000000,
+        MS_OP_START_CORR     = 38'h0100000000,
+        MS_OP_WAIT_CORR      = 38'h0200000000,
+        MS_OP_FINAL          = 38'h0400000000,
 
         /* Legacy/unreachable config-commit fallbacks. */
-        MS_CFG_COMMIT0      = 51'h1000000000000,
-        MS_CFG_COMMIT1      = 51'h2000000000000,
-        MS_CFG_COMMIT2      = 51'h4000000000000;
-
+        MS_CFG_COMMIT0       = 38'h0800000000,
+        MS_CFG_COMMIT1       = 38'h1000000000,
+        MS_CFG_COMMIT2       = 38'h2000000000;
 
     /* Range multiplier side-path constants.
        For 5-bit moduli, the largest base product is below 2^PW.
@@ -219,12 +211,14 @@ module final_alu_runtime_top #(
     reg  [PW:0]       mul_mcand_sat_reg;
     reg  [PW:0]       mul_mult_sat_reg;
     reg  [5:0]        mul_count_reg;
-    reg               mul_mcand_saturate_reg;
     wire [PW:0]       mul_addend_sat_wire;
     wire [PW+1:0]     mul_acc_sum_wire;
     wire [PW:0]       mul_acc_next_sat_wire;
-    wire [PW+1:0]     mul_mcand_shift_wire;
-    wire [PW:0]       mul_mcand_next_sat_wire;
+    wire [PW:0]       mul_mult_shift_next_wire;
+    wire [PW:0]       mul_mcand_shift_next_wire;
+    reg               mul_mcand_sat_lo_q;
+    reg               mul_mcand_sat_mid_q;
+    reg               mul_mcand_sat_hi_q;
     wire [XW-1:0]     a_abs_wire;
     wire [XW-1:0]     b_abs_wire;
     wire [XW:0]       a_abs_ext_wire;
@@ -271,13 +265,16 @@ module final_alu_runtime_top #(
     assign half_range_reg           = half_range_live;
     assign usable_subset_bitmap_reg = usable_subset_bitmap_live;
 
-    assign mul_addend_sat_wire     = mul_mult_sat_reg[0] ? mul_mcand_sat_reg : {(PW+1){1'b0}};
-    assign mul_acc_sum_wire        = {1'b0, mul_acc_sat_reg} + {1'b0, mul_addend_sat_wire};
-    assign mul_acc_next_sat_wire   = (mul_acc_sum_wire > {1'b0, MUL_SAT_MAX}) ?
-                                     MUL_SAT_MAX : mul_acc_sum_wire[PW:0];
-    assign mul_mcand_shift_wire    = {1'b0, mul_mcand_sat_reg} << 1;
-    assign mul_mcand_next_sat_wire = (mul_mcand_shift_wire > {1'b0, MUL_SAT_MAX}) ?
-                                     MUL_SAT_MAX : mul_mcand_shift_wire[PW:0];
+    assign mul_addend_sat_wire       = mul_mult_sat_reg[0] ? mul_mcand_sat_reg : {(PW+1){1'b0}};
+    assign mul_acc_sum_wire          = {1'b0, mul_acc_sat_reg} + {1'b0, mul_addend_sat_wire};
+    assign mul_acc_next_sat_wire     = (mul_acc_sum_wire > {1'b0, MUL_SAT_MAX}) ?
+                                       MUL_SAT_MAX : mul_acc_sum_wire[PW:0];
+
+    /* V27: no full-width conditional next-multiplicand mux.  The chunk states
+     * below use replicated saturation bits so one control net does not drive
+     * the whole 21-bit bank. */
+    assign mul_mult_shift_next_wire  = {1'b0, mul_mult_sat_reg[PW:1]};
+    assign mul_mcand_shift_next_wire = {mul_mcand_sat_reg[PW-1:0], 1'b0};
 
     assign a_abs_wire              = A_reg[XW-1] ? ((~A_reg) + {{(XW-1){1'b0}}, 1'b1}) : A_reg;
     assign b_abs_wire              = B_reg[XW-1] ? ((~B_reg) + {{(XW-1){1'b0}}, 1'b1}) : B_reg;
@@ -332,7 +329,7 @@ module final_alu_runtime_top #(
         .cfg_loaded_reg(cfg_loaded_cfg)
     );
 
-    final_alu_cfg_checker_v25 #(.WM(WM), .XW(XW), .PW(PW)) u_cfg_checker (
+    final_alu_cfg_checker #(.WM(WM), .XW(XW), .PW(PW)) u_cfg_checker (
         .clk(clk),
         .rst_n(rst_cfgchk_n),
         .start(checker_start_reg),
@@ -380,7 +377,7 @@ module final_alu_runtime_top #(
         .res_flat(enc_res_flat)
     );
 
-    final_alu_slice_runtime_v25 #(.WM(WM)) u_slice (
+    final_alu_slice_runtime #(.WM(WM)) u_slice (
         .clk(clk),
         .rst_n(rst_slice_n),
         .start(slice_start_reg),
@@ -392,7 +389,7 @@ module final_alu_runtime_top #(
         .z_res(slice_z_res)
     );
 
-    final_alu_corrector_search_v25 #(.WM(WM), .PW(PW)) u_corrector (
+    final_alu_corrector_search_v18 #(.WM(WM), .PW(PW)) u_corrector (
         .clk(clk),
         .rst_n(rst_corrector_n),
         .start(corrector_start_reg),
@@ -675,7 +672,6 @@ module final_alu_runtime_top #(
                     raw_range_error_reg <= 1'b0;
                     mul_acc_sat_reg     <= {(PW+1){1'b0}};
                     mul_count_reg       <= 6'd0;
-                    mul_mcand_saturate_reg <= 1'b0;
                     main_state          <= MS_OP_INIT_MUL1;
                 end
 
@@ -692,46 +688,60 @@ module final_alu_runtime_top #(
                 end
 
                 MS_OP_MUL_ACC: begin
-                    op_state_dbg    <= 4'd1;
-                    mul_acc_sat_reg <= mul_acc_next_sat_wire;
-                    main_state      <= MS_OP_MUL_MCAND_HI;
+                    op_state_dbg          <= 4'd1;
+                    mul_acc_sat_reg       <= mul_acc_next_sat_wire;
+                    /* A left shift saturates only when the current saturated
+                     * multiplicand already has bit PW set.  Replicate that
+                     * one decision into three kept flops so each following
+                     * chunk state drives only a small local mux cone. */
+                    mul_mcand_sat_lo_q    <= mul_mcand_sat_reg[PW];
+                    mul_mcand_sat_mid_q   <= mul_mcand_sat_reg[PW];
+                    mul_mcand_sat_hi_q    <= mul_mcand_sat_reg[PW];
+                    main_state            <= MS_OP_MUL_MCAND_HI;
                 end
 
                 MS_OP_MUL_MCAND_HI: begin
-                    op_state_dbg             <= 4'd1;
-                    mul_mcand_saturate_reg   <= mul_mcand_sat_reg[PW];
-                    if (mul_mcand_sat_reg[PW]) begin
-                        mul_mcand_sat_reg[PW]      <= 1'b1;
-                        mul_mcand_sat_reg[PW-1:11] <= {(PW-11){1'b0}};
-                    end else begin
-                        mul_mcand_sat_reg[PW:11]   <= mul_mcand_sat_reg[PW-1:10];
-                    end
+                    op_state_dbg <= 4'd1;
+                    /* Update high-to-low.  A left shift's high chunk depends
+                     * only on old high/mid bits, so changing it first does not
+                     * corrupt the following mid/low chunks. */
+                    mul_mcand_sat_reg[PW:14] <= mul_mcand_sat_hi_q ? 7'b1000000 :
+                                                mul_mcand_shift_next_wire[PW:14];
+                    main_state <= MS_OP_MUL_MCAND_MID;
+                end
+
+                MS_OP_MUL_MCAND_MID: begin
+                    op_state_dbg <= 4'd1;
+                    mul_mcand_sat_reg[13:7] <= mul_mcand_sat_mid_q ? 7'd0 :
+                                               mul_mcand_shift_next_wire[13:7];
                     main_state <= MS_OP_MUL_MCAND_LO;
                 end
 
                 MS_OP_MUL_MCAND_LO: begin
                     op_state_dbg <= 4'd1;
-                    if (mul_mcand_saturate_reg)
-                        mul_mcand_sat_reg[10:0] <= 11'd0;
-                    else
-                        mul_mcand_sat_reg[10:0] <= {mul_mcand_sat_reg[9:0], 1'b0};
+                    mul_mcand_sat_reg[6:0] <= mul_mcand_sat_lo_q ? 7'd0 :
+                                              mul_mcand_shift_next_wire[6:0];
                     main_state <= MS_OP_MUL_MULT_LO;
                 end
 
                 MS_OP_MUL_MULT_LO: begin
                     op_state_dbg <= 4'd1;
-                    mul_mult_sat_reg[10:0] <= mul_mult_sat_reg[11:1];
+                    mul_mult_sat_reg[6:0] <= mul_mult_shift_next_wire[6:0];
+                    main_state <= MS_OP_MUL_MULT_MID;
+                end
+
+                MS_OP_MUL_MULT_MID: begin
+                    op_state_dbg <= 4'd1;
+                    mul_mult_sat_reg[13:7] <= mul_mult_shift_next_wire[13:7];
                     main_state <= MS_OP_MUL_MULT_HI;
                 end
 
                 MS_OP_MUL_MULT_HI: begin
                     op_state_dbg <= 4'd1;
-                    mul_mult_sat_reg[PW:11] <= {1'b0, mul_mult_sat_reg[PW:12]};
+                    mul_mult_sat_reg[PW:14] <= mul_mult_shift_next_wire[PW:14];
                     if (mul_count_reg == MUL_LAST_COUNT) begin
-                        /*
-                         * mul_acc_sat_reg already contains the accumulator
-                         * produced by the preceding MS_OP_MUL_ACC state.
-                         */
+                        /* mul_acc_sat_reg already contains the accumulator
+                         * produced by the preceding MS_OP_MUL_ACC state. */
                         raw_range_error_reg <= (mul_acc_sat_reg > {1'b0, half_range_live});
                         main_state          <= MS_OP_START_ENC;
                     end else begin
@@ -739,7 +749,6 @@ module final_alu_runtime_top #(
                         main_state    <= MS_OP_MUL_ACC;
                     end
                 end
-
 
                 MS_OP_START_ENC: begin
                     op_state_dbg   <= 4'd1;
@@ -793,132 +802,75 @@ module final_alu_runtime_top #(
                     op_state_dbg <= 4'd2;
                     b_res_flat_reg[(4*WM)+:(2*WM)] <= enc_res_flat[(4*WM)+:(2*WM)];
                     lane_idx <= 3'd0;
-                    main_state <= MS_OP_PREP_L0;
+                    main_state <= MS_OP_PREP_LANE;
                 end
 
-                MS_OP_PREP_L0: begin
+                MS_OP_PREP_LANE: begin
                     op_state_dbg <= 4'd3;
-                    lane_idx    <= 3'd0;
-                    slice_a_reg <= a_res_flat_reg[(0*WM)+:WM];
-                    slice_b_reg <= b_res_flat_reg[(0*WM)+:WM];
-                    slice_m_reg <= m0_cfg;
-                    main_state  <= MS_OP_START_L0;
-                end
-                MS_OP_START_L0: begin
-                    op_state_dbg    <= 4'd3;
-                    slice_start_reg <= 1'b1;
-                    main_state      <= MS_OP_WAIT_L0;
-                end
-                MS_OP_WAIT_L0: begin
-                    op_state_dbg <= 4'd4;
-                    if (slice_done) begin
-                        z0_reg <= slice_z_res;
-                        main_state <= MS_OP_PREP_L1;
-                    end
+                    case (lane_idx)
+                        3'd0: begin
+                            slice_a_reg <= a_res_flat_reg[(0*WM)+:WM];
+                            slice_b_reg <= b_res_flat_reg[(0*WM)+:WM];
+                            slice_m_reg <= m0_cfg;
+                        end
+                        3'd1: begin
+                            slice_a_reg <= a_res_flat_reg[(1*WM)+:WM];
+                            slice_b_reg <= b_res_flat_reg[(1*WM)+:WM];
+                            slice_m_reg <= m1_cfg;
+                        end
+                        3'd2: begin
+                            slice_a_reg <= a_res_flat_reg[(2*WM)+:WM];
+                            slice_b_reg <= b_res_flat_reg[(2*WM)+:WM];
+                            slice_m_reg <= m2_cfg;
+                        end
+                        3'd3: begin
+                            slice_a_reg <= a_res_flat_reg[(3*WM)+:WM];
+                            slice_b_reg <= b_res_flat_reg[(3*WM)+:WM];
+                            slice_m_reg <= m3_cfg;
+                        end
+                        3'd4: begin
+                            slice_a_reg <= a_res_flat_reg[(4*WM)+:WM];
+                            slice_b_reg <= b_res_flat_reg[(4*WM)+:WM];
+                            slice_m_reg <= m4_cfg;
+                        end
+                        3'd5: begin
+                            slice_a_reg <= a_res_flat_reg[(5*WM)+:WM];
+                            slice_b_reg <= b_res_flat_reg[(5*WM)+:WM];
+                            slice_m_reg <= m5_cfg;
+                        end
+                        default: begin
+                            slice_a_reg <= {WM{1'b0}};
+                            slice_b_reg <= {WM{1'b0}};
+                            slice_m_reg <= {WM{1'b0}};
+                        end
+                    endcase
+                    main_state <= MS_OP_START_LANE;
                 end
 
-                MS_OP_PREP_L1: begin
-                    op_state_dbg <= 4'd3;
-                    lane_idx    <= 3'd1;
-                    slice_a_reg <= a_res_flat_reg[(1*WM)+:WM];
-                    slice_b_reg <= b_res_flat_reg[(1*WM)+:WM];
-                    slice_m_reg <= m1_cfg;
-                    main_state  <= MS_OP_START_L1;
-                end
-                MS_OP_START_L1: begin
+                MS_OP_START_LANE: begin
                     op_state_dbg    <= 4'd3;
                     slice_start_reg <= 1'b1;
-                    main_state      <= MS_OP_WAIT_L1;
-                end
-                MS_OP_WAIT_L1: begin
-                    op_state_dbg <= 4'd4;
-                    if (slice_done) begin
-                        z1_reg <= slice_z_res;
-                        main_state <= MS_OP_PREP_L2;
-                    end
+                    main_state      <= MS_OP_WAIT_LANE;
                 end
 
-                MS_OP_PREP_L2: begin
-                    op_state_dbg <= 4'd3;
-                    lane_idx    <= 3'd2;
-                    slice_a_reg <= a_res_flat_reg[(2*WM)+:WM];
-                    slice_b_reg <= b_res_flat_reg[(2*WM)+:WM];
-                    slice_m_reg <= m2_cfg;
-                    main_state  <= MS_OP_START_L2;
-                end
-                MS_OP_START_L2: begin
-                    op_state_dbg    <= 4'd3;
-                    slice_start_reg <= 1'b1;
-                    main_state      <= MS_OP_WAIT_L2;
-                end
-                MS_OP_WAIT_L2: begin
+                MS_OP_WAIT_LANE: begin
                     op_state_dbg <= 4'd4;
                     if (slice_done) begin
-                        z2_reg <= slice_z_res;
-                        main_state <= MS_OP_PREP_L3;
-                    end
-                end
-
-                MS_OP_PREP_L3: begin
-                    op_state_dbg <= 4'd3;
-                    lane_idx    <= 3'd3;
-                    slice_a_reg <= a_res_flat_reg[(3*WM)+:WM];
-                    slice_b_reg <= b_res_flat_reg[(3*WM)+:WM];
-                    slice_m_reg <= m3_cfg;
-                    main_state  <= MS_OP_START_L3;
-                end
-                MS_OP_START_L3: begin
-                    op_state_dbg    <= 4'd3;
-                    slice_start_reg <= 1'b1;
-                    main_state      <= MS_OP_WAIT_L3;
-                end
-                MS_OP_WAIT_L3: begin
-                    op_state_dbg <= 4'd4;
-                    if (slice_done) begin
-                        z3_reg <= slice_z_res;
-                        main_state <= MS_OP_PREP_L4;
-                    end
-                end
-
-                MS_OP_PREP_L4: begin
-                    op_state_dbg <= 4'd3;
-                    lane_idx    <= 3'd4;
-                    slice_a_reg <= a_res_flat_reg[(4*WM)+:WM];
-                    slice_b_reg <= b_res_flat_reg[(4*WM)+:WM];
-                    slice_m_reg <= m4_cfg;
-                    main_state  <= MS_OP_START_L4;
-                end
-                MS_OP_START_L4: begin
-                    op_state_dbg    <= 4'd3;
-                    slice_start_reg <= 1'b1;
-                    main_state      <= MS_OP_WAIT_L4;
-                end
-                MS_OP_WAIT_L4: begin
-                    op_state_dbg <= 4'd4;
-                    if (slice_done) begin
-                        z4_reg <= slice_z_res;
-                        main_state <= MS_OP_PREP_L5;
-                    end
-                end
-
-                MS_OP_PREP_L5: begin
-                    op_state_dbg <= 4'd3;
-                    lane_idx    <= 3'd5;
-                    slice_a_reg <= a_res_flat_reg[(5*WM)+:WM];
-                    slice_b_reg <= b_res_flat_reg[(5*WM)+:WM];
-                    slice_m_reg <= m5_cfg;
-                    main_state  <= MS_OP_START_L5;
-                end
-                MS_OP_START_L5: begin
-                    op_state_dbg    <= 4'd3;
-                    slice_start_reg <= 1'b1;
-                    main_state      <= MS_OP_WAIT_L5;
-                end
-                MS_OP_WAIT_L5: begin
-                    op_state_dbg <= 4'd4;
-                    if (slice_done) begin
-                        z5_reg <= slice_z_res;
-                        main_state <= MS_OP_START_CORR;
+                        case (lane_idx)
+                            3'd0: z0_reg <= slice_z_res;
+                            3'd1: z1_reg <= slice_z_res;
+                            3'd2: z2_reg <= slice_z_res;
+                            3'd3: z3_reg <= slice_z_res;
+                            3'd4: z4_reg <= slice_z_res;
+                            3'd5: z5_reg <= slice_z_res;
+                            default: begin end
+                        endcase
+                        if (lane_idx == 3'd5) begin
+                            main_state <= MS_OP_START_CORR;
+                        end else begin
+                            lane_idx   <= lane_idx + 3'd1;
+                            main_state <= MS_OP_PREP_LANE;
+                        end
                     end
                 end
 
