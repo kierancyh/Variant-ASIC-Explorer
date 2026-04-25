@@ -29,35 +29,55 @@ module final_alu_runtime_top #(
     output wire                     Uncorrectable
 );
 
-    localparam [3:0]
-        MS_IDLE          = 4'd0,
-        MS_CFG_WAIT_CHK  = 4'd1,
-        MS_CFG_WAIT_PRE  = 4'd2,
+    localparam [4:0]
+        MS_IDLE          = 5'd0,
+        MS_CFG_WAIT_CHK  = 5'd1,
+        MS_CFG_WAIT_PRE  = 5'd2,
+
+        /*
+         * V16 physical cleanup:
+         * V15's remaining signoff hotspot was the Load_IN operation-capture
+         * select net (_0983_). It drove the mux select for A_reg[23:0],
+         * B_reg[23:0], Op_Sel and operation-initialisation registers in one
+         * clock. Capture the operation in byte-wide banks and initialise the
+         * MUL side-path in separate states so no single state select drives a
+         * 48+ bit mux bank.
+         */
+        MS_OP_CAP_A0     = 5'd3,
+        MS_OP_CAP_A1     = 5'd4,
+        MS_OP_CAP_A2     = 5'd5,
+        MS_OP_CAP_B0     = 5'd6,
+        MS_OP_CAP_B1     = 5'd7,
+        MS_OP_CAP_B2     = 5'd8,
+        MS_OP_INIT_FLAGS = 5'd9,
+        MS_OP_INIT_RANGE = 5'd10,
+        MS_OP_INIT_MUL0  = 5'd11,
+        MS_OP_INIT_MUL1  = 5'd12,
+        MS_OP_INIT_MUL2  = 5'd13,
 
         /*
          * V13 physical cleanup:
          * Do not update the saturated multiplier accumulator, multiplicand and
-         * multiplier shift register in one wide state.  V12A synthesized a
+         * multiplier shift register in one wide state. V12A synthesized a
          * single large hold/update mux-select for all of those registers
-         * (_5121_/Y in the LibreLane report), causing the remaining max-slew
-         * and max-cap cluster.  Split one multiply bit into three small
-         * micro-states so each state only drives one 21-bit bank.
+         * (_5121_/Y in the LibreLane report). Split one multiply bit into
+         * three small micro-states.
          */
-        MS_OP_MUL_ACC    = 4'd3,
-        MS_OP_START_ENC  = 4'd4,
-        MS_OP_WAIT_ENC   = 4'd5,
-        MS_OP_START_LANE = 4'd6,
-        MS_OP_WAIT_LANE  = 4'd7,
-        MS_OP_START_CORR = 4'd8,
-        MS_OP_WAIT_CORR  = 4'd9,
-        MS_OP_FINAL      = 4'd10,
-        MS_OP_MUL_MCAND  = 4'd11,
-        MS_OP_MUL_MULT   = 4'd12,
+        MS_OP_MUL_ACC    = 5'd14,
+        MS_OP_MUL_MCAND  = 5'd15,
+        MS_OP_MUL_MULT   = 5'd16,
+        MS_OP_START_ENC  = 5'd17,
+        MS_OP_WAIT_ENC   = 5'd18,
+        MS_OP_START_LANE = 5'd19,
+        MS_OP_WAIT_LANE  = 5'd20,
+        MS_OP_START_CORR = 5'd21,
+        MS_OP_WAIT_CORR  = 5'd22,
+        MS_OP_FINAL      = 5'd23,
 
         /* Legacy/unreachable encodings retained as safe fallbacks. */
-        MS_CFG_COMMIT0   = 4'd13,
-        MS_CFG_COMMIT1   = 4'd14,
-        MS_CFG_COMMIT2   = 4'd15;
+        MS_CFG_COMMIT0   = 5'd24,
+        MS_CFG_COMMIT1   = 5'd25,
+        MS_CFG_COMMIT2   = 5'd26;
 
     /* Range multiplier side-path constants.
        For 5-bit moduli, the largest base product is below 2^PW.
@@ -66,7 +86,7 @@ module final_alu_runtime_top #(
     localparam [PW:0] MUL_SAT_MAX    = {1'b1, {PW{1'b0}}};
     localparam [5:0]  MUL_LAST_COUNT = PW;
 
-    reg [3:0] main_state;
+    reg [4:0] main_state;
     reg [2:0] cfg_state_dbg;
     reg [3:0] op_state_dbg;
     reg [2:0] lane_idx;
@@ -229,16 +249,16 @@ module final_alu_runtime_top #(
     assign mul_mcand_next_sat_wire = (mul_mcand_shift_wire > {1'b0, MUL_SAT_MAX}) ?
                                      MUL_SAT_MAX : mul_mcand_shift_wire[PW:0];
 
-    assign a_abs_wire              = A_in[XW-1] ? ((~A_in) + {{(XW-1){1'b0}}, 1'b1}) : A_in;
-    assign b_abs_wire              = B_in[XW-1] ? ((~B_in) + {{(XW-1){1'b0}}, 1'b1}) : B_in;
+    assign a_abs_wire              = A_reg[XW-1] ? ((~A_reg) + {{(XW-1){1'b0}}, 1'b1}) : A_reg;
+    assign b_abs_wire              = B_reg[XW-1] ? ((~B_reg) + {{(XW-1){1'b0}}, 1'b1}) : B_reg;
     assign a_abs_ext_wire          = {1'b0, a_abs_wire};
     assign b_abs_ext_wire          = {1'b0, b_abs_wire};
     assign mul_sat_max_ext_wire    = {{(XW-PW){1'b0}}, MUL_SAT_MAX};
     assign a_abs_sat_wire          = (a_abs_ext_wire > mul_sat_max_ext_wire) ? MUL_SAT_MAX : a_abs_ext_wire[PW:0];
     assign b_abs_sat_wire          = (b_abs_ext_wire > mul_sat_max_ext_wire) ? MUL_SAT_MAX : b_abs_ext_wire[PW:0];
 
-    assign add_true_wire           = {A_in[XW-1], A_in} + {B_in[XW-1], B_in};
-    assign sub_true_wire           = {A_in[XW-1], A_in} - {B_in[XW-1], B_in};
+    assign add_true_wire           = {A_reg[XW-1], A_reg} + {B_reg[XW-1], B_reg};
+    assign sub_true_wire           = {A_reg[XW-1], A_reg} - {B_reg[XW-1], B_reg};
     assign half_range_xw_wire      = $signed({1'b0, {{(XW-PW){1'b0}}, half_range_live}});
     assign neg_half_range_xw_wire  = -half_range_xw_wire;
     assign add_range_error_wire    = (add_true_wire > half_range_xw_wire) ||
@@ -514,36 +534,14 @@ module final_alu_runtime_top #(
                         cfg_state_dbg         <= 3'd1;
                         main_state            <= MS_CFG_WAIT_CHK;
                     end else if (Load_IN && config_valid_reg && !Busy) begin
-                        A_reg  <= A_in;
-                        B_reg  <= B_in;
-                        op_sel_reg <= Op_Sel;
+                        /* Keep the Load_IN cycle light: only latch the opcode
+                         * and claim Busy. A/B are captured in byte-wide states
+                         * below, which breaks the former high-slew _0983_ mux
+                         * select that drove the full 48-bit operand bank. */
+                        op_sel_reg       <= Op_Sel;
+                        op_busy_reg      <= 1'b1;
                         enc_select_b_reg <= 1'b0;
-                        case (Op_Sel)
-                            2'b00: raw_range_error_reg <= add_range_error_wire;
-                            2'b01: raw_range_error_reg <= sub_range_error_wire;
-                            default: raw_range_error_reg <= 1'b0;
-                        endcase
-                        mul_acc_sat_reg   <= {(PW+1){1'b0}};
-                        mul_mcand_sat_reg <= a_abs_sat_wire;
-                        mul_mult_sat_reg  <= b_abs_sat_wire;
-                        mul_count_reg     <= 6'd0;
-                        z0_reg                       <= {WM{1'b0}};
-                        z1_reg                       <= {WM{1'b0}};
-                        z2_reg                       <= {WM{1'b0}};
-                        z3_reg                       <= {WM{1'b0}};
-                        z4_reg                       <= {WM{1'b0}};
-                        z5_reg                       <= {WM{1'b0}};
-                        op_busy_reg                  <= 1'b1;
-                        error_detected_reg           <= 1'b0;
-                        corrected_reg                <= 1'b0;
-                        valid_reg                    <= 1'b0;
-                        uncorrectable_reg            <= 1'b0;
-                        last_mismatch_mask_reg       <= 6'd0;
-                        last_mismatch_count_reg      <= 3'd0;
-                        last_corrected_lane_mask_reg <= 6'd0;
-                        residue_error_reg            <= 1'b0;
-                        range_error_reg              <= 1'b0;
-                        main_state                   <= (Op_Sel == 2'b10) ? MS_OP_MUL_ACC : MS_OP_START_ENC;
+                        main_state       <= MS_OP_CAP_A0;
                     end
                 end
 
@@ -585,6 +583,86 @@ module final_alu_runtime_top #(
                 MS_CFG_COMMIT2: begin
                     config_busy_reg <= 1'b0;
                     main_state      <= MS_IDLE;
+                end
+
+                MS_OP_CAP_A0: begin
+                    op_state_dbg <= 4'd1;
+                    A_reg[7:0]  <= A_in[7:0];
+                    main_state   <= MS_OP_CAP_A1;
+                end
+
+                MS_OP_CAP_A1: begin
+                    op_state_dbg <= 4'd1;
+                    A_reg[15:8] <= A_in[15:8];
+                    main_state   <= MS_OP_CAP_A2;
+                end
+
+                MS_OP_CAP_A2: begin
+                    op_state_dbg  <= 4'd1;
+                    A_reg[23:16] <= A_in[23:16];
+                    main_state    <= MS_OP_CAP_B0;
+                end
+
+                MS_OP_CAP_B0: begin
+                    op_state_dbg <= 4'd1;
+                    B_reg[7:0]  <= B_in[7:0];
+                    main_state   <= MS_OP_CAP_B1;
+                end
+
+                MS_OP_CAP_B1: begin
+                    op_state_dbg <= 4'd1;
+                    B_reg[15:8] <= B_in[15:8];
+                    main_state   <= MS_OP_CAP_B2;
+                end
+
+                MS_OP_CAP_B2: begin
+                    op_state_dbg  <= 4'd1;
+                    B_reg[23:16] <= B_in[23:16];
+                    main_state    <= MS_OP_INIT_FLAGS;
+                end
+
+                MS_OP_INIT_FLAGS: begin
+                    op_state_dbg                 <= 4'd1;
+                    error_detected_reg           <= 1'b0;
+                    corrected_reg                <= 1'b0;
+                    valid_reg                    <= 1'b0;
+                    uncorrectable_reg            <= 1'b0;
+                    last_mismatch_mask_reg       <= 6'd0;
+                    last_mismatch_count_reg      <= 3'd0;
+                    last_corrected_lane_mask_reg <= 6'd0;
+                    residue_error_reg            <= 1'b0;
+                    range_error_reg              <= 1'b0;
+                    main_state                   <= (op_sel_reg == 2'b10) ? MS_OP_INIT_MUL0 : MS_OP_INIT_RANGE;
+                end
+
+                MS_OP_INIT_RANGE: begin
+                    op_state_dbg <= 4'd1;
+                    case (op_sel_reg)
+                        2'b00: raw_range_error_reg <= add_range_error_wire;
+                        2'b01: raw_range_error_reg <= sub_range_error_wire;
+                        default: raw_range_error_reg <= 1'b0;
+                    endcase
+                    main_state <= MS_OP_START_ENC;
+                end
+
+                MS_OP_INIT_MUL0: begin
+                    op_state_dbg        <= 4'd1;
+                    raw_range_error_reg <= 1'b0;
+                    mul_acc_sat_reg     <= {(PW+1){1'b0}};
+                    mul_count_reg       <= 6'd0;
+                    main_state          <= MS_OP_INIT_MUL1;
+                end
+
+                MS_OP_INIT_MUL1: begin
+                    op_state_dbg      <= 4'd1;
+                    mul_mcand_sat_reg <= a_abs_sat_wire;
+                    main_state        <= MS_OP_INIT_MUL2;
+                end
+
+                MS_OP_INIT_MUL2: begin
+                    op_state_dbg     <= 4'd1;
+                    mul_mult_sat_reg <= b_abs_sat_wire;
+                    main_state       <= MS_OP_MUL_ACC;
                 end
 
                 MS_OP_MUL_ACC: begin
