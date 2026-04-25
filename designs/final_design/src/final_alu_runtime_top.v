@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-// V30 source marker: V20 baseline plus shift-queue lane scheduler to remove lane_idx case mux.
+// V20 source marker: cfg M_base commit and encoder result copy are physically split.
 module final_alu_runtime_top #(
     parameter integer WM = 5,
     parameter integer XW = 24,
@@ -74,9 +74,8 @@ module final_alu_runtime_top #(
         MS_OP_STORE_B1    = 34'h000800000,
         MS_OP_STORE_B2    = 34'h001000000,
 
-        /* V30 shift-queue lane scheduler.  These states no longer select lanes
-         * with a 6-to-1 lane_idx case mux.  A/B/modulus are streamed through
-         * local shift queues and z0..z5 are built as a shift chain. */
+        /* Lane input pre-capture: breaks the lane_idx decode net away from
+         * the active slice datapath and z-register store cone. */
         MS_OP_PREP_LANE   = 34'h002000000,
         MS_OP_START_LANE  = 34'h004000000,
         MS_OP_WAIT_LANE   = 34'h008000000,
@@ -181,16 +180,6 @@ module final_alu_runtime_top #(
     reg  [6*WM-1:0] a_res_flat_reg;
     reg  [6*WM-1:0] b_res_flat_reg;
 
-    /* V30 physical-friendly lane streaming queues.
-       V20 selected slice_a/slice_b/slice_m with a lane_idx case mux.  That
-       repeatedly became a routed max-slew/max-cap hotspot.  V30 loads the six
-       lane packets once and then shifts them one lane at a time, so the active
-       slice packet always comes from the low WM bits with no 6-to-1 lane mux. */
-    reg  [6*WM-1:0] a_lane_shift_reg;
-    reg  [6*WM-1:0] b_lane_shift_reg;
-    reg  [6*WM-1:0] m_lane_shift_reg;
-    wire [6*WM-1:0] m_lane_flat_wire;
-
     reg        slice_start_reg;
     wire       slice_done;
     wire [WM-1:0] slice_z_res;
@@ -255,7 +244,6 @@ module final_alu_runtime_top #(
     wire [3:0] op_state_dbg_wire;
 
     assign z_res_flat = {z5_reg, z4_reg, z3_reg, z2_reg, z1_reg, z0_reg};
-    assign m_lane_flat_wire = {m5_cfg, m4_cfg, m3_cfg, m2_cfg, m1_cfg, m0_cfg};
 
     assign M_base_live               = checker_M_base;
     assign half_range_live           = checker_half_range;
@@ -763,23 +751,49 @@ module final_alu_runtime_top #(
                 MS_OP_STORE_B2: begin
                     op_state_dbg <= 4'd2;
                     b_res_flat_reg[(4*WM)+:(2*WM)] <= enc_res_flat[(4*WM)+:(2*WM)];
-                    /* V30: initialise the lane streams.  Lane 0 is placed in
-                     * the low WM bits, so each PREP state can feed the slice
-                     * from [WM-1:0] without any lane_idx selection mux. */
-                    a_lane_shift_reg <= a_res_flat_reg;
-                    b_lane_shift_reg <= {enc_res_flat[(4*WM)+:(2*WM)], b_res_flat_reg[(0*WM)+:(4*WM)]};
-                    m_lane_shift_reg <= m_lane_flat_wire;
                     lane_idx <= 3'd0;
                     main_state <= MS_OP_PREP_LANE;
                 end
 
                 MS_OP_PREP_LANE: begin
                     op_state_dbg <= 4'd3;
-                    /* V30: no case(lane_idx) here.  The active lane packet is
-                     * always the low WM bits of the three shift queues. */
-                    slice_a_reg <= a_lane_shift_reg[WM-1:0];
-                    slice_b_reg <= b_lane_shift_reg[WM-1:0];
-                    slice_m_reg <= m_lane_shift_reg[WM-1:0];
+                    case (lane_idx)
+                        3'd0: begin
+                            slice_a_reg <= a_res_flat_reg[(0*WM)+:WM];
+                            slice_b_reg <= b_res_flat_reg[(0*WM)+:WM];
+                            slice_m_reg <= m0_cfg;
+                        end
+                        3'd1: begin
+                            slice_a_reg <= a_res_flat_reg[(1*WM)+:WM];
+                            slice_b_reg <= b_res_flat_reg[(1*WM)+:WM];
+                            slice_m_reg <= m1_cfg;
+                        end
+                        3'd2: begin
+                            slice_a_reg <= a_res_flat_reg[(2*WM)+:WM];
+                            slice_b_reg <= b_res_flat_reg[(2*WM)+:WM];
+                            slice_m_reg <= m2_cfg;
+                        end
+                        3'd3: begin
+                            slice_a_reg <= a_res_flat_reg[(3*WM)+:WM];
+                            slice_b_reg <= b_res_flat_reg[(3*WM)+:WM];
+                            slice_m_reg <= m3_cfg;
+                        end
+                        3'd4: begin
+                            slice_a_reg <= a_res_flat_reg[(4*WM)+:WM];
+                            slice_b_reg <= b_res_flat_reg[(4*WM)+:WM];
+                            slice_m_reg <= m4_cfg;
+                        end
+                        3'd5: begin
+                            slice_a_reg <= a_res_flat_reg[(5*WM)+:WM];
+                            slice_b_reg <= b_res_flat_reg[(5*WM)+:WM];
+                            slice_m_reg <= m5_cfg;
+                        end
+                        default: begin
+                            slice_a_reg <= {WM{1'b0}};
+                            slice_b_reg <= {WM{1'b0}};
+                            slice_m_reg <= {WM{1'b0}};
+                        end
+                    endcase
                     main_state <= MS_OP_START_LANE;
                 end
 
@@ -792,20 +806,15 @@ module final_alu_runtime_top #(
                 MS_OP_WAIT_LANE: begin
                     op_state_dbg <= 4'd4;
                     if (slice_done) begin
-                        /* V30: stream to the next lane instead of storing with
-                         * a case(lane_idx) output mux.  After six slices the
-                         * shift chain naturally holds {z5,z4,z3,z2,z1,z0}. */
-                        z0_reg <= z1_reg;
-                        z1_reg <= z2_reg;
-                        z2_reg <= z3_reg;
-                        z3_reg <= z4_reg;
-                        z4_reg <= z5_reg;
-                        z5_reg <= slice_z_res;
-
-                        a_lane_shift_reg <= {{WM{1'b0}}, a_lane_shift_reg[(6*WM)-1:WM]};
-                        b_lane_shift_reg <= {{WM{1'b0}}, b_lane_shift_reg[(6*WM)-1:WM]};
-                        m_lane_shift_reg <= {{WM{1'b0}}, m_lane_shift_reg[(6*WM)-1:WM]};
-
+                        case (lane_idx)
+                            3'd0: z0_reg <= slice_z_res;
+                            3'd1: z1_reg <= slice_z_res;
+                            3'd2: z2_reg <= slice_z_res;
+                            3'd3: z3_reg <= slice_z_res;
+                            3'd4: z4_reg <= slice_z_res;
+                            3'd5: z5_reg <= slice_z_res;
+                            default: begin end
+                        endcase
                         if (lane_idx == 3'd5) begin
                             main_state <= MS_OP_START_CORR;
                         end else begin
