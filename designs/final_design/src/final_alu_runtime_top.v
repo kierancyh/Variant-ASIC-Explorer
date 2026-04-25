@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
-// V27 source marker: based on the clean V20 baseline; only the MUL range-helper shift banks are chunked.
-// V27 keeps the V20 lane/corrector structure because V21-V26 exposed worse lane/corrector mux hotspots.
+// V28 source marker: based on V27, with corrector scan update gating cleaned.
+// V28 keeps V27's MUL helper chunking and removes the corrector cmp_count/detect-driven p-counter update select.
 module final_alu_runtime_top #(
     parameter integer WM = 5,
     parameter integer XW = 24,
@@ -117,7 +117,7 @@ module final_alu_runtime_top #(
        one huge high-slew distribution net after synthesis/PnR.  The testbench
        and console already hold rst_n low for multiple clocks, so the one-cycle
        synchronous release is safe for this design. */
-    (* keep = "true", dont_touch = "true" *) reg rst_main_n;
+    (* keep = "true" *) reg rst_main_n;  // V28: allow post-route repair/buffering of top reset
     (* keep = "true", dont_touch = "true" *) reg rst_cfgregs_n;
     (* keep = "true", dont_touch = "true" *) reg rst_cfgchk_n;
     (* keep = "true", dont_touch = "true" *) reg rst_precomp_n;
@@ -389,7 +389,7 @@ module final_alu_runtime_top #(
         .z_res(slice_z_res)
     );
 
-    final_alu_corrector_search_v18 #(.WM(WM), .PW(PW)) u_corrector (
+    final_alu_corrector_search_v28 #(.WM(WM), .PW(PW)) u_corrector (
         .clk(clk),
         .rst_n(rst_corrector_n),
         .start(corrector_start_reg),

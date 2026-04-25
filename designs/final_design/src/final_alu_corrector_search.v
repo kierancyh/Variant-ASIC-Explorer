@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
-// V18 source marker: module renamed to prevent stale corrector source from silently compiling.
-// V18 source marker: corrector has no wide input-capture register bank.
-module final_alu_corrector_search_v18 #(
+// V28 source marker: no wide input-capture bank and no cmp_count/detect gated p-counter hold mux.
+// V28 source marker: module renamed so stale corrector sources fail immediately.
+module final_alu_corrector_search_v28 #(
     parameter integer WM = 5,
     parameter integer PW = 20
 )(
@@ -290,57 +290,59 @@ module final_alu_corrector_search_v18 #(
                             corrected_candidate_base <= cand;
                         end
                     end
+                end
 
-                    /*
-                     * Advance the residue scan every active scan cycle, even
-                     * on the terminal candidate.  On the terminal cycle these
-                     * next residue/candidate values are unused because the FSM moves to
-                     * ST_DONE, but avoiding a last_candidate-controlled hold
-                     * mux removes that comparator from the lane-update cones.
-                     */
-                    cand <= cand_plus_one;
-                    half_hit0_q <= next_half_hit;
-                    half_hit1_q <= next_half_hit;
-                    half_hit2_q <= next_half_hit;
-                    half_hit3_q <= next_half_hit;
-                    half_hit4_q <= next_half_hit;
-                    half_hit5_q <= next_half_hit;
+                /*
+                 * V28 physical cleanup:
+                 *   Always advance the candidate/residue counters in ST_SCAN.
+                 *   V27 advanced p0..p5 only when enable_detection &&
+                 *   (cmp_count != 0), which created one high-load routed
+                 *   mismatch-count select into all six residue-counter banks.
+                 *   On detection-disabled, clean-match, and terminal cycles
+                 *   the FSM moves to ST_DONE, so these next values are unused.
+                 */
+                cand <= cand_plus_one;
+                half_hit0_q <= next_half_hit;
+                half_hit1_q <= next_half_hit;
+                half_hit2_q <= next_half_hit;
+                half_hit3_q <= next_half_hit;
+                half_hit4_q <= next_half_hit;
+                half_hit5_q <= next_half_hit;
 
-                    if (half_hit0_q) begin
-                        if ((m0 <= 1) || (p0 == {WM{1'b0}})) p0 <= {WM{1'b0}}; else p0 <= m0 - p0;
-                    end else begin
-                        if ((m0 <= 1) || ((p0 + {{(WM-1){1'b0}},1'b1}) >= m0)) p0 <= {WM{1'b0}}; else p0 <= p0 + {{(WM-1){1'b0}},1'b1};
-                    end
+                if (half_hit0_q) begin
+                    if ((m0 <= 1) || (p0 == {WM{1'b0}})) p0 <= {WM{1'b0}}; else p0 <= m0 - p0;
+                end else begin
+                    if ((m0 <= 1) || ((p0 + {{(WM-1){1'b0}},1'b1}) >= m0)) p0 <= {WM{1'b0}}; else p0 <= p0 + {{(WM-1){1'b0}},1'b1};
+                end
 
-                    if (half_hit1_q) begin
-                        if ((m1 <= 1) || (p1 == {WM{1'b0}})) p1 <= {WM{1'b0}}; else p1 <= m1 - p1;
-                    end else begin
-                        if ((m1 <= 1) || ((p1 + {{(WM-1){1'b0}},1'b1}) >= m1)) p1 <= {WM{1'b0}}; else p1 <= p1 + {{(WM-1){1'b0}},1'b1};
-                    end
+                if (half_hit1_q) begin
+                    if ((m1 <= 1) || (p1 == {WM{1'b0}})) p1 <= {WM{1'b0}}; else p1 <= m1 - p1;
+                end else begin
+                    if ((m1 <= 1) || ((p1 + {{(WM-1){1'b0}},1'b1}) >= m1)) p1 <= {WM{1'b0}}; else p1 <= p1 + {{(WM-1){1'b0}},1'b1};
+                end
 
-                    if (half_hit2_q) begin
-                        if ((m2 <= 1) || (p2 == {WM{1'b0}})) p2 <= {WM{1'b0}}; else p2 <= m2 - p2;
-                    end else begin
-                        if ((m2 <= 1) || ((p2 + {{(WM-1){1'b0}},1'b1}) >= m2)) p2 <= {WM{1'b0}}; else p2 <= p2 + {{(WM-1){1'b0}},1'b1};
-                    end
+                if (half_hit2_q) begin
+                    if ((m2 <= 1) || (p2 == {WM{1'b0}})) p2 <= {WM{1'b0}}; else p2 <= m2 - p2;
+                end else begin
+                    if ((m2 <= 1) || ((p2 + {{(WM-1){1'b0}},1'b1}) >= m2)) p2 <= {WM{1'b0}}; else p2 <= p2 + {{(WM-1){1'b0}},1'b1};
+                end
 
-                    if (half_hit3_q) begin
-                        if ((m3 <= 1) || (p3 == {WM{1'b0}})) p3 <= {WM{1'b0}}; else p3 <= m3 - p3;
-                    end else begin
-                        if ((m3 <= 1) || ((p3 + {{(WM-1){1'b0}},1'b1}) >= m3)) p3 <= {WM{1'b0}}; else p3 <= p3 + {{(WM-1){1'b0}},1'b1};
-                    end
+                if (half_hit3_q) begin
+                    if ((m3 <= 1) || (p3 == {WM{1'b0}})) p3 <= {WM{1'b0}}; else p3 <= m3 - p3;
+                end else begin
+                    if ((m3 <= 1) || ((p3 + {{(WM-1){1'b0}},1'b1}) >= m3)) p3 <= {WM{1'b0}}; else p3 <= p3 + {{(WM-1){1'b0}},1'b1};
+                end
 
-                    if (half_hit4_q) begin
-                        if ((m4 <= 1) || (p4 == {WM{1'b0}})) p4 <= {WM{1'b0}}; else p4 <= m4 - p4;
-                    end else begin
-                        if ((m4 <= 1) || ((p4 + {{(WM-1){1'b0}},1'b1}) >= m4)) p4 <= {WM{1'b0}}; else p4 <= p4 + {{(WM-1){1'b0}},1'b1};
-                    end
+                if (half_hit4_q) begin
+                    if ((m4 <= 1) || (p4 == {WM{1'b0}})) p4 <= {WM{1'b0}}; else p4 <= m4 - p4;
+                end else begin
+                    if ((m4 <= 1) || ((p4 + {{(WM-1){1'b0}},1'b1}) >= m4)) p4 <= {WM{1'b0}}; else p4 <= p4 + {{(WM-1){1'b0}},1'b1};
+                end
 
-                    if (half_hit5_q) begin
-                        if ((m5 <= 1) || (p5 == {WM{1'b0}})) p5 <= {WM{1'b0}}; else p5 <= m5 - p5;
-                    end else begin
-                        if ((m5 <= 1) || ((p5 + {{(WM-1){1'b0}},1'b1}) >= m5)) p5 <= {WM{1'b0}}; else p5 <= p5 + {{(WM-1){1'b0}},1'b1};
-                    end
+                if (half_hit5_q) begin
+                    if ((m5 <= 1) || (p5 == {WM{1'b0}})) p5 <= {WM{1'b0}}; else p5 <= m5 - p5;
+                end else begin
+                    if ((m5 <= 1) || ((p5 + {{(WM-1){1'b0}},1'b1}) >= m5)) p5 <= {WM{1'b0}}; else p5 <= p5 + {{(WM-1){1'b0}},1'b1};
                 end
             end
 
