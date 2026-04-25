@@ -1,4 +1,5 @@
 `timescale 1ns/1ps
+// V18 source marker: top main_state is explicit one-hot and corrector module is v18-only.
 module final_alu_runtime_top #(
     parameter integer WM = 5,
     parameter integer XW = 24,
@@ -29,55 +30,49 @@ module final_alu_runtime_top #(
     output wire                     Uncorrectable
 );
 
-    localparam [4:0]
-        MS_IDLE          = 5'd0,
-        MS_CFG_WAIT_CHK  = 5'd1,
-        MS_CFG_WAIT_PRE  = 5'd2,
+    /*
+     * V18 physical-signoff cleanup: keep the top controller explicitly
+     * one-hot.  V17 still let Yosys use binary main_state bits; the
+     * routed report showed main_state[0] driving the mux select for the
+     * A_reg/B_reg operand-capture banks.  A one-hot state vector gives
+     * each capture/init/update state its own local select bit instead of
+     * one shared high-load binary decode net.
+     */
+    localparam integer MAIN_STATE_W = 27;
+    localparam [MAIN_STATE_W-1:0]
+        MS_IDLE           = 27'b000000000000000000000000001,
+        MS_CFG_WAIT_CHK   = 27'b000000000000000000000000010,
+        MS_CFG_WAIT_PRE   = 27'b000000000000000000000000100,
 
-        /*
-         * V16 physical cleanup:
-         * V15's remaining signoff hotspot was the Load_IN operation-capture
-         * select net (_0983_). It drove the mux select for A_reg[23:0],
-         * B_reg[23:0], Op_Sel and operation-initialisation registers in one
-         * clock. Capture the operation in byte-wide banks and initialise the
-         * MUL side-path in separate states so no single state select drives a
-         * 48+ bit mux bank.
-         */
-        MS_OP_CAP_A0     = 5'd3,
-        MS_OP_CAP_A1     = 5'd4,
-        MS_OP_CAP_A2     = 5'd5,
-        MS_OP_CAP_B0     = 5'd6,
-        MS_OP_CAP_B1     = 5'd7,
-        MS_OP_CAP_B2     = 5'd8,
-        MS_OP_INIT_FLAGS = 5'd9,
-        MS_OP_INIT_RANGE = 5'd10,
-        MS_OP_INIT_MUL0  = 5'd11,
-        MS_OP_INIT_MUL1  = 5'd12,
-        MS_OP_INIT_MUL2  = 5'd13,
+        /* Byte-wide operation-capture states. */
+        MS_OP_CAP_A0      = 27'b000000000000000000000001000,
+        MS_OP_CAP_A1      = 27'b000000000000000000000010000,
+        MS_OP_CAP_A2      = 27'b000000000000000000000100000,
+        MS_OP_CAP_B0      = 27'b000000000000000000001000000,
+        MS_OP_CAP_B1      = 27'b000000000000000000010000000,
+        MS_OP_CAP_B2      = 27'b000000000000000000100000000,
+        MS_OP_INIT_FLAGS  = 27'b000000000000000001000000000,
+        MS_OP_INIT_RANGE  = 27'b000000000000000010000000000,
+        MS_OP_INIT_MUL0   = 27'b000000000000000100000000000,
+        MS_OP_INIT_MUL1   = 27'b000000000000001000000000000,
+        MS_OP_INIT_MUL2   = 27'b000000000000010000000000000,
 
-        /*
-         * V13 physical cleanup:
-         * Do not update the saturated multiplier accumulator, multiplicand and
-         * multiplier shift register in one wide state. V12A synthesized a
-         * single large hold/update mux-select for all of those registers
-         * (_5121_/Y in the LibreLane report). Split one multiply bit into
-         * three small micro-states.
-         */
-        MS_OP_MUL_ACC    = 5'd14,
-        MS_OP_MUL_MCAND  = 5'd15,
-        MS_OP_MUL_MULT   = 5'd16,
-        MS_OP_START_ENC  = 5'd17,
-        MS_OP_WAIT_ENC   = 5'd18,
-        MS_OP_START_LANE = 5'd19,
-        MS_OP_WAIT_LANE  = 5'd20,
-        MS_OP_START_CORR = 5'd21,
-        MS_OP_WAIT_CORR  = 5'd22,
-        MS_OP_FINAL      = 5'd23,
+        /* Split saturated-MUL range tracker states. */
+        MS_OP_MUL_ACC     = 27'b000000000000100000000000000,
+        MS_OP_MUL_MCAND   = 27'b000000000001000000000000000,
+        MS_OP_MUL_MULT    = 27'b000000000010000000000000000,
+        MS_OP_START_ENC   = 27'b000000000100000000000000000,
+        MS_OP_WAIT_ENC    = 27'b000000001000000000000000000,
+        MS_OP_START_LANE  = 27'b000000010000000000000000000,
+        MS_OP_WAIT_LANE   = 27'b000000100000000000000000000,
+        MS_OP_START_CORR  = 27'b000001000000000000000000000,
+        MS_OP_WAIT_CORR   = 27'b000010000000000000000000000,
+        MS_OP_FINAL       = 27'b000100000000000000000000000,
 
-        /* Legacy/unreachable encodings retained as safe fallbacks. */
-        MS_CFG_COMMIT0   = 5'd24,
-        MS_CFG_COMMIT1   = 5'd25,
-        MS_CFG_COMMIT2   = 5'd26;
+        /* Legacy/unreachable config-commit fallbacks. */
+        MS_CFG_COMMIT0    = 27'b001000000000000000000000000,
+        MS_CFG_COMMIT1    = 27'b010000000000000000000000000,
+        MS_CFG_COMMIT2    = 27'b100000000000000000000000000;
 
     /* Range multiplier side-path constants.
        For 5-bit moduli, the largest base product is below 2^PW.
@@ -86,7 +81,7 @@ module final_alu_runtime_top #(
     localparam [PW:0] MUL_SAT_MAX    = {1'b1, {PW{1'b0}}};
     localparam [5:0]  MUL_LAST_COUNT = PW;
 
-    reg [4:0] main_state;
+    (* keep = "true", dont_touch = "true", fsm_encoding = "none" *) reg [MAIN_STATE_W-1:0] main_state;
     reg [2:0] cfg_state_dbg;
     reg [3:0] op_state_dbg;
     reg [2:0] lane_idx;
@@ -362,7 +357,7 @@ module final_alu_runtime_top #(
         .z_res(slice_z_res)
     );
 
-    final_alu_corrector_search #(.WM(WM), .PW(PW)) u_corrector (
+    final_alu_corrector_search_v18 #(.WM(WM), .PW(PW)) u_corrector (
         .clk(clk),
         .rst_n(rst_corrector_n),
         .start(corrector_start_reg),

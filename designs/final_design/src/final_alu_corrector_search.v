@@ -1,6 +1,7 @@
 `timescale 1ns/1ps
-// V17 source marker: corrector has no wide input-capture register bank.
-module final_alu_corrector_search #(
+// V18 source marker: module renamed to prevent stale corrector source from silently compiling.
+// V18 source marker: corrector has no wide input-capture register bank.
+module final_alu_corrector_search_v18 #(
     parameter integer WM = 5,
     parameter integer PW = 20
 )(
