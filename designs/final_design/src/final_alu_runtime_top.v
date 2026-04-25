@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-// V21 source marker: multiplier range checker no longer shifts wide multiplier/multiplicand register banks.
+// V22 source marker: V20 baseline plus split/range-only MUL helper without wide multiplier-shift banks.
 module final_alu_runtime_top #(
     parameter integer WM = 5,
     parameter integer XW = 24,
@@ -57,11 +57,16 @@ module final_alu_runtime_top #(
         MS_OP_INIT_MUL1   = 34'h000001000,
         MS_OP_INIT_MUL2   = 34'h000002000,
 
-        /* Split saturated-MUL range tracker states. */
-        MS_OP_MUL_ACC     = 34'h000004000,
-        MS_OP_MUL_MCAND   = 34'h000008000,
-        MS_OP_MUL_MULT    = 34'h000010000,
-        MS_OP_START_ENC   = 34'h000020000,
+        /* V22 split/range-only MUL helper states.  The old V20 helper
+         * shifted both a 21-bit multiplicand bank and a 21-bit multiplier
+         * bank.  The post-route report showed those two shift-bank update
+         * cones as the remaining max-slew/max-cap hotspots.  V22 keeps only
+         * the accumulator plus one shifted-addend bank, and splits that
+         * addend shift across high/low states. */
+        MS_OP_MUL_ACC      = 34'h000004000,
+        MS_OP_MUL_SHIFT_HI = 34'h000008000,
+        MS_OP_MUL_SHIFT_LO = 34'h000010000,
+        MS_OP_START_ENC    = 34'h000020000,
         MS_OP_WAIT_ENC    = 34'h000040000,
 
         /* V20: copy encoder residues into the A/B holding banks in
@@ -193,29 +198,21 @@ module final_alu_runtime_top #(
 
     /* Saturated true-range tracker.
        The residue datapath still performs the actual RRNS operation, while this
-       small side-path only decides whether the mathematical result is outside
-       the signed base range. With 5-bit runtime moduli, the base product fits
-       in PW=20, so a 48-bit range multiplier is unnecessary and physically
-       expensive. */
+       side-path only decides whether the mathematical result is outside the
+       signed base range.  V22 removes the two wide V20 multiplier-helper
+       shift banks.  Instead, B is read through one indexed bit-select from
+       the stable B_reg value, and only one shifted addend bank is advanced.
+       That shift is split into high/low states so a single routed mux-select
+       no longer drives a full 21-bit bank. */
     reg               raw_range_error_reg;
     reg  [PW:0]       mul_acc_sat_reg;
+    reg  [PW:0]       mul_addend_shift_reg;
+    reg               mul_addend_over_reg;
     reg  [5:0]        mul_count_reg;
-
-    /* V21: range-only MUL checker.
-       The post-route report showed the MUL loop still had two electrical
-       hotspots: the wide multiplier-shift enable and the wide shifted-addend
-       saturation control.  The MUL range checker now keeps only the
-       accumulator and a small bit counter.  The current addend is derived from
-       the stable captured operands and mul_count_reg, so no wide
-       multiplier/multiplicand register banks are clock-enabled every
-       iteration. */
     wire              mul_b_bit_wire;
-    wire [PW:0]       mul_shift_sat_wire;
-    wire [2*PW+1:0]   mul_shift_ext_wire;
-    wire              mul_shift_over_wire;
-    wire [PW:0]       mul_addend_sat_wire;
+    wire [PW:0]       mul_half_range_wire;
     wire [PW+1:0]     mul_acc_sum_wire;
-    wire [PW:0]       mul_acc_next_sat_wire;
+    wire              mul_step_range_error_wire;
     wire [XW-1:0]     a_abs_wire;
     wire [XW-1:0]     b_abs_wire;
     wire [XW:0]       a_abs_ext_wire;
@@ -262,14 +259,13 @@ module final_alu_runtime_top #(
     assign half_range_reg           = half_range_live;
     assign usable_subset_bitmap_reg = usable_subset_bitmap_live;
 
-    assign mul_b_bit_wire          = (mul_count_reg <= MUL_LAST_COUNT) ? b_abs_sat_wire[mul_count_reg] : 1'b0;
-    assign mul_shift_ext_wire      = ({{(PW+1){1'b0}}, a_abs_sat_wire} << mul_count_reg);
-    assign mul_shift_over_wire     = |mul_shift_ext_wire[2*PW+1:PW+1];
-    assign mul_shift_sat_wire      = mul_shift_over_wire ? MUL_SAT_MAX : mul_shift_ext_wire[PW:0];
-    assign mul_addend_sat_wire     = mul_b_bit_wire ? mul_shift_sat_wire : {(PW+1){1'b0}};
-    assign mul_acc_sum_wire        = {1'b0, mul_acc_sat_reg} + {1'b0, mul_addend_sat_wire};
-    assign mul_acc_next_sat_wire   = (mul_acc_sum_wire > {1'b0, MUL_SAT_MAX}) ?
-                                     MUL_SAT_MAX : mul_acc_sum_wire[PW:0];
+    assign mul_b_bit_wire              = (mul_count_reg <= MUL_LAST_COUNT) ? b_abs_sat_wire[mul_count_reg] : 1'b0;
+    assign mul_half_range_wire         = {1'b0, half_range_live};
+    assign mul_acc_sum_wire            = {1'b0, mul_acc_sat_reg} + {1'b0, mul_addend_shift_reg};
+    assign mul_step_range_error_wire   = mul_b_bit_wire &&
+                                         (mul_addend_over_reg ||
+                                          (mul_addend_shift_reg > mul_half_range_wire) ||
+                                          (mul_acc_sum_wire > {1'b0, mul_half_range_wire}));
 
     assign a_abs_wire              = A_reg[XW-1] ? ((~A_reg) + {{(XW-1){1'b0}}, 1'b1}) : A_reg;
     assign b_abs_wire              = B_reg[XW-1] ? ((~B_reg) + {{(XW-1){1'b0}}, 1'b1}) : B_reg;
@@ -663,40 +659,58 @@ module final_alu_runtime_top #(
                 end
 
                 MS_OP_INIT_MUL0: begin
-                    op_state_dbg        <= 4'd1;
-                    raw_range_error_reg <= 1'b0;
-                    mul_acc_sat_reg     <= {(PW+1){1'b0}};
-                    mul_count_reg       <= 6'd0;
-                    main_state          <= MS_OP_MUL_ACC;
+                    op_state_dbg          <= 4'd1;
+                    raw_range_error_reg   <= 1'b0;
+                    mul_acc_sat_reg       <= {(PW+1){1'b0}};
+                    mul_addend_over_reg   <= 1'b0;
+                    mul_count_reg         <= 6'd0;
+                    main_state            <= MS_OP_INIT_MUL1;
                 end
 
-                /* Legacy states kept as safe fallbacks so old wave/debug names
-                 * remain harmless.  V21 no longer has wide multiplier or
-                 * multiplicand shift-register banks to initialise here. */
-                MS_OP_INIT_MUL1,
-                MS_OP_INIT_MUL2,
-                MS_OP_MUL_MCAND: begin
-                    op_state_dbg <= 4'd1;
-                    main_state   <= MS_OP_MUL_ACC;
+                MS_OP_INIT_MUL1: begin
+                    op_state_dbg          <= 4'd1;
+                    mul_addend_shift_reg  <= a_abs_sat_wire;
+                    main_state            <= MS_OP_INIT_MUL2;
+                end
+
+                MS_OP_INIT_MUL2: begin
+                    /* Kept as a very small staging state for stable control
+                     * timing.  B is not copied into a shift register anymore;
+                     * the active bit is selected from the stable B_reg-derived
+                     * b_abs_sat_wire using mul_count_reg. */
+                    op_state_dbg          <= 4'd1;
+                    main_state            <= MS_OP_MUL_ACC;
                 end
 
                 MS_OP_MUL_ACC: begin
-                    op_state_dbg    <= 4'd1;
-                    mul_acc_sat_reg <= mul_acc_next_sat_wire;
-                    main_state      <= MS_OP_MUL_MULT;
+                    op_state_dbg <= 4'd1;
+                    if (mul_step_range_error_wire) begin
+                        raw_range_error_reg <= 1'b1;
+                    end else if (mul_b_bit_wire) begin
+                        mul_acc_sat_reg <= mul_acc_sum_wire[PW:0];
+                    end
+
+                    if (mul_step_range_error_wire || (mul_count_reg == MUL_LAST_COUNT)) begin
+                        main_state <= MS_OP_START_ENC;
+                    end else begin
+                        main_state <= MS_OP_MUL_SHIFT_HI;
+                    end
                 end
 
-                MS_OP_MUL_MULT: begin
+                MS_OP_MUL_SHIFT_HI: begin
                     op_state_dbg <= 4'd1;
-                    if (mul_count_reg == MUL_LAST_COUNT) begin
-                        /* mul_acc_sat_reg already contains the accumulator
-                         * produced by the preceding MS_OP_MUL_ACC state. */
-                        raw_range_error_reg <= (mul_acc_sat_reg > {1'b0, half_range_live});
-                        main_state          <= MS_OP_START_ENC;
-                    end else begin
-                        mul_count_reg <= mul_count_reg + 6'd1;
-                        main_state    <= MS_OP_MUL_ACC;
-                    end
+                    /* Shift the high half first while the low half is still
+                     * unchanged; this preserves old bit 10 as the new bit 11. */
+                    mul_addend_over_reg        <= mul_addend_over_reg | mul_addend_shift_reg[PW];
+                    mul_addend_shift_reg[PW:11] <= mul_addend_shift_reg[PW-1:10];
+                    main_state                 <= MS_OP_MUL_SHIFT_LO;
+                end
+
+                MS_OP_MUL_SHIFT_LO: begin
+                    op_state_dbg <= 4'd1;
+                    mul_addend_shift_reg[10:0] <= {mul_addend_shift_reg[9:0], 1'b0};
+                    mul_count_reg              <= mul_count_reg + 6'd1;
+                    main_state                 <= MS_OP_MUL_ACC;
                 end
 
                 MS_OP_START_ENC: begin
