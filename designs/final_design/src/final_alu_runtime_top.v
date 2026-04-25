@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-// V20 source marker: cfg M_base commit and encoder result copy are physically split.
+// V21 source marker: multiplier range checker no longer shifts wide multiplier/multiplicand register banks.
 module final_alu_runtime_top #(
     parameter integer WM = 5,
     parameter integer XW = 24,
@@ -199,14 +199,23 @@ module final_alu_runtime_top #(
        expensive. */
     reg               raw_range_error_reg;
     reg  [PW:0]       mul_acc_sat_reg;
-    reg  [PW:0]       mul_mcand_sat_reg;
-    reg  [PW:0]       mul_mult_sat_reg;
     reg  [5:0]        mul_count_reg;
+
+    /* V21: range-only MUL checker.
+       The post-route report showed the MUL loop still had two electrical
+       hotspots: the wide multiplier-shift enable and the wide shifted-addend
+       saturation control.  The MUL range checker now keeps only the
+       accumulator and a small bit counter.  The current addend is derived from
+       the stable captured operands and mul_count_reg, so no wide
+       multiplier/multiplicand register banks are clock-enabled every
+       iteration. */
+    wire              mul_b_bit_wire;
+    wire [PW:0]       mul_shift_sat_wire;
+    wire [2*PW+1:0]   mul_shift_ext_wire;
+    wire              mul_shift_over_wire;
     wire [PW:0]       mul_addend_sat_wire;
     wire [PW+1:0]     mul_acc_sum_wire;
     wire [PW:0]       mul_acc_next_sat_wire;
-    wire [PW+1:0]     mul_mcand_shift_wire;
-    wire [PW:0]       mul_mcand_next_sat_wire;
     wire [XW-1:0]     a_abs_wire;
     wire [XW-1:0]     b_abs_wire;
     wire [XW:0]       a_abs_ext_wire;
@@ -253,13 +262,14 @@ module final_alu_runtime_top #(
     assign half_range_reg           = half_range_live;
     assign usable_subset_bitmap_reg = usable_subset_bitmap_live;
 
-    assign mul_addend_sat_wire     = mul_mult_sat_reg[0] ? mul_mcand_sat_reg : {(PW+1){1'b0}};
+    assign mul_b_bit_wire          = (mul_count_reg <= MUL_LAST_COUNT) ? b_abs_sat_wire[mul_count_reg] : 1'b0;
+    assign mul_shift_ext_wire      = ({{(PW+1){1'b0}}, a_abs_sat_wire} << mul_count_reg);
+    assign mul_shift_over_wire     = |mul_shift_ext_wire[2*PW+1:PW+1];
+    assign mul_shift_sat_wire      = mul_shift_over_wire ? MUL_SAT_MAX : mul_shift_ext_wire[PW:0];
+    assign mul_addend_sat_wire     = mul_b_bit_wire ? mul_shift_sat_wire : {(PW+1){1'b0}};
     assign mul_acc_sum_wire        = {1'b0, mul_acc_sat_reg} + {1'b0, mul_addend_sat_wire};
     assign mul_acc_next_sat_wire   = (mul_acc_sum_wire > {1'b0, MUL_SAT_MAX}) ?
                                      MUL_SAT_MAX : mul_acc_sum_wire[PW:0];
-    assign mul_mcand_shift_wire    = {1'b0, mul_mcand_sat_reg} << 1;
-    assign mul_mcand_next_sat_wire = (mul_mcand_shift_wire > {1'b0, MUL_SAT_MAX}) ?
-                                     MUL_SAT_MAX : mul_mcand_shift_wire[PW:0];
 
     assign a_abs_wire              = A_reg[XW-1] ? ((~A_reg) + {{(XW-1){1'b0}}, 1'b1}) : A_reg;
     assign b_abs_wire              = B_reg[XW-1] ? ((~B_reg) + {{(XW-1){1'b0}}, 1'b1}) : B_reg;
@@ -657,41 +667,30 @@ module final_alu_runtime_top #(
                     raw_range_error_reg <= 1'b0;
                     mul_acc_sat_reg     <= {(PW+1){1'b0}};
                     mul_count_reg       <= 6'd0;
-                    main_state          <= MS_OP_INIT_MUL1;
+                    main_state          <= MS_OP_MUL_ACC;
                 end
 
-                MS_OP_INIT_MUL1: begin
-                    op_state_dbg      <= 4'd1;
-                    mul_mcand_sat_reg <= a_abs_sat_wire;
-                    main_state        <= MS_OP_INIT_MUL2;
-                end
-
-                MS_OP_INIT_MUL2: begin
-                    op_state_dbg     <= 4'd1;
-                    mul_mult_sat_reg <= b_abs_sat_wire;
-                    main_state       <= MS_OP_MUL_ACC;
+                /* Legacy states kept as safe fallbacks so old wave/debug names
+                 * remain harmless.  V21 no longer has wide multiplier or
+                 * multiplicand shift-register banks to initialise here. */
+                MS_OP_INIT_MUL1,
+                MS_OP_INIT_MUL2,
+                MS_OP_MUL_MCAND: begin
+                    op_state_dbg <= 4'd1;
+                    main_state   <= MS_OP_MUL_ACC;
                 end
 
                 MS_OP_MUL_ACC: begin
                     op_state_dbg    <= 4'd1;
                     mul_acc_sat_reg <= mul_acc_next_sat_wire;
-                    main_state      <= MS_OP_MUL_MCAND;
-                end
-
-                MS_OP_MUL_MCAND: begin
-                    op_state_dbg      <= 4'd1;
-                    mul_mcand_sat_reg <= mul_mcand_next_sat_wire;
-                    main_state        <= MS_OP_MUL_MULT;
+                    main_state      <= MS_OP_MUL_MULT;
                 end
 
                 MS_OP_MUL_MULT: begin
-                    op_state_dbg     <= 4'd1;
-                    mul_mult_sat_reg <= {1'b0, mul_mult_sat_reg[PW:1]};
+                    op_state_dbg <= 4'd1;
                     if (mul_count_reg == MUL_LAST_COUNT) begin
-                        /*
-                         * mul_acc_sat_reg already contains the accumulator
-                         * produced by the preceding MS_OP_MUL_ACC state.
-                         */
+                        /* mul_acc_sat_reg already contains the accumulator
+                         * produced by the preceding MS_OP_MUL_ACC state. */
                         raw_range_error_reg <= (mul_acc_sat_reg > {1'b0, half_range_live});
                         main_state          <= MS_OP_START_ENC;
                     end else begin
