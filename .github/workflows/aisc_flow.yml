@@ -294,6 +294,36 @@ jobs:
       - name: Pull OpenLane image
         run: |
           docker pull "${OPENLANE_IMAGE}"
+      - name: Verify resolved flow inputs
+        env:
+          PDK_ROOT: ${{ github.workspace }}/.volare
+        run: |
+          set -euo pipefail
+          python tools/scripts/gen_config.py             --variant "${{ needs.plan.outputs.safe_variant }}"             --clock_ns "${{ matrix.clock_ns }}"             --pdk-root "${PDK_ROOT}"             --out preflight_config.json
+          echo "Commit: ${GITHUB_SHA}"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          cfg = json.loads(Path("preflight_config.json").read_text(encoding="utf-8"))
+          print("DESIGN_NAME =", cfg.get("DESIGN_NAME"))
+          print("CLOCK_PERIOD =", cfg.get("CLOCK_PERIOD"))
+          print("FP_CORE_UTIL =", cfg.get("FP_CORE_UTIL"))
+          print("GPL_CELL_PADDING =", cfg.get("GPL_CELL_PADDING"))
+          print("RUN_ANTENNA_REPAIR =", cfg.get("RUN_ANTENNA_REPAIR"))
+          print("RUN_HEURISTIC_DIODE_INSERTION =", cfg.get("RUN_HEURISTIC_DIODE_INSERTION"))
+          print("RUN_POST_GRT_DESIGN_REPAIR =", cfg.get("RUN_POST_GRT_DESIGN_REPAIR"))
+          print("RUN_POST_GRT_RESIZER_TIMING =", cfg.get("RUN_POST_GRT_RESIZER_TIMING"))
+          print("PNR_SDC_FILE =", cfg.get("PNR_SDC_FILE"))
+          print("SIGNOFF_SDC_FILE =", cfg.get("SIGNOFF_SDC_FILE"))
+          for key in ("PNR_SDC_FILE", "SIGNOFF_SDC_FILE"):
+              path = Path(cfg.get(key, ""))
+              print(f"----- {key}: {path} -----")
+              if path.exists():
+                  print(path.read_text(encoding="utf-8", errors="ignore"))
+              else:
+                  print("(missing)")
+          PY
       - name: Run coarse ASIC attempt
         env:
           PDK_ROOT: ${{ github.workspace }}/.volare
@@ -386,6 +416,36 @@ jobs:
       - name: Pull OpenLane image
         run: |
           docker pull "${OPENLANE_IMAGE}"
+      - name: Verify resolved flow inputs
+        env:
+          PDK_ROOT: ${{ github.workspace }}/.volare
+        run: |
+          set -euo pipefail
+          python tools/scripts/gen_config.py             --variant "${{ needs.plan.outputs.safe_variant }}"             --clock_ns "${{ matrix.clock_ns }}"             --pdk-root "${PDK_ROOT}"             --out preflight_config.json
+          echo "Commit: ${GITHUB_SHA}"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          cfg = json.loads(Path("preflight_config.json").read_text(encoding="utf-8"))
+          print("DESIGN_NAME =", cfg.get("DESIGN_NAME"))
+          print("CLOCK_PERIOD =", cfg.get("CLOCK_PERIOD"))
+          print("FP_CORE_UTIL =", cfg.get("FP_CORE_UTIL"))
+          print("GPL_CELL_PADDING =", cfg.get("GPL_CELL_PADDING"))
+          print("RUN_ANTENNA_REPAIR =", cfg.get("RUN_ANTENNA_REPAIR"))
+          print("RUN_HEURISTIC_DIODE_INSERTION =", cfg.get("RUN_HEURISTIC_DIODE_INSERTION"))
+          print("RUN_POST_GRT_DESIGN_REPAIR =", cfg.get("RUN_POST_GRT_DESIGN_REPAIR"))
+          print("RUN_POST_GRT_RESIZER_TIMING =", cfg.get("RUN_POST_GRT_RESIZER_TIMING"))
+          print("PNR_SDC_FILE =", cfg.get("PNR_SDC_FILE"))
+          print("SIGNOFF_SDC_FILE =", cfg.get("SIGNOFF_SDC_FILE"))
+          for key in ("PNR_SDC_FILE", "SIGNOFF_SDC_FILE"):
+              path = Path(cfg.get(key, ""))
+              print(f"----- {key}: {path} -----")
+              if path.exists():
+                  print(path.read_text(encoding="utf-8", errors="ignore"))
+              else:
+                  print("(missing)")
+          PY
       - name: Run mid refine ASIC attempt
         env:
           PDK_ROOT: ${{ github.workspace }}/.volare
@@ -475,6 +535,36 @@ jobs:
       - name: Pull OpenLane image
         run: |
           docker pull "${OPENLANE_IMAGE}"
+      - name: Verify resolved flow inputs
+        env:
+          PDK_ROOT: ${{ github.workspace }}/.volare
+        run: |
+          set -euo pipefail
+          python tools/scripts/gen_config.py             --variant "${{ needs.plan.outputs.safe_variant }}"             --clock_ns "${{ matrix.clock_ns }}"             --pdk-root "${PDK_ROOT}"             --out preflight_config.json
+          echo "Commit: ${GITHUB_SHA}"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          cfg = json.loads(Path("preflight_config.json").read_text(encoding="utf-8"))
+          print("DESIGN_NAME =", cfg.get("DESIGN_NAME"))
+          print("CLOCK_PERIOD =", cfg.get("CLOCK_PERIOD"))
+          print("FP_CORE_UTIL =", cfg.get("FP_CORE_UTIL"))
+          print("GPL_CELL_PADDING =", cfg.get("GPL_CELL_PADDING"))
+          print("RUN_ANTENNA_REPAIR =", cfg.get("RUN_ANTENNA_REPAIR"))
+          print("RUN_HEURISTIC_DIODE_INSERTION =", cfg.get("RUN_HEURISTIC_DIODE_INSERTION"))
+          print("RUN_POST_GRT_DESIGN_REPAIR =", cfg.get("RUN_POST_GRT_DESIGN_REPAIR"))
+          print("RUN_POST_GRT_RESIZER_TIMING =", cfg.get("RUN_POST_GRT_RESIZER_TIMING"))
+          print("PNR_SDC_FILE =", cfg.get("PNR_SDC_FILE"))
+          print("SIGNOFF_SDC_FILE =", cfg.get("SIGNOFF_SDC_FILE"))
+          for key in ("PNR_SDC_FILE", "SIGNOFF_SDC_FILE"):
+              path = Path(cfg.get(key, ""))
+              print(f"----- {key}: {path} -----")
+              if path.exists():
+                  print(path.read_text(encoding="utf-8", errors="ignore"))
+              else:
+                  print("(missing)")
+          PY
       - name: Run refine-1 ASIC attempt
         env:
           PDK_ROOT: ${{ github.workspace }}/.volare
@@ -558,6 +648,36 @@ jobs:
       - name: Pull OpenLane image
         run: |
           docker pull "${OPENLANE_IMAGE}"
+      - name: Verify resolved flow inputs
+        env:
+          PDK_ROOT: ${{ github.workspace }}/.volare
+        run: |
+          set -euo pipefail
+          python tools/scripts/gen_config.py             --variant "${{ needs.plan.outputs.safe_variant }}"             --clock_ns "${{ matrix.clock_ns }}"             --pdk-root "${PDK_ROOT}"             --out preflight_config.json
+          echo "Commit: ${GITHUB_SHA}"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          cfg = json.loads(Path("preflight_config.json").read_text(encoding="utf-8"))
+          print("DESIGN_NAME =", cfg.get("DESIGN_NAME"))
+          print("CLOCK_PERIOD =", cfg.get("CLOCK_PERIOD"))
+          print("FP_CORE_UTIL =", cfg.get("FP_CORE_UTIL"))
+          print("GPL_CELL_PADDING =", cfg.get("GPL_CELL_PADDING"))
+          print("RUN_ANTENNA_REPAIR =", cfg.get("RUN_ANTENNA_REPAIR"))
+          print("RUN_HEURISTIC_DIODE_INSERTION =", cfg.get("RUN_HEURISTIC_DIODE_INSERTION"))
+          print("RUN_POST_GRT_DESIGN_REPAIR =", cfg.get("RUN_POST_GRT_DESIGN_REPAIR"))
+          print("RUN_POST_GRT_RESIZER_TIMING =", cfg.get("RUN_POST_GRT_RESIZER_TIMING"))
+          print("PNR_SDC_FILE =", cfg.get("PNR_SDC_FILE"))
+          print("SIGNOFF_SDC_FILE =", cfg.get("SIGNOFF_SDC_FILE"))
+          for key in ("PNR_SDC_FILE", "SIGNOFF_SDC_FILE"):
+              path = Path(cfg.get(key, ""))
+              print(f"----- {key}: {path} -----")
+              if path.exists():
+                  print(path.read_text(encoding="utf-8", errors="ignore"))
+              else:
+                  print("(missing)")
+          PY
       - name: Run refine-2 ASIC attempt
         env:
           PDK_ROOT: ${{ github.workspace }}/.volare
@@ -641,6 +761,36 @@ jobs:
       - name: Pull OpenLane image
         run: |
           docker pull "${OPENLANE_IMAGE}"
+      - name: Verify resolved flow inputs
+        env:
+          PDK_ROOT: ${{ github.workspace }}/.volare
+        run: |
+          set -euo pipefail
+          python tools/scripts/gen_config.py             --variant "${{ needs.plan.outputs.safe_variant }}"             --clock_ns "${{ matrix.clock_ns }}"             --pdk-root "${PDK_ROOT}"             --out preflight_config.json
+          echo "Commit: ${GITHUB_SHA}"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          cfg = json.loads(Path("preflight_config.json").read_text(encoding="utf-8"))
+          print("DESIGN_NAME =", cfg.get("DESIGN_NAME"))
+          print("CLOCK_PERIOD =", cfg.get("CLOCK_PERIOD"))
+          print("FP_CORE_UTIL =", cfg.get("FP_CORE_UTIL"))
+          print("GPL_CELL_PADDING =", cfg.get("GPL_CELL_PADDING"))
+          print("RUN_ANTENNA_REPAIR =", cfg.get("RUN_ANTENNA_REPAIR"))
+          print("RUN_HEURISTIC_DIODE_INSERTION =", cfg.get("RUN_HEURISTIC_DIODE_INSERTION"))
+          print("RUN_POST_GRT_DESIGN_REPAIR =", cfg.get("RUN_POST_GRT_DESIGN_REPAIR"))
+          print("RUN_POST_GRT_RESIZER_TIMING =", cfg.get("RUN_POST_GRT_RESIZER_TIMING"))
+          print("PNR_SDC_FILE =", cfg.get("PNR_SDC_FILE"))
+          print("SIGNOFF_SDC_FILE =", cfg.get("SIGNOFF_SDC_FILE"))
+          for key in ("PNR_SDC_FILE", "SIGNOFF_SDC_FILE"):
+              path = Path(cfg.get(key, ""))
+              print(f"----- {key}: {path} -----")
+              if path.exists():
+                  print(path.read_text(encoding="utf-8", errors="ignore"))
+              else:
+                  print("(missing)")
+          PY
       - name: Run refine-3 ASIC attempt
         env:
           PDK_ROOT: ${{ github.workspace }}/.volare
