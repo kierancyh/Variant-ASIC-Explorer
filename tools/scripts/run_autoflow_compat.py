@@ -66,6 +66,7 @@ def build_attempts(args: argparse.Namespace) -> List[Tuple[str, List[str]]]:
         ("--run-heuristic-diode-insertion", args.run_heuristic_diode_insertion),
         ("--run-post-grt-design-repair", args.run_post_grt_design_repair),
         ("--run-post-grt-resizer-timing", args.run_post_grt_resizer_timing),
+        ("--gpl-cell-padding", args.gpl_cell_padding),
     ]
     for flag, value in optional_pairs:
         if str(value).strip() != "":
@@ -99,6 +100,7 @@ def main() -> None:
     ap.add_argument("--run-heuristic-diode-insertion", default="")
     ap.add_argument("--run-post-grt-design-repair", default="")
     ap.add_argument("--run-post-grt-resizer-timing", default="")
+    ap.add_argument("--gpl-cell-padding", default="")
     args = ap.parse_args()
 
     if not AUTOFLOW.exists():

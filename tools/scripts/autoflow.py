@@ -305,6 +305,45 @@ def maybe_copy_openlane_run(run_dir: Path, attempt_dir: Path) -> None:
     copy_tree_if_exists(run_dir, dst)
 
 
+def snapshot_flow_inputs(
+    attempt_dir: Path,
+    *,
+    cfg_path: Path,
+    variant_path: Path,
+) -> None:
+    flow_inputs_dir = attempt_dir / "flow_inputs"
+    flow_inputs_dir.mkdir(parents=True, exist_ok=True)
+
+    variant_yaml = variant_path / "variant.yaml"
+    if variant_yaml.exists():
+        shutil.copy2(variant_yaml, flow_inputs_dir / "variant.yaml")
+
+    if cfg_path.exists():
+        shutil.copy2(cfg_path, flow_inputs_dir / "generated_openlane_config.json")
+
+    cfg_data: Dict[str, Any] = {}
+    if cfg_path.exists():
+        try:
+            cfg_data = json.loads(cfg_path.read_text(encoding="utf-8"))
+        except Exception:
+            cfg_data = {}
+
+    for cfg_key, dst_name in (
+        ("PNR_SDC_FILE", "pnr_constraints.sdc"),
+        ("SIGNOFF_SDC_FILE", "signoff_constraints.sdc"),
+    ):
+        src_value = str(cfg_data.get(cfg_key, "")).strip()
+        if not src_value:
+            continue
+        src_path = Path(src_value)
+        if not src_path.is_absolute():
+            src_path = (ROOT / src_path).resolve()
+        else:
+            src_path = src_path.resolve()
+        if src_path.exists() and src_path.is_file():
+            shutil.copy2(src_path, flow_inputs_dir / dst_name)
+
+
 def write_attempt_manifest(
     attempt_dir: Path,
     *,
@@ -716,15 +755,16 @@ def main() -> None:
     ap.add_argument("--tolerance-ns", type=float, default=1.0)
     ap.add_argument("--max-iters", type=int, default=8)
     ap.add_argument("--synth-strategy", default="")
-    ap.add_argument("--run-antenna-repair", default="true")
-    ap.add_argument("--run-heuristic-diode-insertion", default="true")
-    ap.add_argument("--run-post-grt-design-repair", default="true")
-    ap.add_argument("--run-post-grt-resizer-timing", default="true")
+    ap.add_argument("--run-antenna-repair", default="")
+    ap.add_argument("--run-heuristic-diode-insertion", default="")
+    ap.add_argument("--run-post-grt-design-repair", default="")
+    ap.add_argument("--run-post-grt-resizer-timing", default="")
+    ap.add_argument("--gpl-cell-padding", default="")
     ap.add_argument("--out-root", default="ci_out/designs_rns_crt")
     args = ap.parse_args()
 
     safe_variant = resolve_variant(args.variant)
-    _variant_path = safe_variant_to_path(safe_variant)
+    variant_path = safe_variant_to_path(safe_variant)
 
     out_root = (ROOT / args.out_root).resolve()
     out_root.mkdir(parents=True, exist_ok=True)
@@ -749,6 +789,7 @@ def main() -> None:
         "run_heuristic_diode_insertion": args.run_heuristic_diode_insertion,
         "run_post_grt_design_repair": args.run_post_grt_design_repair,
         "run_post_grt_resizer_timing": args.run_post_grt_resizer_timing,
+        "gpl_cell_padding": args.gpl_cell_padding,
     }
     (out_root / "_autoflow_session.json").write_text(json.dumps(session_meta, indent=2), encoding="utf-8")
 
@@ -813,6 +854,8 @@ def main() -> None:
                     args.run_post_grt_design_repair,
                     "--run-post-grt-resizer-timing",
                     args.run_post_grt_resizer_timing,
+                    "--gpl-cell-padding",
+                    args.gpl_cell_padding,
                     "--out",
                     str(cfg_path),
                 ],
@@ -821,6 +864,13 @@ def main() -> None:
             )
             config_generated = config_generation_rc == 0
             print(f"gen_config return code: {config_generation_rc}", flush=True)
+
+            if config_generated:
+                snapshot_flow_inputs(
+                    attempt_dir,
+                    cfg_path=cfg_path,
+                    variant_path=variant_path,
+                )
 
             openlane_invoked = False
             openlane_rc = 0

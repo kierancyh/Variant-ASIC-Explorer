@@ -65,9 +65,11 @@ def as_bool(value: Any, default: bool) -> bool:
         return value
 
     s = str(value).strip().lower()
-    if s in {"1", "true", "yes", "on"}:
+    if s == "":
+        return default
+    if s in {"1", "true", "yes", "on", "enabled"}:
         return True
-    if s in {"0", "false", "no", "off", ""}:
+    if s in {"0", "false", "no", "off", "disabled"}:
         return False
     return default
 
