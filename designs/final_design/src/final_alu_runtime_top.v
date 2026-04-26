@@ -75,13 +75,11 @@ module final_alu_runtime_top #(
         MS_OP_STORE_B2    = 36'h001000000,
 
         /*
-         * V31 physical-signoff cleanup: the V20 single PREP_LANE case built
-         * one shared lane_idx decoder that fed the modulus, A-residue and
-         * B-residue mux banks in the same cycle.  The latest routed 40 ns
-         * report shows that exact decoder cluster as the remaining max-cap /
-         * max-slew hotspot.  Keep the V20 algorithm, but split the pre-capture
-         * into three tiny states so each lane_idx decode only drives one 5-bit
-         * bank at a time.
+         * V32A physical-signoff cleanup: V31A split PREP into M/A/B states,
+         * but post-PnR still showed Yosys/OpenROAD sharing the same lane_idx
+         * decode cells across the modulus, A-residue and B-residue mux banks.
+         * The algorithm remains unchanged; separate registered one-hot selector
+         * copies below stop one decoder output from driving all three 5-bit banks.
          */
         MS_OP_PREP_M      = 36'h002000000,
         MS_OP_PREP_A      = 36'h004000000,
@@ -108,6 +106,15 @@ module final_alu_runtime_top #(
     reg [2:0] cfg_state_dbg;
     reg [3:0] op_state_dbg;
     reg [2:0] lane_idx;
+
+    /* V32A: cloned registered one-hot lane selectors for the three slice-prep
+       banks.  The V31A RTL split the states, but the routed netlist still
+       shared lane_idx==0 and lane_idx==2 decode cells across M/A/B mux banks,
+       causing the remaining max-cap and max-slew violations.  These selector
+       copies deliberately trade 18 tiny flops for much lower physical fanout. */
+    (* keep = "true", dont_touch = "true" *) reg [5:0] slice_m_lane_oh;
+    (* keep = "true", dont_touch = "true" *) reg [5:0] slice_a_lane_oh;
+    (* keep = "true", dont_touch = "true" *) reg [5:0] slice_b_lane_oh;
 
 
     /* Physical-design reset fanout isolation.
@@ -440,6 +447,45 @@ module final_alu_runtime_top #(
         end
     endfunction
 
+    function [5:0] lane_onehot;
+        input [2:0] idx;
+        begin
+            case (idx)
+                3'd0: lane_onehot = 6'b000001;
+                3'd1: lane_onehot = 6'b000010;
+                3'd2: lane_onehot = 6'b000100;
+                3'd3: lane_onehot = 6'b001000;
+                3'd4: lane_onehot = 6'b010000;
+                3'd5: lane_onehot = 6'b100000;
+                default: lane_onehot = 6'b000000;
+            endcase
+        end
+    endfunction
+
+    wire [WM-1:0] slice_m_next =
+        ({WM{slice_m_lane_oh[0]}} & m0_cfg) |
+        ({WM{slice_m_lane_oh[1]}} & m1_cfg) |
+        ({WM{slice_m_lane_oh[2]}} & m2_cfg) |
+        ({WM{slice_m_lane_oh[3]}} & m3_cfg) |
+        ({WM{slice_m_lane_oh[4]}} & m4_cfg) |
+        ({WM{slice_m_lane_oh[5]}} & m5_cfg);
+
+    wire [WM-1:0] slice_a_next =
+        ({WM{slice_a_lane_oh[0]}} & a_res_flat_reg[(0*WM)+:WM]) |
+        ({WM{slice_a_lane_oh[1]}} & a_res_flat_reg[(1*WM)+:WM]) |
+        ({WM{slice_a_lane_oh[2]}} & a_res_flat_reg[(2*WM)+:WM]) |
+        ({WM{slice_a_lane_oh[3]}} & a_res_flat_reg[(3*WM)+:WM]) |
+        ({WM{slice_a_lane_oh[4]}} & a_res_flat_reg[(4*WM)+:WM]) |
+        ({WM{slice_a_lane_oh[5]}} & a_res_flat_reg[(5*WM)+:WM]);
+
+    wire [WM-1:0] slice_b_next =
+        ({WM{slice_b_lane_oh[0]}} & b_res_flat_reg[(0*WM)+:WM]) |
+        ({WM{slice_b_lane_oh[1]}} & b_res_flat_reg[(1*WM)+:WM]) |
+        ({WM{slice_b_lane_oh[2]}} & b_res_flat_reg[(2*WM)+:WM]) |
+        ({WM{slice_b_lane_oh[3]}} & b_res_flat_reg[(3*WM)+:WM]) |
+        ({WM{slice_b_lane_oh[4]}} & b_res_flat_reg[(4*WM)+:WM]) |
+        ({WM{slice_b_lane_oh[5]}} & b_res_flat_reg[(5*WM)+:WM]);
+
     assign slice_a_sel = slice_a_reg;
     assign slice_b_sel = slice_b_reg;
     assign slice_m_sel = slice_m_reg;
@@ -505,6 +551,9 @@ module final_alu_runtime_top #(
             cfg_state_dbg                <= 3'd0;
             op_state_dbg                 <= 4'd0;
             lane_idx                     <= 3'd0;
+            slice_m_lane_oh              <= 6'b000001;
+            slice_a_lane_oh              <= 6'b000001;
+            slice_b_lane_oh              <= 6'b000001;
             cfg_clear_loaded             <= 1'b0;
             checker_start_reg            <= 1'b0;
             precomp_start_reg            <= 1'b0;
@@ -539,8 +588,11 @@ module final_alu_runtime_top #(
             case (main_state)
                 MS_IDLE: begin
                     cfg_state_dbg <= 3'd0;
-                    op_state_dbg  <= 4'd0;
-                    lane_idx      <= 3'd0;
+                    op_state_dbg     <= 4'd0;
+                    lane_idx         <= 3'd0;
+                    slice_m_lane_oh  <= 6'b000001;
+                    slice_a_lane_oh  <= 6'b000001;
+                    slice_b_lane_oh  <= 6'b000001;
                     if (cfg_apply && !Busy) begin
                         config_busy_reg       <= 1'b1;
                         config_valid_reg      <= 1'b0;
@@ -760,49 +812,28 @@ module final_alu_runtime_top #(
                 MS_OP_STORE_B2: begin
                     op_state_dbg <= 4'd2;
                     b_res_flat_reg[(4*WM)+:(2*WM)] <= enc_res_flat[(4*WM)+:(2*WM)];
-                    lane_idx <= 3'd0;
-                    main_state <= MS_OP_PREP_M;
+                    lane_idx        <= 3'd0;
+                    slice_m_lane_oh <= 6'b000001;
+                    slice_a_lane_oh <= 6'b000001;
+                    slice_b_lane_oh <= 6'b000001;
+                    main_state      <= MS_OP_PREP_M;
                 end
 
                 MS_OP_PREP_M: begin
                     op_state_dbg <= 4'd3;
-                    case (lane_idx)
-                        3'd0: slice_m_reg <= m0_cfg;
-                        3'd1: slice_m_reg <= m1_cfg;
-                        3'd2: slice_m_reg <= m2_cfg;
-                        3'd3: slice_m_reg <= m3_cfg;
-                        3'd4: slice_m_reg <= m4_cfg;
-                        3'd5: slice_m_reg <= m5_cfg;
-                        default: slice_m_reg <= {WM{1'b0}};
-                    endcase
+                    slice_m_reg <= slice_m_next;
                     main_state <= MS_OP_PREP_A;
                 end
 
                 MS_OP_PREP_A: begin
                     op_state_dbg <= 4'd3;
-                    case (lane_idx)
-                        3'd0: slice_a_reg <= a_res_flat_reg[(0*WM)+:WM];
-                        3'd1: slice_a_reg <= a_res_flat_reg[(1*WM)+:WM];
-                        3'd2: slice_a_reg <= a_res_flat_reg[(2*WM)+:WM];
-                        3'd3: slice_a_reg <= a_res_flat_reg[(3*WM)+:WM];
-                        3'd4: slice_a_reg <= a_res_flat_reg[(4*WM)+:WM];
-                        3'd5: slice_a_reg <= a_res_flat_reg[(5*WM)+:WM];
-                        default: slice_a_reg <= {WM{1'b0}};
-                    endcase
+                    slice_a_reg <= slice_a_next;
                     main_state <= MS_OP_PREP_B;
                 end
 
                 MS_OP_PREP_B: begin
                     op_state_dbg <= 4'd3;
-                    case (lane_idx)
-                        3'd0: slice_b_reg <= b_res_flat_reg[(0*WM)+:WM];
-                        3'd1: slice_b_reg <= b_res_flat_reg[(1*WM)+:WM];
-                        3'd2: slice_b_reg <= b_res_flat_reg[(2*WM)+:WM];
-                        3'd3: slice_b_reg <= b_res_flat_reg[(3*WM)+:WM];
-                        3'd4: slice_b_reg <= b_res_flat_reg[(4*WM)+:WM];
-                        3'd5: slice_b_reg <= b_res_flat_reg[(5*WM)+:WM];
-                        default: slice_b_reg <= {WM{1'b0}};
-                    endcase
+                    slice_b_reg <= slice_b_next;
                     main_state <= MS_OP_START_LANE;
                 end
 
@@ -827,8 +858,11 @@ module final_alu_runtime_top #(
                         if (lane_idx == 3'd5) begin
                             main_state <= MS_OP_START_CORR;
                         end else begin
-                            lane_idx   <= lane_idx + 3'd1;
-                            main_state <= MS_OP_PREP_M;
+                            lane_idx        <= lane_idx + 3'd1;
+                            slice_m_lane_oh <= lane_onehot(lane_idx + 3'd1);
+                            slice_a_lane_oh <= lane_onehot(lane_idx + 3'd1);
+                            slice_b_lane_oh <= lane_onehot(lane_idx + 3'd1);
+                            main_state      <= MS_OP_PREP_M;
                         end
                     end
                 end
