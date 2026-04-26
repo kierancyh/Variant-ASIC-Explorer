@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-// V20 source marker: cfg M_base commit and encoder result copy are physically split.
+// V33B source marker: V33A self-shifting prep kept; lane0 is explicitly seeded and result store uses lane_idx for functional alignment.
 module final_alu_runtime_top #(
     parameter integer WM = 5,
     parameter integer XW = 24,
@@ -75,11 +75,11 @@ module final_alu_runtime_top #(
         MS_OP_STORE_B2    = 36'h001000000,
 
         /*
-         * V32A physical-signoff cleanup: V31A split PREP into M/A/B states,
-         * but post-PnR still showed Yosys/OpenROAD sharing the same lane_idx
-         * decode cells across the modulus, A-residue and B-residue mux banks.
-         * The algorithm remains unchanged; separate registered one-hot selector
-         * copies below stop one decoder output from driving all three 5-bit banks.
+         * V33A physical-signoff cleanup: V31A split PREP into M/A/B states,
+         * but V32A was optimized back into lane_idx decode logic. Keep the
+         * slice-prep sequence, but make the active operation lane a self-
+         * advancing one-hot state so the M/A/B mux banks no longer depend on
+         * shared binary lane_idx==N decoder cells.
          */
         MS_OP_PREP_M      = 36'h002000000,
         MS_OP_PREP_A      = 36'h004000000,
@@ -107,11 +107,14 @@ module final_alu_runtime_top #(
     reg [3:0] op_state_dbg;
     reg [2:0] lane_idx;
 
-    /* V32A: cloned registered one-hot lane selectors for the three slice-prep
-       banks.  The V31A RTL split the states, but the routed netlist still
-       shared lane_idx==0 and lane_idx==2 decode cells across M/A/B mux banks,
-       causing the remaining max-cap and max-slew violations.  These selector
-       copies deliberately trade 18 tiny flops for much lower physical fanout. */
+    /* V33A: operation-lane one-hot scanner.  V32A still synthesized back
+       into lane_idx decoder cells because the one-hot copies were generated
+       directly from lane_idx.  This scanner advances from its own previous
+       value and is used for the slice-prep muxes.  lane_idx is retained
+       for debug plus the low-fanout result-store/loop-control path; this
+       avoids the V33A lane-0 store/prep alignment failure while still
+       removing lane_idx from the heavy M/A/B prep mux banks. */
+    (* keep = "true", dont_touch = "true" *) reg [5:0] op_lane_oh;
     (* keep = "true", dont_touch = "true" *) reg [5:0] slice_m_lane_oh;
     (* keep = "true", dont_touch = "true" *) reg [5:0] slice_a_lane_oh;
     (* keep = "true", dont_touch = "true" *) reg [5:0] slice_b_lane_oh;
@@ -447,44 +450,55 @@ module final_alu_runtime_top #(
         end
     endfunction
 
-    function [5:0] lane_onehot;
-        input [2:0] idx;
+    function [5:0] lane_oh_next;
+        input [5:0] oh;
         begin
-            case (idx)
-                3'd0: lane_onehot = 6'b000001;
-                3'd1: lane_onehot = 6'b000010;
-                3'd2: lane_onehot = 6'b000100;
-                3'd3: lane_onehot = 6'b001000;
-                3'd4: lane_onehot = 6'b010000;
-                3'd5: lane_onehot = 6'b100000;
-                default: lane_onehot = 6'b000000;
+            case (oh)
+                6'b000001: lane_oh_next = 6'b000010;
+                6'b000010: lane_oh_next = 6'b000100;
+                6'b000100: lane_oh_next = 6'b001000;
+                6'b001000: lane_oh_next = 6'b010000;
+                6'b010000: lane_oh_next = 6'b100000;
+                default:   lane_oh_next = 6'b000001;
             endcase
         end
     endfunction
 
-    wire [WM-1:0] slice_m_next =
-        ({WM{slice_m_lane_oh[0]}} & m0_cfg) |
-        ({WM{slice_m_lane_oh[1]}} & m1_cfg) |
-        ({WM{slice_m_lane_oh[2]}} & m2_cfg) |
-        ({WM{slice_m_lane_oh[3]}} & m3_cfg) |
-        ({WM{slice_m_lane_oh[4]}} & m4_cfg) |
-        ({WM{slice_m_lane_oh[5]}} & m5_cfg);
+    function [WM-1:0] get_mod_oh;
+        input [5:0] oh;
+        begin
+            case (1'b1)
+                oh[0]: get_mod_oh = m0_cfg;
+                oh[1]: get_mod_oh = m1_cfg;
+                oh[2]: get_mod_oh = m2_cfg;
+                oh[3]: get_mod_oh = m3_cfg;
+                oh[4]: get_mod_oh = m4_cfg;
+                oh[5]: get_mod_oh = m5_cfg;
+                default: get_mod_oh = {WM{1'b0}};
+            endcase
+        end
+    endfunction
 
-    wire [WM-1:0] slice_a_next =
-        ({WM{slice_a_lane_oh[0]}} & a_res_flat_reg[(0*WM)+:WM]) |
-        ({WM{slice_a_lane_oh[1]}} & a_res_flat_reg[(1*WM)+:WM]) |
-        ({WM{slice_a_lane_oh[2]}} & a_res_flat_reg[(2*WM)+:WM]) |
-        ({WM{slice_a_lane_oh[3]}} & a_res_flat_reg[(3*WM)+:WM]) |
-        ({WM{slice_a_lane_oh[4]}} & a_res_flat_reg[(4*WM)+:WM]) |
-        ({WM{slice_a_lane_oh[5]}} & a_res_flat_reg[(5*WM)+:WM]);
+    function [WM-1:0] get_flat_oh;
+        input [6*WM-1:0] flat;
+        input [5:0] oh;
+        begin
+            case (1'b1)
+                oh[0]: get_flat_oh = flat[(0*WM)+:WM];
+                oh[1]: get_flat_oh = flat[(1*WM)+:WM];
+                oh[2]: get_flat_oh = flat[(2*WM)+:WM];
+                oh[3]: get_flat_oh = flat[(3*WM)+:WM];
+                oh[4]: get_flat_oh = flat[(4*WM)+:WM];
+                oh[5]: get_flat_oh = flat[(5*WM)+:WM];
+                default: get_flat_oh = {WM{1'b0}};
+            endcase
+        end
+    endfunction
 
-    wire [WM-1:0] slice_b_next =
-        ({WM{slice_b_lane_oh[0]}} & b_res_flat_reg[(0*WM)+:WM]) |
-        ({WM{slice_b_lane_oh[1]}} & b_res_flat_reg[(1*WM)+:WM]) |
-        ({WM{slice_b_lane_oh[2]}} & b_res_flat_reg[(2*WM)+:WM]) |
-        ({WM{slice_b_lane_oh[3]}} & b_res_flat_reg[(3*WM)+:WM]) |
-        ({WM{slice_b_lane_oh[4]}} & b_res_flat_reg[(4*WM)+:WM]) |
-        ({WM{slice_b_lane_oh[5]}} & b_res_flat_reg[(5*WM)+:WM]);
+    wire [5:0] op_lane_oh_next = lane_oh_next(op_lane_oh);
+    wire [WM-1:0] slice_m_next = get_mod_oh(slice_m_lane_oh);
+    wire [WM-1:0] slice_a_next = get_flat_oh(a_res_flat_reg, slice_a_lane_oh);
+    wire [WM-1:0] slice_b_next = get_flat_oh(b_res_flat_reg, slice_b_lane_oh);
 
     assign slice_a_sel = slice_a_reg;
     assign slice_b_sel = slice_b_reg;
@@ -551,6 +565,7 @@ module final_alu_runtime_top #(
             cfg_state_dbg                <= 3'd0;
             op_state_dbg                 <= 4'd0;
             lane_idx                     <= 3'd0;
+            op_lane_oh                   <= 6'b000001;
             slice_m_lane_oh              <= 6'b000001;
             slice_a_lane_oh              <= 6'b000001;
             slice_b_lane_oh              <= 6'b000001;
@@ -590,6 +605,7 @@ module final_alu_runtime_top #(
                     cfg_state_dbg <= 3'd0;
                     op_state_dbg     <= 4'd0;
                     lane_idx         <= 3'd0;
+                    op_lane_oh       <= 6'b000001;
                     slice_m_lane_oh  <= 6'b000001;
                     slice_a_lane_oh  <= 6'b000001;
                     slice_b_lane_oh  <= 6'b000001;
@@ -813,21 +829,39 @@ module final_alu_runtime_top #(
                     op_state_dbg <= 4'd2;
                     b_res_flat_reg[(4*WM)+:(2*WM)] <= enc_res_flat[(4*WM)+:(2*WM)];
                     lane_idx        <= 3'd0;
+                    op_lane_oh      <= 6'b000001;
                     slice_m_lane_oh <= 6'b000001;
                     slice_a_lane_oh <= 6'b000001;
                     slice_b_lane_oh <= 6'b000001;
-                    main_state      <= MS_OP_PREP_M;
+
+                    /* V33B functional alignment fix.
+                       V33A made lane selection self-shifting, but the first
+                       clean ADD showed lane 0 left as zero and then corrected
+                       as a false residue fault.  Seed the lane-0 slice inputs
+                       directly here, after A/B residue capture is complete,
+                       then start the slice.  Later lanes still use the
+                       self-shifting one-hot PREP_M/A/B sequence. */
+                    slice_m_reg <= m0_cfg;
+                    slice_a_reg <= a_res_flat_reg[(0*WM)+:WM];
+                    slice_b_reg <= b_res_flat_reg[(0*WM)+:WM];
+                    main_state  <= MS_OP_START_LANE;
                 end
 
                 MS_OP_PREP_M: begin
                     op_state_dbg <= 4'd3;
                     slice_m_reg <= slice_m_next;
+                    /* Phase-stagger the selector copies.  Each selector bank
+                       is loaded in the state before its mux is used, so the
+                       three physical mux banks do not need to share one binary
+                       lane_idx decoder. */
+                    slice_a_lane_oh <= op_lane_oh;
                     main_state <= MS_OP_PREP_A;
                 end
 
                 MS_OP_PREP_A: begin
                     op_state_dbg <= 4'd3;
                     slice_a_reg <= slice_a_next;
+                    slice_b_lane_oh <= op_lane_oh;
                     main_state <= MS_OP_PREP_B;
                 end
 
@@ -846,6 +880,10 @@ module final_alu_runtime_top #(
                 MS_OP_WAIT_LANE: begin
                     op_state_dbg <= 4'd4;
                     if (slice_done) begin
+                        /* Keep result storage aligned with the existing debug
+                           lane counter.  The heavy physical issue was the
+                           lane_idx-driven M/A/B slice-prep mux cluster, not
+                           this single result-store path. */
                         case (lane_idx)
                             3'd0: z0_reg <= slice_z_res;
                             3'd1: z1_reg <= slice_z_res;
@@ -855,13 +893,13 @@ module final_alu_runtime_top #(
                             3'd5: z5_reg <= slice_z_res;
                             default: begin end
                         endcase
+
                         if (lane_idx == 3'd5) begin
                             main_state <= MS_OP_START_CORR;
                         end else begin
+                            op_lane_oh      <= op_lane_oh_next;
+                            slice_m_lane_oh <= op_lane_oh_next;
                             lane_idx        <= lane_idx + 3'd1;
-                            slice_m_lane_oh <= lane_onehot(lane_idx + 3'd1);
-                            slice_a_lane_oh <= lane_onehot(lane_idx + 3'd1);
-                            slice_b_lane_oh <= lane_onehot(lane_idx + 3'd1);
                             main_state      <= MS_OP_PREP_M;
                         end
                     end
