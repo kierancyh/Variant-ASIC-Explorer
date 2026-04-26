@@ -38,55 +38,64 @@ module final_alu_runtime_top #(
      * each capture/init/update state its own local select bit instead of
      * one shared high-load binary decode net.
      */
-    localparam integer MAIN_STATE_W = 34;
+    localparam integer MAIN_STATE_W = 36;
     localparam [MAIN_STATE_W-1:0]
-        MS_IDLE           = 34'h000000001,
-        MS_CFG_WAIT_CHK   = 34'h000000002,
-        MS_CFG_WAIT_PRE   = 34'h000000004,
+        MS_IDLE           = 36'h000000001,
+        MS_CFG_WAIT_CHK   = 36'h000000002,
+        MS_CFG_WAIT_PRE   = 36'h000000004,
 
         /* Byte-wide operation-capture states. */
-        MS_OP_CAP_A0      = 34'h000000008,
-        MS_OP_CAP_A1      = 34'h000000010,
-        MS_OP_CAP_A2      = 34'h000000020,
-        MS_OP_CAP_B0      = 34'h000000040,
-        MS_OP_CAP_B1      = 34'h000000080,
-        MS_OP_CAP_B2      = 34'h000000100,
-        MS_OP_INIT_FLAGS  = 34'h000000200,
-        MS_OP_INIT_RANGE  = 34'h000000400,
-        MS_OP_INIT_MUL0   = 34'h000000800,
-        MS_OP_INIT_MUL1   = 34'h000001000,
-        MS_OP_INIT_MUL2   = 34'h000002000,
+        MS_OP_CAP_A0      = 36'h000000008,
+        MS_OP_CAP_A1      = 36'h000000010,
+        MS_OP_CAP_A2      = 36'h000000020,
+        MS_OP_CAP_B0      = 36'h000000040,
+        MS_OP_CAP_B1      = 36'h000000080,
+        MS_OP_CAP_B2      = 36'h000000100,
+        MS_OP_INIT_FLAGS  = 36'h000000200,
+        MS_OP_INIT_RANGE  = 36'h000000400,
+        MS_OP_INIT_MUL0   = 36'h000000800,
+        MS_OP_INIT_MUL1   = 36'h000001000,
+        MS_OP_INIT_MUL2   = 36'h000002000,
 
         /* Split saturated-MUL range tracker states. */
-        MS_OP_MUL_ACC     = 34'h000004000,
-        MS_OP_MUL_MCAND   = 34'h000008000,
-        MS_OP_MUL_MULT    = 34'h000010000,
-        MS_OP_START_ENC   = 34'h000020000,
-        MS_OP_WAIT_ENC    = 34'h000040000,
+        MS_OP_MUL_ACC     = 36'h000004000,
+        MS_OP_MUL_MCAND   = 36'h000008000,
+        MS_OP_MUL_MULT    = 36'h000010000,
+        MS_OP_START_ENC   = 36'h000020000,
+        MS_OP_WAIT_ENC    = 36'h000040000,
 
         /* V20: copy encoder residues into the A/B holding banks in
          * 10-bit chunks.  V19 copied all 30 residue bits in one cycle and
          * the post-PnR report showed that mux select as a new max-slew net. */
-        MS_OP_STORE_A0    = 34'h000080000,
-        MS_OP_STORE_A1    = 34'h000100000,
-        MS_OP_STORE_A2    = 34'h000200000,
-        MS_OP_STORE_B0    = 34'h000400000,
-        MS_OP_STORE_B1    = 34'h000800000,
-        MS_OP_STORE_B2    = 34'h001000000,
+        MS_OP_STORE_A0    = 36'h000080000,
+        MS_OP_STORE_A1    = 36'h000100000,
+        MS_OP_STORE_A2    = 36'h000200000,
+        MS_OP_STORE_B0    = 36'h000400000,
+        MS_OP_STORE_B1    = 36'h000800000,
+        MS_OP_STORE_B2    = 36'h001000000,
 
-        /* Lane input pre-capture: breaks the lane_idx decode net away from
-         * the active slice datapath and z-register store cone. */
-        MS_OP_PREP_LANE   = 34'h002000000,
-        MS_OP_START_LANE  = 34'h004000000,
-        MS_OP_WAIT_LANE   = 34'h008000000,
-        MS_OP_START_CORR  = 34'h010000000,
-        MS_OP_WAIT_CORR   = 34'h020000000,
-        MS_OP_FINAL       = 34'h040000000,
+        /*
+         * V31 physical-signoff cleanup: the V20 single PREP_LANE case built
+         * one shared lane_idx decoder that fed the modulus, A-residue and
+         * B-residue mux banks in the same cycle.  The latest routed 40 ns
+         * report shows that exact decoder cluster as the remaining max-cap /
+         * max-slew hotspot.  Keep the V20 algorithm, but split the pre-capture
+         * into three tiny states so each lane_idx decode only drives one 5-bit
+         * bank at a time.
+         */
+        MS_OP_PREP_M      = 36'h002000000,
+        MS_OP_PREP_A      = 36'h004000000,
+        MS_OP_PREP_B      = 36'h008000000,
+        MS_OP_START_LANE  = 36'h010000000,
+        MS_OP_WAIT_LANE   = 36'h020000000,
+        MS_OP_START_CORR  = 36'h040000000,
+        MS_OP_WAIT_CORR   = 36'h080000000,
+        MS_OP_FINAL       = 36'h100000000,
 
         /* Legacy/unreachable config-commit fallbacks. */
-        MS_CFG_COMMIT0    = 34'h080000000,
-        MS_CFG_COMMIT1    = 34'h100000000,
-        MS_CFG_COMMIT2    = 34'h200000000;
+        MS_CFG_COMMIT0    = 36'h200000000,
+        MS_CFG_COMMIT1    = 36'h400000000,
+        MS_CFG_COMMIT2    = 36'h800000000;
 
     /* Range multiplier side-path constants.
        For 5-bit moduli, the largest base product is below 2^PW.
@@ -752,47 +761,47 @@ module final_alu_runtime_top #(
                     op_state_dbg <= 4'd2;
                     b_res_flat_reg[(4*WM)+:(2*WM)] <= enc_res_flat[(4*WM)+:(2*WM)];
                     lane_idx <= 3'd0;
-                    main_state <= MS_OP_PREP_LANE;
+                    main_state <= MS_OP_PREP_M;
                 end
 
-                MS_OP_PREP_LANE: begin
+                MS_OP_PREP_M: begin
                     op_state_dbg <= 4'd3;
                     case (lane_idx)
-                        3'd0: begin
-                            slice_a_reg <= a_res_flat_reg[(0*WM)+:WM];
-                            slice_b_reg <= b_res_flat_reg[(0*WM)+:WM];
-                            slice_m_reg <= m0_cfg;
-                        end
-                        3'd1: begin
-                            slice_a_reg <= a_res_flat_reg[(1*WM)+:WM];
-                            slice_b_reg <= b_res_flat_reg[(1*WM)+:WM];
-                            slice_m_reg <= m1_cfg;
-                        end
-                        3'd2: begin
-                            slice_a_reg <= a_res_flat_reg[(2*WM)+:WM];
-                            slice_b_reg <= b_res_flat_reg[(2*WM)+:WM];
-                            slice_m_reg <= m2_cfg;
-                        end
-                        3'd3: begin
-                            slice_a_reg <= a_res_flat_reg[(3*WM)+:WM];
-                            slice_b_reg <= b_res_flat_reg[(3*WM)+:WM];
-                            slice_m_reg <= m3_cfg;
-                        end
-                        3'd4: begin
-                            slice_a_reg <= a_res_flat_reg[(4*WM)+:WM];
-                            slice_b_reg <= b_res_flat_reg[(4*WM)+:WM];
-                            slice_m_reg <= m4_cfg;
-                        end
-                        3'd5: begin
-                            slice_a_reg <= a_res_flat_reg[(5*WM)+:WM];
-                            slice_b_reg <= b_res_flat_reg[(5*WM)+:WM];
-                            slice_m_reg <= m5_cfg;
-                        end
-                        default: begin
-                            slice_a_reg <= {WM{1'b0}};
-                            slice_b_reg <= {WM{1'b0}};
-                            slice_m_reg <= {WM{1'b0}};
-                        end
+                        3'd0: slice_m_reg <= m0_cfg;
+                        3'd1: slice_m_reg <= m1_cfg;
+                        3'd2: slice_m_reg <= m2_cfg;
+                        3'd3: slice_m_reg <= m3_cfg;
+                        3'd4: slice_m_reg <= m4_cfg;
+                        3'd5: slice_m_reg <= m5_cfg;
+                        default: slice_m_reg <= {WM{1'b0}};
+                    endcase
+                    main_state <= MS_OP_PREP_A;
+                end
+
+                MS_OP_PREP_A: begin
+                    op_state_dbg <= 4'd3;
+                    case (lane_idx)
+                        3'd0: slice_a_reg <= a_res_flat_reg[(0*WM)+:WM];
+                        3'd1: slice_a_reg <= a_res_flat_reg[(1*WM)+:WM];
+                        3'd2: slice_a_reg <= a_res_flat_reg[(2*WM)+:WM];
+                        3'd3: slice_a_reg <= a_res_flat_reg[(3*WM)+:WM];
+                        3'd4: slice_a_reg <= a_res_flat_reg[(4*WM)+:WM];
+                        3'd5: slice_a_reg <= a_res_flat_reg[(5*WM)+:WM];
+                        default: slice_a_reg <= {WM{1'b0}};
+                    endcase
+                    main_state <= MS_OP_PREP_B;
+                end
+
+                MS_OP_PREP_B: begin
+                    op_state_dbg <= 4'd3;
+                    case (lane_idx)
+                        3'd0: slice_b_reg <= b_res_flat_reg[(0*WM)+:WM];
+                        3'd1: slice_b_reg <= b_res_flat_reg[(1*WM)+:WM];
+                        3'd2: slice_b_reg <= b_res_flat_reg[(2*WM)+:WM];
+                        3'd3: slice_b_reg <= b_res_flat_reg[(3*WM)+:WM];
+                        3'd4: slice_b_reg <= b_res_flat_reg[(4*WM)+:WM];
+                        3'd5: slice_b_reg <= b_res_flat_reg[(5*WM)+:WM];
+                        default: slice_b_reg <= {WM{1'b0}};
                     endcase
                     main_state <= MS_OP_START_LANE;
                 end
@@ -819,7 +828,7 @@ module final_alu_runtime_top #(
                             main_state <= MS_OP_START_CORR;
                         end else begin
                             lane_idx   <= lane_idx + 3'd1;
-                            main_state <= MS_OP_PREP_LANE;
+                            main_state <= MS_OP_PREP_M;
                         end
                     end
                 end
