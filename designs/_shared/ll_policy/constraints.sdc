@@ -8,4 +8,4 @@ set_false_path -from [get_ports clk]
 
 # Minimal electrical guidance for the resizer/signoff flow.
 set_load 0.020 [all_outputs]
-set_max_transition 1.40 [current_design]
+set_max_transition 1.30 [current_design]
