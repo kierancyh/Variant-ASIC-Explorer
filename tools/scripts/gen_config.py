@@ -74,6 +74,18 @@ def as_bool(value: Any, default: bool) -> bool:
     return default
 
 
+def as_int(value: Any, default: int) -> int:
+    if value is None:
+        return default
+    s = str(value).strip()
+    if s == "":
+        return default
+    try:
+        return int(s, 0)
+    except Exception:
+        return default
+
+
 def resolve_variant_path(variant_arg: str) -> Path:
     candidate = Path(variant_arg)
     if candidate.is_dir() and (candidate / "variant.yaml").exists():
@@ -152,6 +164,14 @@ def main() -> None:
         args.run_post_grt_resizer_timing,
         as_bool(ll_policy.get("run_post_grt_resizer_timing"), False),
     )
+    grt_antenna_margin = as_int(
+        ll_policy.get("grt_antenna_margin"),
+        10,
+    )
+    grt_antenna_iters = as_int(
+        ll_policy.get("grt_antenna_iters"),
+        3,
+    )
     explicit_gpl_cell_padding = str(args.gpl_cell_padding or "").strip()
     variant_gpl_cell_padding = ll_policy.get("gpl_cell_padding")
     if explicit_gpl_cell_padding:
@@ -173,6 +193,8 @@ def main() -> None:
         "RUN_HEURISTIC_DIODE_INSERTION": run_heuristic_diode_insertion,
         "RUN_POST_GRT_DESIGN_REPAIR": run_post_grt_design_repair,
         "RUN_POST_GRT_RESIZER_TIMING": run_post_grt_resizer_timing,
+        "GRT_ANTENNA_MARGIN": grt_antenna_margin,
+        "GRT_ANTENNA_ITERS": grt_antenna_iters,
         "PNR_SDC_FILE": pnr_sdc,
         "SIGNOFF_SDC_FILE": signoff_sdc,
         "RUN_LINTER": False,
@@ -191,7 +213,8 @@ def main() -> None:
         f"Wrote {out_path} for {repo_rel(variant_path)} @ {clock_ns}ns "
         f"(top={top_module}, clk={clock_port}, synth={synth_label}, "
         f"antenna_repair={run_antenna_repair}, diode_insertion={run_heuristic_diode_insertion}, "
-        f"post_grt_repair={run_post_grt_design_repair}, post_grt_resizer_timing={run_post_grt_resizer_timing})"
+        f"post_grt_repair={run_post_grt_design_repair}, post_grt_resizer_timing={run_post_grt_resizer_timing}, "
+        f"grt_antenna_margin={grt_antenna_margin}, grt_antenna_iters={grt_antenna_iters})"
     )
     print(f"Resolved VERILOG_FILES={sources}")
     print(f"Resolved PNR_SDC_FILE={pnr_sdc}")

@@ -231,6 +231,7 @@ def write_run_meta(
 ) -> None:
     stage_value = stage_label.strip()
     stage_token = stage_slug(stage_value)
+    artifact_name = os.environ.get("AUTOFLOW_ARTIFACT_NAME", "").strip() or f"{stage_token}-{variant}"
     meta = {
         "variant": variant,
         "clock_ns_requested": clock_ns,
@@ -239,7 +240,7 @@ def write_run_meta(
         "commit_sha": os.environ.get("GITHUB_SHA", ""),
         "synth_strategy_override": synth_strategy_override or "",
         "stage_label": stage_value,
-        "artifact_name": f"{stage_token}-{variant}",
+        "artifact_name": artifact_name,
     }
     (attempt_dir / "run_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
@@ -773,6 +774,7 @@ def main() -> None:
     session_meta = {
         "variant": safe_variant,
         "stage_label": args.stage_label,
+        "artifact_name": os.environ.get("AUTOFLOW_ARTIFACT_NAME", "").strip(),
         "clock_ns": args.clock_ns,
         "min_clock_ns": args.min_clock_ns,
         "max_clock_ns": args.max_clock_ns,
