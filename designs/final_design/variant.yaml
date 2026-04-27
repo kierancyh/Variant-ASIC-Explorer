@@ -39,5 +39,5 @@ ll_policy:
   run_post_grt_design_repair: true
   run_post_grt_resizer_timing: false
   run_heuristic_diode_insertion: false
-  grt_antenna_margin: 50
-  grt_antenna_iters: 8
+  grt_antenna_margin: 80
+  grt_antenna_iters: 10
