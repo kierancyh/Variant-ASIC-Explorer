@@ -172,6 +172,10 @@ def main() -> None:
         ll_policy.get("grt_antenna_iters"),
         3,
     )
+    heuristic_antenna_threshold = as_int(
+        ll_policy.get("heuristic_antenna_threshold"),
+        90,
+    )
     explicit_gpl_cell_padding = str(args.gpl_cell_padding or "").strip()
     variant_gpl_cell_padding = ll_policy.get("gpl_cell_padding")
     if explicit_gpl_cell_padding:
@@ -195,6 +199,7 @@ def main() -> None:
         "RUN_POST_GRT_RESIZER_TIMING": run_post_grt_resizer_timing,
         "GRT_ANTENNA_MARGIN": grt_antenna_margin,
         "GRT_ANTENNA_ITERS": grt_antenna_iters,
+        "HEURISTIC_ANTENNA_THRESHOLD": heuristic_antenna_threshold,
         "PNR_SDC_FILE": pnr_sdc,
         "SIGNOFF_SDC_FILE": signoff_sdc,
         "RUN_LINTER": False,
@@ -214,7 +219,8 @@ def main() -> None:
         f"(top={top_module}, clk={clock_port}, synth={synth_label}, "
         f"antenna_repair={run_antenna_repair}, diode_insertion={run_heuristic_diode_insertion}, "
         f"post_grt_repair={run_post_grt_design_repair}, post_grt_resizer_timing={run_post_grt_resizer_timing}, "
-        f"grt_antenna_margin={grt_antenna_margin}, grt_antenna_iters={grt_antenna_iters})"
+        f"grt_antenna_margin={grt_antenna_margin}, grt_antenna_iters={grt_antenna_iters}, "
+        f"heuristic_antenna_threshold={heuristic_antenna_threshold})"
     )
     print(f"Resolved VERILOG_FILES={sources}")
     print(f"Resolved PNR_SDC_FILE={pnr_sdc}")

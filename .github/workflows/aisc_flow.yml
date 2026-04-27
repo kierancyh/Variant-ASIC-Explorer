@@ -294,6 +294,37 @@ jobs:
       - name: Pull OpenLane image
         run: |
           docker pull "${OPENLANE_IMAGE}"
+      - name: Verify resolved flow inputs
+        env:
+          PDK_ROOT: ${{ github.workspace }}/.volare
+        run: |
+          python tools/scripts/gen_config.py             --variant "${{ needs.plan.outputs.safe_variant }}"             --clock_ns "${{ matrix.clock_ns }}"             --pdk-root "${PDK_ROOT}"             --out preflight_config.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          cfg = json.loads(Path("preflight_config.json").read_text(encoding="utf-8"))
+          print("Commit:", "${{ github.sha }}")
+          print("DESIGN_NAME =", cfg.get("DESIGN_NAME"))
+          print("CLOCK_PERIOD =", cfg.get("CLOCK_PERIOD"))
+          print("FP_CORE_UTIL =", cfg.get("FP_CORE_UTIL"))
+          print("GPL_CELL_PADDING =", cfg.get("GPL_CELL_PADDING"))
+          print("RUN_ANTENNA_REPAIR =", cfg.get("RUN_ANTENNA_REPAIR"))
+          print("RUN_HEURISTIC_DIODE_INSERTION =", cfg.get("RUN_HEURISTIC_DIODE_INSERTION"))
+          print("RUN_POST_GRT_DESIGN_REPAIR =", cfg.get("RUN_POST_GRT_DESIGN_REPAIR"))
+          print("RUN_POST_GRT_RESIZER_TIMING =", cfg.get("RUN_POST_GRT_RESIZER_TIMING"))
+          print("GRT_ANTENNA_MARGIN =", cfg.get("GRT_ANTENNA_MARGIN"))
+          print("GRT_ANTENNA_ITERS =", cfg.get("GRT_ANTENNA_ITERS"))
+          print("HEURISTIC_ANTENNA_THRESHOLD =", cfg.get("HEURISTIC_ANTENNA_THRESHOLD"))
+          print("PNR_SDC_FILE =", cfg.get("PNR_SDC_FILE"))
+          print("SIGNOFF_SDC_FILE =", cfg.get("SIGNOFF_SDC_FILE"))
+          for key in ("PNR_SDC_FILE", "SIGNOFF_SDC_FILE"):
+              path = Path(cfg.get(key, ""))
+              print(f"----- {key}: {path} -----")
+              if path.exists():
+                  print(path.read_text(encoding="utf-8", errors="ignore"))
+              else:
+                  print("(missing)")
+          PY
       - name: Run coarse ASIC attempt
         env:
           PDK_ROOT: ${{ github.workspace }}/.volare
@@ -304,12 +335,12 @@ jobs:
             --pdk-root "${PDK_ROOT}" \
             --openlane-image "${OPENLANE_IMAGE}" \
             --stage-label coarse \
-            --artifact-name "coarse-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns-r${{ github.run_id }}"
+            --artifact-name "coarse-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns"
       - name: Upload coarse attempt artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coarse-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns-r${{ github.run_id }}
+          name: coarse-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns
           path: ci_out/${{ needs.plan.outputs.safe_variant }}/
           if-no-files-found: warn
 
@@ -386,6 +417,37 @@ jobs:
       - name: Pull OpenLane image
         run: |
           docker pull "${OPENLANE_IMAGE}"
+      - name: Verify resolved flow inputs
+        env:
+          PDK_ROOT: ${{ github.workspace }}/.volare
+        run: |
+          python tools/scripts/gen_config.py             --variant "${{ needs.plan.outputs.safe_variant }}"             --clock_ns "${{ matrix.clock_ns }}"             --pdk-root "${PDK_ROOT}"             --out preflight_config.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          cfg = json.loads(Path("preflight_config.json").read_text(encoding="utf-8"))
+          print("Commit:", "${{ github.sha }}")
+          print("DESIGN_NAME =", cfg.get("DESIGN_NAME"))
+          print("CLOCK_PERIOD =", cfg.get("CLOCK_PERIOD"))
+          print("FP_CORE_UTIL =", cfg.get("FP_CORE_UTIL"))
+          print("GPL_CELL_PADDING =", cfg.get("GPL_CELL_PADDING"))
+          print("RUN_ANTENNA_REPAIR =", cfg.get("RUN_ANTENNA_REPAIR"))
+          print("RUN_HEURISTIC_DIODE_INSERTION =", cfg.get("RUN_HEURISTIC_DIODE_INSERTION"))
+          print("RUN_POST_GRT_DESIGN_REPAIR =", cfg.get("RUN_POST_GRT_DESIGN_REPAIR"))
+          print("RUN_POST_GRT_RESIZER_TIMING =", cfg.get("RUN_POST_GRT_RESIZER_TIMING"))
+          print("GRT_ANTENNA_MARGIN =", cfg.get("GRT_ANTENNA_MARGIN"))
+          print("GRT_ANTENNA_ITERS =", cfg.get("GRT_ANTENNA_ITERS"))
+          print("HEURISTIC_ANTENNA_THRESHOLD =", cfg.get("HEURISTIC_ANTENNA_THRESHOLD"))
+          print("PNR_SDC_FILE =", cfg.get("PNR_SDC_FILE"))
+          print("SIGNOFF_SDC_FILE =", cfg.get("SIGNOFF_SDC_FILE"))
+          for key in ("PNR_SDC_FILE", "SIGNOFF_SDC_FILE"):
+              path = Path(cfg.get(key, ""))
+              print(f"----- {key}: {path} -----")
+              if path.exists():
+                  print(path.read_text(encoding="utf-8", errors="ignore"))
+              else:
+                  print("(missing)")
+          PY
       - name: Run mid refine ASIC attempt
         env:
           PDK_ROOT: ${{ github.workspace }}/.volare
@@ -396,11 +458,11 @@ jobs:
             --pdk-root "${PDK_ROOT}" \
             --openlane-image "${OPENLANE_IMAGE}" \
             --stage-label mid \
-            --artifact-name "mid-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns-r${{ github.run_id }}"
+            --artifact-name "mid-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: mid-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns-r${{ github.run_id }}
+          name: mid-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns
           path: ci_out/${{ needs.plan.outputs.safe_variant }}/
           if-no-files-found: warn
 
@@ -475,6 +537,37 @@ jobs:
       - name: Pull OpenLane image
         run: |
           docker pull "${OPENLANE_IMAGE}"
+      - name: Verify resolved flow inputs
+        env:
+          PDK_ROOT: ${{ github.workspace }}/.volare
+        run: |
+          python tools/scripts/gen_config.py             --variant "${{ needs.plan.outputs.safe_variant }}"             --clock_ns "${{ matrix.clock_ns }}"             --pdk-root "${PDK_ROOT}"             --out preflight_config.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          cfg = json.loads(Path("preflight_config.json").read_text(encoding="utf-8"))
+          print("Commit:", "${{ github.sha }}")
+          print("DESIGN_NAME =", cfg.get("DESIGN_NAME"))
+          print("CLOCK_PERIOD =", cfg.get("CLOCK_PERIOD"))
+          print("FP_CORE_UTIL =", cfg.get("FP_CORE_UTIL"))
+          print("GPL_CELL_PADDING =", cfg.get("GPL_CELL_PADDING"))
+          print("RUN_ANTENNA_REPAIR =", cfg.get("RUN_ANTENNA_REPAIR"))
+          print("RUN_HEURISTIC_DIODE_INSERTION =", cfg.get("RUN_HEURISTIC_DIODE_INSERTION"))
+          print("RUN_POST_GRT_DESIGN_REPAIR =", cfg.get("RUN_POST_GRT_DESIGN_REPAIR"))
+          print("RUN_POST_GRT_RESIZER_TIMING =", cfg.get("RUN_POST_GRT_RESIZER_TIMING"))
+          print("GRT_ANTENNA_MARGIN =", cfg.get("GRT_ANTENNA_MARGIN"))
+          print("GRT_ANTENNA_ITERS =", cfg.get("GRT_ANTENNA_ITERS"))
+          print("HEURISTIC_ANTENNA_THRESHOLD =", cfg.get("HEURISTIC_ANTENNA_THRESHOLD"))
+          print("PNR_SDC_FILE =", cfg.get("PNR_SDC_FILE"))
+          print("SIGNOFF_SDC_FILE =", cfg.get("SIGNOFF_SDC_FILE"))
+          for key in ("PNR_SDC_FILE", "SIGNOFF_SDC_FILE"):
+              path = Path(cfg.get(key, ""))
+              print(f"----- {key}: {path} -----")
+              if path.exists():
+                  print(path.read_text(encoding="utf-8", errors="ignore"))
+              else:
+                  print("(missing)")
+          PY
       - name: Run refine-1 ASIC attempt
         env:
           PDK_ROOT: ${{ github.workspace }}/.volare
@@ -485,11 +578,11 @@ jobs:
             --pdk-root "${PDK_ROOT}" \
             --openlane-image "${OPENLANE_IMAGE}" \
             --stage-label refine-1 \
-            --artifact-name "refine1-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns-r${{ github.run_id }}"
+            --artifact-name "refine1-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: refine1-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns-r${{ github.run_id }}
+          name: refine1-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns
           path: ci_out/${{ needs.plan.outputs.safe_variant }}/
           if-no-files-found: warn
 
@@ -558,6 +651,37 @@ jobs:
       - name: Pull OpenLane image
         run: |
           docker pull "${OPENLANE_IMAGE}"
+      - name: Verify resolved flow inputs
+        env:
+          PDK_ROOT: ${{ github.workspace }}/.volare
+        run: |
+          python tools/scripts/gen_config.py             --variant "${{ needs.plan.outputs.safe_variant }}"             --clock_ns "${{ matrix.clock_ns }}"             --pdk-root "${PDK_ROOT}"             --out preflight_config.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          cfg = json.loads(Path("preflight_config.json").read_text(encoding="utf-8"))
+          print("Commit:", "${{ github.sha }}")
+          print("DESIGN_NAME =", cfg.get("DESIGN_NAME"))
+          print("CLOCK_PERIOD =", cfg.get("CLOCK_PERIOD"))
+          print("FP_CORE_UTIL =", cfg.get("FP_CORE_UTIL"))
+          print("GPL_CELL_PADDING =", cfg.get("GPL_CELL_PADDING"))
+          print("RUN_ANTENNA_REPAIR =", cfg.get("RUN_ANTENNA_REPAIR"))
+          print("RUN_HEURISTIC_DIODE_INSERTION =", cfg.get("RUN_HEURISTIC_DIODE_INSERTION"))
+          print("RUN_POST_GRT_DESIGN_REPAIR =", cfg.get("RUN_POST_GRT_DESIGN_REPAIR"))
+          print("RUN_POST_GRT_RESIZER_TIMING =", cfg.get("RUN_POST_GRT_RESIZER_TIMING"))
+          print("GRT_ANTENNA_MARGIN =", cfg.get("GRT_ANTENNA_MARGIN"))
+          print("GRT_ANTENNA_ITERS =", cfg.get("GRT_ANTENNA_ITERS"))
+          print("HEURISTIC_ANTENNA_THRESHOLD =", cfg.get("HEURISTIC_ANTENNA_THRESHOLD"))
+          print("PNR_SDC_FILE =", cfg.get("PNR_SDC_FILE"))
+          print("SIGNOFF_SDC_FILE =", cfg.get("SIGNOFF_SDC_FILE"))
+          for key in ("PNR_SDC_FILE", "SIGNOFF_SDC_FILE"):
+              path = Path(cfg.get(key, ""))
+              print(f"----- {key}: {path} -----")
+              if path.exists():
+                  print(path.read_text(encoding="utf-8", errors="ignore"))
+              else:
+                  print("(missing)")
+          PY
       - name: Run refine-2 ASIC attempt
         env:
           PDK_ROOT: ${{ github.workspace }}/.volare
@@ -568,11 +692,11 @@ jobs:
             --pdk-root "${PDK_ROOT}" \
             --openlane-image "${OPENLANE_IMAGE}" \
             --stage-label refine-2 \
-            --artifact-name "refine2-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns-r${{ github.run_id }}"
+            --artifact-name "refine2-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: refine2-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns-r${{ github.run_id }}
+          name: refine2-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns
           path: ci_out/${{ needs.plan.outputs.safe_variant }}/
           if-no-files-found: warn
 
@@ -641,6 +765,37 @@ jobs:
       - name: Pull OpenLane image
         run: |
           docker pull "${OPENLANE_IMAGE}"
+      - name: Verify resolved flow inputs
+        env:
+          PDK_ROOT: ${{ github.workspace }}/.volare
+        run: |
+          python tools/scripts/gen_config.py             --variant "${{ needs.plan.outputs.safe_variant }}"             --clock_ns "${{ matrix.clock_ns }}"             --pdk-root "${PDK_ROOT}"             --out preflight_config.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          cfg = json.loads(Path("preflight_config.json").read_text(encoding="utf-8"))
+          print("Commit:", "${{ github.sha }}")
+          print("DESIGN_NAME =", cfg.get("DESIGN_NAME"))
+          print("CLOCK_PERIOD =", cfg.get("CLOCK_PERIOD"))
+          print("FP_CORE_UTIL =", cfg.get("FP_CORE_UTIL"))
+          print("GPL_CELL_PADDING =", cfg.get("GPL_CELL_PADDING"))
+          print("RUN_ANTENNA_REPAIR =", cfg.get("RUN_ANTENNA_REPAIR"))
+          print("RUN_HEURISTIC_DIODE_INSERTION =", cfg.get("RUN_HEURISTIC_DIODE_INSERTION"))
+          print("RUN_POST_GRT_DESIGN_REPAIR =", cfg.get("RUN_POST_GRT_DESIGN_REPAIR"))
+          print("RUN_POST_GRT_RESIZER_TIMING =", cfg.get("RUN_POST_GRT_RESIZER_TIMING"))
+          print("GRT_ANTENNA_MARGIN =", cfg.get("GRT_ANTENNA_MARGIN"))
+          print("GRT_ANTENNA_ITERS =", cfg.get("GRT_ANTENNA_ITERS"))
+          print("HEURISTIC_ANTENNA_THRESHOLD =", cfg.get("HEURISTIC_ANTENNA_THRESHOLD"))
+          print("PNR_SDC_FILE =", cfg.get("PNR_SDC_FILE"))
+          print("SIGNOFF_SDC_FILE =", cfg.get("SIGNOFF_SDC_FILE"))
+          for key in ("PNR_SDC_FILE", "SIGNOFF_SDC_FILE"):
+              path = Path(cfg.get(key, ""))
+              print(f"----- {key}: {path} -----")
+              if path.exists():
+                  print(path.read_text(encoding="utf-8", errors="ignore"))
+              else:
+                  print("(missing)")
+          PY
       - name: Run refine-3 ASIC attempt
         env:
           PDK_ROOT: ${{ github.workspace }}/.volare
@@ -651,11 +806,11 @@ jobs:
             --pdk-root "${PDK_ROOT}" \
             --openlane-image "${OPENLANE_IMAGE}" \
             --stage-label refine-3 \
-            --artifact-name "refine3-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns-r${{ github.run_id }}"
+            --artifact-name "refine3-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: refine3-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns-r${{ github.run_id }}
+          name: refine3-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns
           path: ci_out/${{ needs.plan.outputs.safe_variant }}/
           if-no-files-found: warn
 

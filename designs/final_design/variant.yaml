@@ -43,3 +43,4 @@ ll_policy:
   run_heuristic_diode_insertion: true
   grt_antenna_margin: 30
   grt_antenna_iters: 6
+  heuristic_antenna_threshold: 150
