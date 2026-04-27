@@ -1,6 +1,7 @@
 `timescale 1ns/1ps
-// V43A source marker: V42A plus surgical isolation for the V42 final-route antenna remnants.
-// Targets: A_calc_iso_wire[15]/A reload select, slice_a_reg[0], slice_z_res_hold[0]/[2], and corr_m0_cfg[4].
+// V44A source marker: V43A with the A_calc_iso_wire[15] isolation reverted.
+// Reason: V43A introduced one final max-cap violation on the saturated multiply helper cone.
+// Keeps the safer slice_z/slice_a/corr_m0 bit-level antenna isolations, but leaves A[15] in the V42A operand path.
 module final_alu_runtime_top #(
     parameter integer WM = 5,
     parameter integer XW = 24,
@@ -261,10 +262,6 @@ module final_alu_runtime_top #(
     (* keep = "true", dont_touch = "true" *) reg B_bit4_enc_reg;
     (* keep = "true", dont_touch = "true" *) reg A_bit4_calc_reg;
     (* keep = "true", dont_touch = "true" *) reg B_bit4_calc_reg;
-    /* V43A: V42 final-route antenna exposed A_calc_iso_wire[15] and the
-       reload select feeding the A[15:8] bank.  Isolate only A calc bit 15
-       instead of duplicating the full operand bank. */
-    (* keep = "true", dont_touch = "true" *) reg A_bit15_calc_reg;
     wire signed [XW-1:0] A_enc_iso_wire;
     wire signed [XW-1:0] B_enc_iso_wire;
     wire signed [XW-1:0] A_calc_iso_wire;
@@ -351,7 +348,7 @@ module final_alu_runtime_top #(
 
     assign A_enc_iso_wire  = {A_reg[XW-1:6], A_bit5_enc_reg,  A_bit4_enc_reg,  A_reg[3:0]};
     assign B_enc_iso_wire  = {B_reg[XW-1:6], B_bit5_enc_reg,  B_bit4_enc_reg,  B_reg[3:0]};
-    assign A_calc_iso_wire = {A_reg[XW-1:16], A_bit15_calc_reg, A_reg[14:6], A_bit5_calc_reg, A_bit4_calc_reg, A_reg[3:0]};
+    assign A_calc_iso_wire = {A_reg[XW-1:6], A_bit5_calc_reg, A_bit4_calc_reg, A_reg[3:0]};
     assign B_calc_iso_wire = {B_reg[XW-1:6], B_bit5_calc_reg, B_bit4_calc_reg, B_reg[3:0]};
 
     /* V42A: isolate only the exact bits that appeared in V41 40ns antenna.
@@ -692,7 +689,6 @@ module final_alu_runtime_top #(
             B_bit4_enc_reg               <= 1'b0;
             A_bit4_calc_reg              <= 1'b0;
             B_bit4_calc_reg              <= 1'b0;
-            A_bit15_calc_reg             <= 1'b0;
             range_M_base_hold            <= {PW{1'b0}};
             range_half_range_hold        <= {PW{1'b0}};
             corr_m0_bit3_corrector_reg   <= 1'b0;
@@ -850,9 +846,8 @@ module final_alu_runtime_top #(
 
                 MS_OP_CAP_A1: begin
                     op_state_dbg <= 4'd1;
-                    A_reg[15:8]       <= A_in_shadow_reg[15:8];
-                    A_bit15_calc_reg <= A_in_shadow_reg[15];
-                    main_state        <= MS_OP_CAP_A2;
+                    A_reg[15:8] <= A_in_shadow_reg[15:8];
+                    main_state   <= MS_OP_CAP_A2;
                 end
 
                 MS_OP_CAP_A2: begin
