@@ -1,5 +1,6 @@
 `timescale 1ns/1ps
-// V41A source marker: V40A plus narrow bit4 operand isolation, local range M/half holds, and X_out output-pad isolation.
+// V42A source marker: V41A plus surgical isolation for the four V41 40ns antenna nets.
+// Targets: op_sel_reg[0], corr_m0_cfg[3], Config_Busy/output66, and slice_z_res_hold[3].
 module final_alu_runtime_top #(
     parameter integer WM = 5,
     parameter integer XW = 24,
@@ -159,6 +160,7 @@ module final_alu_runtime_top #(
 
     reg        config_valid_reg;
     reg        config_busy_reg;
+    (* keep = "true", dont_touch = "true" *) reg config_busy_pad_reg;
     reg        config_error_reg;
     reg [3:0]  config_error_code_reg;
 
@@ -219,10 +221,15 @@ module final_alu_runtime_top #(
     /* V36A: one-cycle local capture of the slice output before the z-bank
        store mux.  This targets recurring final antenna on slice_z_res[3]. */
     (* keep = "true", dont_touch = "true" *) reg [WM-1:0] slice_z_res_hold;
+    (* keep = "true", dont_touch = "true" *) reg slice_z_res_bit3_store_reg;
     reg  [WM-1:0] slice_a_reg;
     reg  [WM-1:0] slice_b_reg;
     reg  [WM-1:0] slice_m_reg;
     reg  [1:0] op_sel_reg;
+    (* keep = "true", dont_touch = "true" *) reg [1:0] op_sel_slice_reg;
+    (* keep = "true", dont_touch = "true" *) reg op_is_add_reg;
+    (* keep = "true", dont_touch = "true" *) reg op_is_sub_reg;
+    (* keep = "true", dont_touch = "true" *) reg op_is_mul_reg;
 
     reg  signed [XW-1:0] A_reg;
     reg  signed [XW-1:0] B_reg;
@@ -308,6 +315,7 @@ module final_alu_runtime_top #(
        consume these local holds instead of the shared config/precompute nets. */
     (* keep = "true", dont_touch = "true" *) reg [PW-1:0] range_M_base_hold;
     (* keep = "true", dont_touch = "true" *) reg [PW-1:0] range_half_range_hold;
+    (* keep = "true", dont_touch = "true" *) reg corr_m0_bit3_corrector_reg;
     /* V41A: separate the external X_out flop from the internal retained
        output value.  The V40A 40 ns artifact showed antenna on net87, the
        X_out[19] output path, because the output flop Q also fed internal
@@ -338,6 +346,11 @@ module final_alu_runtime_top #(
     assign A_calc_iso_wire = {A_reg[XW-1:6], A_bit5_calc_reg, A_bit4_calc_reg, A_reg[3:0]};
     assign B_calc_iso_wire = {B_reg[XW-1:6], B_bit5_calc_reg, B_bit4_calc_reg, B_reg[3:0]};
 
+    /* V42A: isolate only the exact bits that appeared in V41 40ns antenna.
+       Keep the wider banks untouched so we do not repeat the V38A max-slew/max-cap regression. */
+    wire [WM-1:0] slice_z_store_wire     = {slice_z_res_hold[WM-1:4], slice_z_res_bit3_store_reg, slice_z_res_hold[2:0]};
+    wire [WM-1:0] corr_m0_corrector_wire = {corr_m0_cfg[WM-1:4], corr_m0_bit3_corrector_reg, corr_m0_cfg[2:0]};
+
     assign mul_addend_sat_wire     = mul_mult_sat_reg[0] ? mul_mcand_sat_reg : {(PW+1){1'b0}};
     assign mul_acc_sum_wire        = {1'b0, mul_acc_sat_reg} + {1'b0, mul_addend_sat_wire};
     assign mul_acc_next_sat_wire   = (mul_acc_sum_wire > {1'b0, MUL_SAT_MAX}) ?
@@ -365,7 +378,7 @@ module final_alu_runtime_top #(
 
     assign Busy              = config_busy_reg | op_busy_reg;
     assign Config_Valid      = config_valid_reg;
-    assign Config_Busy       = config_busy_reg;
+    assign Config_Busy       = config_busy_pad_reg;
     assign Config_Error      = config_error_reg;
     assign Config_Error_Code = config_error_code_reg;
     assign Error_Detected    = error_detected_reg;
@@ -453,7 +466,7 @@ module final_alu_runtime_top #(
         .clk(clk),
         .rst_n(rst_slice_n),
         .start(slice_start_reg),
-        .op_sel(op_sel_reg),
+        .op_sel(op_sel_slice_reg),
         .a_res(slice_a_sel),
         .b_res(slice_b_sel),
         .modulus(slice_m_sel),
@@ -470,7 +483,7 @@ module final_alu_runtime_top #(
         .z_res_flat(z_res_flat),
         .M_base(M_base_live),
         .usable_subset_bitmap(usable_subset_bitmap_live),
-        .m0(corr_m0_cfg),
+        .m0(corr_m0_corrector_wire),
         .m1(corr_m1_cfg),
         .m2(corr_m2_cfg),
         .m3(corr_m3_cfg),
@@ -656,6 +669,7 @@ module final_alu_runtime_top #(
             corr_m4_cfg                  <= {WM{1'b0}};
             corr_m5_cfg                  <= {WM{1'b0}};
             slice_z_res_hold             <= {WM{1'b0}};
+            slice_z_res_bit3_store_reg    <= 1'b0;
             corrector_candidate_base_hold <= {PW{1'b0}};
             A_in_shadow_reg              <= {XW{1'b0}};
             B_in_shadow_reg              <= {XW{1'b0}};
@@ -669,17 +683,24 @@ module final_alu_runtime_top #(
             B_bit4_calc_reg              <= 1'b0;
             range_M_base_hold            <= {PW{1'b0}};
             range_half_range_hold        <= {PW{1'b0}};
+            corr_m0_bit3_corrector_reg   <= 1'b0;
             x_out_core_reg               <= {XW{1'b0}};
             Corrected                    <= 1'b0;
             cfg_clear_loaded             <= 1'b0;
             checker_start_reg            <= 1'b0;
             precomp_start_reg            <= 1'b0;
             enc_start_reg                <= 1'b0;
+            op_sel_reg                   <= 2'b00;
+            op_sel_slice_reg             <= 2'b00;
+            op_is_add_reg                <= 1'b0;
+            op_is_sub_reg                <= 1'b0;
+            op_is_mul_reg                <= 1'b0;
             enc_select_b_reg             <= 1'b0;
             slice_start_reg              <= 1'b0;
             corrector_start_reg          <= 1'b0;
             config_valid_reg             <= 1'b0;
             config_busy_reg              <= 1'b0;
+            config_busy_pad_reg          <= 1'b0;
             config_error_reg             <= 1'b0;
             config_error_code_reg        <= 4'd0;
             op_busy_reg                  <= 1'b0;
@@ -715,6 +736,7 @@ module final_alu_runtime_top #(
                     slice_b_lane_oh  <= 6'b000001;
                     if (cfg_apply && !Busy) begin
                         config_busy_reg       <= 1'b1;
+                        config_busy_pad_reg   <= 1'b1;
                         config_valid_reg      <= 1'b0;
                         config_error_reg      <= 1'b0;
                         config_error_code_reg <= 4'd0;
@@ -727,6 +749,10 @@ module final_alu_runtime_top #(
                          * below, which breaks the former high-slew _0983_ mux
                          * select that drove the full 48-bit operand bank. */
                         op_sel_reg       <= Op_Sel;
+                        op_sel_slice_reg <= Op_Sel;
+                        op_is_add_reg    <= (Op_Sel == 2'b00);
+                        op_is_sub_reg    <= (Op_Sel == 2'b01);
+                        op_is_mul_reg    <= (Op_Sel == 2'b10);
                         A_in_shadow_reg <= A_in;
                         B_in_shadow_reg <= B_in;
                         op_busy_reg      <= 1'b1;
@@ -740,6 +766,7 @@ module final_alu_runtime_top #(
                     if (checker_done) begin
                         if (!checker_cfg_ok) begin
                             config_busy_reg          <= 1'b0;
+                            config_busy_pad_reg      <= 1'b0;
                             config_valid_reg         <= 1'b0;
                             config_error_reg         <= 1'b1;
                             config_error_code_reg    <= checker_error_code;
@@ -768,6 +795,7 @@ module final_alu_runtime_top #(
                             slice_m4_cfg <= m4_cfg;
                             slice_m5_cfg <= m5_cfg;
                             corr_m0_cfg  <= m0_cfg;
+                            corr_m0_bit3_corrector_reg <= m0_cfg[3];
                             corr_m1_cfg  <= m1_cfg;
                             corr_m2_cfg  <= m2_cfg;
                             corr_m3_cfg  <= m3_cfg;
@@ -778,6 +806,7 @@ module final_alu_runtime_top #(
                         config_error_reg      <= !precomp_ok;
                         config_error_code_reg <= precomp_ok ? 4'd0 : 4'd6;
                         config_busy_reg       <= 1'b0;
+                        config_busy_pad_reg   <= 1'b0;
                         cfg_state_dbg         <= 3'd4;
                         main_state            <= MS_IDLE;
                     end
@@ -790,8 +819,9 @@ module final_alu_runtime_top #(
                  */
                 MS_CFG_COMMIT1,
                 MS_CFG_COMMIT2: begin
-                    config_busy_reg <= 1'b0;
-                    main_state      <= MS_IDLE;
+                    config_busy_reg      <= 1'b0;
+                    config_busy_pad_reg  <= 1'b0;
+                    main_state           <= MS_IDLE;
                 end
 
                 MS_OP_CAP_A0: begin
@@ -850,16 +880,18 @@ module final_alu_runtime_top #(
                     last_corrected_lane_mask_reg <= 6'd0;
                     residue_error_reg            <= 1'b0;
                     range_error_reg              <= 1'b0;
-                    main_state                   <= (op_sel_reg == 2'b10) ? MS_OP_INIT_MUL0 : MS_OP_INIT_RANGE;
+                    main_state                   <= op_is_mul_reg ? MS_OP_INIT_MUL0 : MS_OP_INIT_RANGE;
                 end
 
                 MS_OP_INIT_RANGE: begin
                     op_state_dbg <= 4'd1;
-                    case (op_sel_reg)
-                        2'b00: raw_range_error_reg <= add_range_error_wire;
-                        2'b01: raw_range_error_reg <= sub_range_error_wire;
-                        default: raw_range_error_reg <= 1'b0;
-                    endcase
+                    if (op_is_add_reg) begin
+                        raw_range_error_reg <= add_range_error_wire;
+                    end else if (op_is_sub_reg) begin
+                        raw_range_error_reg <= sub_range_error_wire;
+                    end else begin
+                        raw_range_error_reg <= 1'b0;
+                    end
                     main_state <= MS_OP_START_ENC;
                 end
 
@@ -1014,8 +1046,9 @@ module final_alu_runtime_top #(
                 MS_OP_WAIT_LANE: begin
                     op_state_dbg <= 4'd4;
                     if (slice_done) begin
-                        slice_z_res_hold <= slice_z_res;
-                        main_state       <= MS_OP_STORE_Z;
+                        slice_z_res_hold           <= slice_z_res;
+                        slice_z_res_bit3_store_reg <= slice_z_res[3];
+                        main_state                 <= MS_OP_STORE_Z;
                     end
                 end
 
@@ -1025,12 +1058,12 @@ module final_alu_runtime_top #(
                        from the slice module output. This shortens the exposed
                        slice_z_res route that repeatedly showed final antenna. */
                     case (lane_idx)
-                        3'd0: z0_reg <= slice_z_res_hold;
-                        3'd1: z1_reg <= slice_z_res_hold;
-                        3'd2: z2_reg <= slice_z_res_hold;
-                        3'd3: z3_reg <= slice_z_res_hold;
-                        3'd4: z4_reg <= slice_z_res_hold;
-                        3'd5: z5_reg <= slice_z_res_hold;
+                        3'd0: z0_reg <= slice_z_store_wire;
+                        3'd1: z1_reg <= slice_z_store_wire;
+                        3'd2: z2_reg <= slice_z_store_wire;
+                        3'd3: z3_reg <= slice_z_store_wire;
+                        3'd4: z4_reg <= slice_z_store_wire;
+                        3'd5: z5_reg <= slice_z_store_wire;
                         default: begin end
                     endcase
 
