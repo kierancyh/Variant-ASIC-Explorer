@@ -40,4 +40,4 @@ ll_policy:
   run_antenna_repair: true
   run_post_grt_design_repair: true
   run_post_grt_resizer_timing: true
-  run_heuristic_diode_insertion: false
+  run_heuristic_diode_insertion: true
