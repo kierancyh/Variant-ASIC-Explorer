@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-// V36A source marker: antenna-isolation patch; slice result and corrector candidate are locally registered, and op-time modulus banks are copied.
+// V36B source marker: V36A antenna isolation plus top-level input shadowing and registered Corrected output isolation.
 module final_alu_runtime_top #(
     parameter integer WM = 5,
     parameter integer XW = 24,
@@ -25,7 +25,7 @@ module final_alu_runtime_top #(
     output wire                     Config_Error,
     output wire [3:0]               Config_Error_Code,
     output wire                     Error_Detected,
-    output wire                     Corrected,
+    output reg                      Corrected,
     output wire                     Valid,
     output wire                     Uncorrectable
 );
@@ -227,6 +227,14 @@ module final_alu_runtime_top #(
     reg  signed [XW-1:0] A_reg;
     reg  signed [XW-1:0] B_reg;
 
+    /* V36B: top-level input shadow registers.
+       V36A reduced antenna on internal result/candidate paths, but final
+       antenna still showed a small violation on the B_in[2] input route.
+       Capture A_in/B_in once when Load_IN is accepted, then feed the existing
+       byte-wide A_reg/B_reg capture sequence from these local shadows. */
+    (* keep = "true", dont_touch = "true" *) reg signed [XW-1:0] A_in_shadow_reg;
+    (* keep = "true", dont_touch = "true" *) reg signed [XW-1:0] B_in_shadow_reg;
+
     /* Saturated true-range tracker.
        The residue datapath still performs the actual RRNS operation, while this
        small side-path only decides whether the mathematical result is outside
@@ -324,7 +332,9 @@ module final_alu_runtime_top #(
     assign Config_Error      = config_error_reg;
     assign Config_Error_Code = config_error_code_reg;
     assign Error_Detected    = error_detected_reg;
-    assign Corrected         = corrected_reg;
+    /* V36B: Corrected is now a registered output, not a direct wire from
+       corrected_reg. This isolates the external status-output route that
+       appeared as net72 in the V36A final antenna report. */
     assign Valid             = valid_reg;
     assign Uncorrectable     = uncorrectable_reg;
 
@@ -610,6 +620,9 @@ module final_alu_runtime_top #(
             corr_m5_cfg                  <= {WM{1'b0}};
             slice_z_res_hold             <= {WM{1'b0}};
             corrector_candidate_base_hold <= {PW{1'b0}};
+            A_in_shadow_reg              <= {XW{1'b0}};
+            B_in_shadow_reg              <= {XW{1'b0}};
+            Corrected                    <= 1'b0;
             cfg_clear_loaded             <= 1'b0;
             checker_start_reg            <= 1'b0;
             precomp_start_reg            <= 1'b0;
@@ -640,6 +653,7 @@ module final_alu_runtime_top #(
             slice_start_reg     <= 1'b0;
             corrector_start_reg <= 1'b0;
             Done                <= 1'b0;
+            Corrected           <= corrected_reg;
 
             case (main_state)
                 MS_IDLE: begin
@@ -664,6 +678,8 @@ module final_alu_runtime_top #(
                          * below, which breaks the former high-slew _0983_ mux
                          * select that drove the full 48-bit operand bank. */
                         op_sel_reg       <= Op_Sel;
+                        A_in_shadow_reg <= A_in;
+                        B_in_shadow_reg <= B_in;
                         op_busy_reg      <= 1'b1;
                         enc_select_b_reg <= 1'b0;
                         main_state       <= MS_OP_CAP_A0;
@@ -731,37 +747,37 @@ module final_alu_runtime_top #(
 
                 MS_OP_CAP_A0: begin
                     op_state_dbg <= 4'd1;
-                    A_reg[7:0]  <= A_in[7:0];
+                    A_reg[7:0]  <= A_in_shadow_reg[7:0];
                     main_state   <= MS_OP_CAP_A1;
                 end
 
                 MS_OP_CAP_A1: begin
                     op_state_dbg <= 4'd1;
-                    A_reg[15:8] <= A_in[15:8];
+                    A_reg[15:8] <= A_in_shadow_reg[15:8];
                     main_state   <= MS_OP_CAP_A2;
                 end
 
                 MS_OP_CAP_A2: begin
                     op_state_dbg  <= 4'd1;
-                    A_reg[23:16] <= A_in[23:16];
+                    A_reg[23:16] <= A_in_shadow_reg[23:16];
                     main_state    <= MS_OP_CAP_B0;
                 end
 
                 MS_OP_CAP_B0: begin
                     op_state_dbg <= 4'd1;
-                    B_reg[7:0]  <= B_in[7:0];
+                    B_reg[7:0]  <= B_in_shadow_reg[7:0];
                     main_state   <= MS_OP_CAP_B1;
                 end
 
                 MS_OP_CAP_B1: begin
                     op_state_dbg <= 4'd1;
-                    B_reg[15:8] <= B_in[15:8];
+                    B_reg[15:8] <= B_in_shadow_reg[15:8];
                     main_state   <= MS_OP_CAP_B2;
                 end
 
                 MS_OP_CAP_B2: begin
                     op_state_dbg  <= 4'd1;
-                    B_reg[23:16] <= B_in[23:16];
+                    B_reg[23:16] <= B_in_shadow_reg[23:16];
                     main_state    <= MS_OP_INIT_FLAGS;
                 end
 
@@ -769,6 +785,7 @@ module final_alu_runtime_top #(
                     op_state_dbg                 <= 4'd1;
                     error_detected_reg           <= 1'b0;
                     corrected_reg                <= 1'b0;
+                    Corrected                    <= 1'b0;
                     valid_reg                    <= 1'b0;
                     uncorrectable_reg            <= 1'b0;
                     last_mismatch_mask_reg       <= 6'd0;
@@ -992,6 +1009,7 @@ module final_alu_runtime_top #(
                                                     range_error_wire |
                                                     (corrector_uncorrectable & ~range_error_wire);
                     corrected_reg                <= corrector_corrected_success & ~range_error_wire;
+                    Corrected                    <= corrector_corrected_success & ~range_error_wire;
                     valid_reg                    <= config_valid_reg &
                                                     ~range_error_wire &
                                                     ~(corrector_uncorrectable & ~range_error_wire);
