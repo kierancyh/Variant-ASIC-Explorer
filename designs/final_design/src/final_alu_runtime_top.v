@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-// V33B source marker: V33A self-shifting prep kept; lane0 is explicitly seeded and result store uses lane_idx for functional alignment.
+// V36A source marker: antenna-isolation patch; slice result and corrector candidate are locally registered, and op-time modulus banks are copied.
 module final_alu_runtime_top #(
     parameter integer WM = 5,
     parameter integer XW = 24,
@@ -90,8 +90,11 @@ module final_alu_runtime_top #(
         MS_OP_WAIT_CORR   = 36'h080000000,
         MS_OP_FINAL       = 36'h100000000,
 
+        /* V36A: store the slice result from a local holding register rather
+         * than routing the slice output directly into the z0..z5 bank. */
+        MS_OP_STORE_Z     = 36'h200000000,
+
         /* Legacy/unreachable config-commit fallbacks. */
-        MS_CFG_COMMIT0    = 36'h200000000,
         MS_CFG_COMMIT1    = 36'h400000000,
         MS_CFG_COMMIT2    = 36'h800000000;
 
@@ -136,6 +139,17 @@ module final_alu_runtime_top #(
     (* keep = "true", dont_touch = "true" *) reg rst_corrector_n;
 
     wire [WM-1:0] m0_cfg, m1_cfg, m2_cfg, m3_cfg, m4_cfg, m5_cfg;
+
+    /* V36A antenna-isolation copies.
+       The config register outputs remain the authoritative CSR values, but the
+       operation engines use local copies captured after a successful
+       cfg_apply/precompute sequence.  This reduces the long routed fanout of
+       m*_cfg during normal ALU operation; repeated final antenna reports
+       included m4_cfg[4] and encoder/slice modulus-select logic. */
+    (* keep = "true", dont_touch = "true" *) reg [WM-1:0] enc_m0_cfg, enc_m1_cfg, enc_m2_cfg, enc_m3_cfg, enc_m4_cfg, enc_m5_cfg;
+    (* keep = "true", dont_touch = "true" *) reg [WM-1:0] slice_m0_cfg, slice_m1_cfg, slice_m2_cfg, slice_m3_cfg, slice_m4_cfg, slice_m5_cfg;
+    (* keep = "true", dont_touch = "true" *) reg [WM-1:0] corr_m0_cfg, corr_m1_cfg, corr_m2_cfg, corr_m3_cfg, corr_m4_cfg, corr_m5_cfg;
+
     wire detect_en_cfg;
     wire correct_en_cfg;
     wire cfg_lock_cfg;
@@ -202,6 +216,9 @@ module final_alu_runtime_top #(
     reg        slice_start_reg;
     wire       slice_done;
     wire [WM-1:0] slice_z_res;
+    /* V36A: one-cycle local capture of the slice output before the z-bank
+       store mux.  This targets recurring final antenna on slice_z_res[3]. */
+    (* keep = "true", dont_touch = "true" *) reg [WM-1:0] slice_z_res_hold;
     reg  [WM-1:0] slice_a_reg;
     reg  [WM-1:0] slice_b_reg;
     reg  [WM-1:0] slice_m_reg;
@@ -252,6 +269,10 @@ module final_alu_runtime_top #(
     wire [5:0] corrector_mismatch_mask;
     wire [2:0] corrector_mismatch_count;
     wire [PW-1:0] corrector_candidate_base;
+    /* V36A: isolate the corrector candidate output before range/final output
+       logic. Repeated final antenna reports included corrector_candidate_base
+       bits, especially [10] and [11]. */
+    (* keep = "true", dont_touch = "true" *) reg [PW-1:0] corrector_candidate_base_hold;
 
     wire signed [XW-1:0] x_centered_wire;
     wire range_error_wire;
@@ -371,12 +392,12 @@ module final_alu_runtime_top #(
         .rst_n(rst_encoder_n),
         .start(enc_start_reg),
         .x_in(enc_select_b_reg ? B_reg : A_reg),
-        .m0(m0_cfg),
-        .m1(m1_cfg),
-        .m2(m2_cfg),
-        .m3(m3_cfg),
-        .m4(m4_cfg),
-        .m5(m5_cfg),
+        .m0(enc_m0_cfg),
+        .m1(enc_m1_cfg),
+        .m2(enc_m2_cfg),
+        .m3(enc_m3_cfg),
+        .m4(enc_m4_cfg),
+        .m5(enc_m5_cfg),
         .done(enc_done),
         .res_flat(enc_res_flat)
     );
@@ -402,12 +423,12 @@ module final_alu_runtime_top #(
         .z_res_flat(z_res_flat),
         .M_base(M_base_live),
         .usable_subset_bitmap(usable_subset_bitmap_live),
-        .m0(m0_cfg),
-        .m1(m1_cfg),
-        .m2(m2_cfg),
-        .m3(m3_cfg),
-        .m4(m4_cfg),
-        .m5(m5_cfg),
+        .m0(corr_m0_cfg),
+        .m1(corr_m1_cfg),
+        .m2(corr_m2_cfg),
+        .m3(corr_m3_cfg),
+        .m4(corr_m4_cfg),
+        .m5(corr_m5_cfg),
         .done(corrector_done),
         .residue_error(corrector_residue_error),
         .corrected_success(corrector_corrected_success),
@@ -422,7 +443,7 @@ module final_alu_runtime_top #(
         .raw_range_error(raw_range_error_reg),
         .M_base(M_base_live),
         .half_range(half_range_live),
-        .candidate_base(corrector_candidate_base),
+        .candidate_base(corrector_candidate_base_hold),
         .range_error(range_error_wire),
         .x_centered(x_centered_wire)
     );
@@ -468,12 +489,12 @@ module final_alu_runtime_top #(
         input [5:0] oh;
         begin
             case (1'b1)
-                oh[0]: get_mod_oh = m0_cfg;
-                oh[1]: get_mod_oh = m1_cfg;
-                oh[2]: get_mod_oh = m2_cfg;
-                oh[3]: get_mod_oh = m3_cfg;
-                oh[4]: get_mod_oh = m4_cfg;
-                oh[5]: get_mod_oh = m5_cfg;
+                oh[0]: get_mod_oh = slice_m0_cfg;
+                oh[1]: get_mod_oh = slice_m1_cfg;
+                oh[2]: get_mod_oh = slice_m2_cfg;
+                oh[3]: get_mod_oh = slice_m3_cfg;
+                oh[4]: get_mod_oh = slice_m4_cfg;
+                oh[5]: get_mod_oh = slice_m5_cfg;
                 default: get_mod_oh = {WM{1'b0}};
             endcase
         end
@@ -569,6 +590,26 @@ module final_alu_runtime_top #(
             slice_m_lane_oh              <= 6'b000001;
             slice_a_lane_oh              <= 6'b000001;
             slice_b_lane_oh              <= 6'b000001;
+            enc_m0_cfg                   <= {WM{1'b0}};
+            enc_m1_cfg                   <= {WM{1'b0}};
+            enc_m2_cfg                   <= {WM{1'b0}};
+            enc_m3_cfg                   <= {WM{1'b0}};
+            enc_m4_cfg                   <= {WM{1'b0}};
+            enc_m5_cfg                   <= {WM{1'b0}};
+            slice_m0_cfg                 <= {WM{1'b0}};
+            slice_m1_cfg                 <= {WM{1'b0}};
+            slice_m2_cfg                 <= {WM{1'b0}};
+            slice_m3_cfg                 <= {WM{1'b0}};
+            slice_m4_cfg                 <= {WM{1'b0}};
+            slice_m5_cfg                 <= {WM{1'b0}};
+            corr_m0_cfg                  <= {WM{1'b0}};
+            corr_m1_cfg                  <= {WM{1'b0}};
+            corr_m2_cfg                  <= {WM{1'b0}};
+            corr_m3_cfg                  <= {WM{1'b0}};
+            corr_m4_cfg                  <= {WM{1'b0}};
+            corr_m5_cfg                  <= {WM{1'b0}};
+            slice_z_res_hold             <= {WM{1'b0}};
+            corrector_candidate_base_hold <= {PW{1'b0}};
             cfg_clear_loaded             <= 1'b0;
             checker_start_reg            <= 1'b0;
             precomp_start_reg            <= 1'b0;
@@ -648,6 +689,26 @@ module final_alu_runtime_top #(
 
                 MS_CFG_WAIT_PRE: begin
                     if (precomp_done) begin
+                        if (precomp_ok) begin
+                            enc_m0_cfg   <= m0_cfg;
+                            enc_m1_cfg   <= m1_cfg;
+                            enc_m2_cfg   <= m2_cfg;
+                            enc_m3_cfg   <= m3_cfg;
+                            enc_m4_cfg   <= m4_cfg;
+                            enc_m5_cfg   <= m5_cfg;
+                            slice_m0_cfg <= m0_cfg;
+                            slice_m1_cfg <= m1_cfg;
+                            slice_m2_cfg <= m2_cfg;
+                            slice_m3_cfg <= m3_cfg;
+                            slice_m4_cfg <= m4_cfg;
+                            slice_m5_cfg <= m5_cfg;
+                            corr_m0_cfg  <= m0_cfg;
+                            corr_m1_cfg  <= m1_cfg;
+                            corr_m2_cfg  <= m2_cfg;
+                            corr_m3_cfg  <= m3_cfg;
+                            corr_m4_cfg  <= m4_cfg;
+                            corr_m5_cfg  <= m5_cfg;
+                        end
                         config_valid_reg      <= precomp_ok;
                         config_error_reg      <= !precomp_ok;
                         config_error_code_reg <= precomp_ok ? 4'd0 : 4'd6;
@@ -662,7 +723,6 @@ module final_alu_runtime_top #(
                  * config-commit register bank; removing it deletes the routed
                  * _2124-style max-slew/max-cap mux-select cluster.
                  */
-                MS_CFG_COMMIT0,
                 MS_CFG_COMMIT1,
                 MS_CFG_COMMIT2: begin
                     config_busy_reg <= 1'b0;
@@ -841,7 +901,7 @@ module final_alu_runtime_top #(
                        directly here, after A/B residue capture is complete,
                        then start the slice.  Later lanes still use the
                        self-shifting one-hot PREP_M/A/B sequence. */
-                    slice_m_reg <= m0_cfg;
+                    slice_m_reg <= slice_m0_cfg;
                     slice_a_reg <= a_res_flat_reg[(0*WM)+:WM];
                     slice_b_reg <= b_res_flat_reg[(0*WM)+:WM];
                     main_state  <= MS_OP_START_LANE;
@@ -880,28 +940,33 @@ module final_alu_runtime_top #(
                 MS_OP_WAIT_LANE: begin
                     op_state_dbg <= 4'd4;
                     if (slice_done) begin
-                        /* Keep result storage aligned with the existing debug
-                           lane counter.  The heavy physical issue was the
-                           lane_idx-driven M/A/B slice-prep mux cluster, not
-                           this single result-store path. */
-                        case (lane_idx)
-                            3'd0: z0_reg <= slice_z_res;
-                            3'd1: z1_reg <= slice_z_res;
-                            3'd2: z2_reg <= slice_z_res;
-                            3'd3: z3_reg <= slice_z_res;
-                            3'd4: z4_reg <= slice_z_res;
-                            3'd5: z5_reg <= slice_z_res;
-                            default: begin end
-                        endcase
+                        slice_z_res_hold <= slice_z_res;
+                        main_state       <= MS_OP_STORE_Z;
+                    end
+                end
 
-                        if (lane_idx == 3'd5) begin
-                            main_state <= MS_OP_START_CORR;
-                        end else begin
-                            op_lane_oh      <= op_lane_oh_next;
-                            slice_m_lane_oh <= op_lane_oh_next;
-                            lane_idx        <= lane_idx + 3'd1;
-                            main_state      <= MS_OP_PREP_M;
-                        end
+                MS_OP_STORE_Z: begin
+                    op_state_dbg <= 4'd4;
+                    /* V36A: store from a local holding register, not directly
+                       from the slice module output. This shortens the exposed
+                       slice_z_res route that repeatedly showed final antenna. */
+                    case (lane_idx)
+                        3'd0: z0_reg <= slice_z_res_hold;
+                        3'd1: z1_reg <= slice_z_res_hold;
+                        3'd2: z2_reg <= slice_z_res_hold;
+                        3'd3: z3_reg <= slice_z_res_hold;
+                        3'd4: z4_reg <= slice_z_res_hold;
+                        3'd5: z5_reg <= slice_z_res_hold;
+                        default: begin end
+                    endcase
+
+                    if (lane_idx == 3'd5) begin
+                        main_state <= MS_OP_START_CORR;
+                    end else begin
+                        op_lane_oh      <= op_lane_oh_next;
+                        slice_m_lane_oh <= op_lane_oh_next;
+                        lane_idx        <= lane_idx + 3'd1;
+                        main_state      <= MS_OP_PREP_M;
                     end
                 end
 
@@ -914,6 +979,7 @@ module final_alu_runtime_top #(
                 MS_OP_WAIT_CORR: begin
                     op_state_dbg <= 4'd6;
                     if (corrector_done) begin
+                        corrector_candidate_base_hold <= corrector_candidate_base;
                         main_state <= MS_OP_FINAL;
                     end
                 end

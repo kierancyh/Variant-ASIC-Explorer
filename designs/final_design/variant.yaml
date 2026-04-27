@@ -27,8 +27,6 @@ precheck:
     stop_on_fail: true
     mode: structural
 
-# Keep placement loose for the first ASIC run. The workflow generator currently
-# uses this as FP_CORE_UTIL when creating the OpenLane/LibreLane config.
 fp:
   core_util: 20
 
@@ -43,4 +41,3 @@ ll_policy:
   run_heuristic_diode_insertion: false
   grt_antenna_margin: 30
   grt_antenna_iters: 6
-  heuristic_antenna_threshold: 150
