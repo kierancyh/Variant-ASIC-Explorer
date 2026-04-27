@@ -321,6 +321,13 @@ module final_alu_runtime_top #(
     (* keep = "true", dont_touch = "true" *) reg [PW-1:0] range_half_range_hold;
     (* keep = "true", dont_touch = "true" *) reg corr_m0_bit3_corrector_reg;
     (* keep = "true", dont_touch = "true" *) reg corr_m0_bit4_corrector_reg;
+    /* V45A: V44A 40 ns was down to a single final-route antenna pin on
+       corr_m4_cfg[3] feeding the encoder/slice/corrector modulus-4 cone.
+       Split only bit 3 into local consumers so the original corr_m4_cfg[3]
+       Q net no longer has to span those physical regions after routing. */
+    (* keep = "true", dont_touch = "true" *) reg enc_m4_bit3_encoder_reg;
+    (* keep = "true", dont_touch = "true" *) reg slice_m4_bit3_lane_reg;
+    (* keep = "true", dont_touch = "true" *) reg corr_m4_bit3_corrector_reg;
     /* V41A: separate the external X_out flop from the internal retained
        output value.  The V40A 40 ns artifact showed antenna on net87, the
        X_out[19] output path, because the output flop Q also fed internal
@@ -353,8 +360,11 @@ module final_alu_runtime_top #(
 
     /* V42A: isolate only the exact bits that appeared in V41 40ns antenna.
        Keep the wider banks untouched so we do not repeat the V38A max-slew/max-cap regression. */
-    wire [WM-1:0] slice_z_store_wire     = {slice_z_res_hold[WM-1:4], slice_z_res_bit3_store_reg, slice_z_res_bit2_store_reg, slice_z_res_hold[1], slice_z_res_bit0_store_reg};
-    wire [WM-1:0] corr_m0_corrector_wire = {corr_m0_bit4_corrector_reg, corr_m0_bit3_corrector_reg, corr_m0_cfg[2:0]};
+    wire [WM-1:0] slice_z_store_wire      = {slice_z_res_hold[WM-1:4], slice_z_res_bit3_store_reg, slice_z_res_bit2_store_reg, slice_z_res_hold[1], slice_z_res_bit0_store_reg};
+    wire [WM-1:0] corr_m0_corrector_wire  = {corr_m0_bit4_corrector_reg, corr_m0_bit3_corrector_reg, corr_m0_cfg[2:0]};
+    wire [WM-1:0] enc_m4_encoder_wire     = {enc_m4_cfg[WM-1:4], enc_m4_bit3_encoder_reg, enc_m4_cfg[2:0]};
+    wire [WM-1:0] slice_m4_lane_wire      = {slice_m4_cfg[WM-1:4], slice_m4_bit3_lane_reg, slice_m4_cfg[2:0]};
+    wire [WM-1:0] corr_m4_corrector_wire  = {corr_m4_cfg[WM-1:4], corr_m4_bit3_corrector_reg, corr_m4_cfg[2:0]};
 
     assign mul_addend_sat_wire     = mul_mult_sat_reg[0] ? mul_mcand_sat_reg : {(PW+1){1'b0}};
     assign mul_acc_sum_wire        = {1'b0, mul_acc_sat_reg} + {1'b0, mul_addend_sat_wire};
@@ -461,7 +471,7 @@ module final_alu_runtime_top #(
         .m1(enc_m1_cfg),
         .m2(enc_m2_cfg),
         .m3(enc_m3_cfg),
-        .m4(enc_m4_cfg),
+        .m4(enc_m4_encoder_wire),
         .m5(enc_m5_cfg),
         .done(enc_done),
         .res_flat(enc_res_flat)
@@ -492,7 +502,7 @@ module final_alu_runtime_top #(
         .m1(corr_m1_cfg),
         .m2(corr_m2_cfg),
         .m3(corr_m3_cfg),
-        .m4(corr_m4_cfg),
+        .m4(corr_m4_corrector_wire),
         .m5(corr_m5_cfg),
         .done(corrector_done),
         .residue_error(corrector_residue_error),
@@ -558,7 +568,7 @@ module final_alu_runtime_top #(
                 oh[1]: get_mod_oh = slice_m1_cfg;
                 oh[2]: get_mod_oh = slice_m2_cfg;
                 oh[3]: get_mod_oh = slice_m3_cfg;
-                oh[4]: get_mod_oh = slice_m4_cfg;
+                oh[4]: get_mod_oh = slice_m4_lane_wire;
                 oh[5]: get_mod_oh = slice_m5_cfg;
                 default: get_mod_oh = {WM{1'b0}};
             endcase
@@ -693,6 +703,9 @@ module final_alu_runtime_top #(
             range_half_range_hold        <= {PW{1'b0}};
             corr_m0_bit3_corrector_reg   <= 1'b0;
             corr_m0_bit4_corrector_reg   <= 1'b0;
+            enc_m4_bit3_encoder_reg      <= 1'b0;
+            slice_m4_bit3_lane_reg       <= 1'b0;
+            corr_m4_bit3_corrector_reg   <= 1'b0;
             x_out_core_reg               <= {XW{1'b0}};
             Corrected                    <= 1'b0;
             cfg_clear_loaded             <= 1'b0;
@@ -796,12 +809,14 @@ module final_alu_runtime_top #(
                             enc_m2_cfg   <= m2_cfg;
                             enc_m3_cfg   <= m3_cfg;
                             enc_m4_cfg   <= m4_cfg;
+                            enc_m4_bit3_encoder_reg <= m4_cfg[3];
                             enc_m5_cfg   <= m5_cfg;
                             slice_m0_cfg <= m0_cfg;
                             slice_m1_cfg <= m1_cfg;
                             slice_m2_cfg <= m2_cfg;
                             slice_m3_cfg <= m3_cfg;
                             slice_m4_cfg <= m4_cfg;
+                            slice_m4_bit3_lane_reg <= m4_cfg[3];
                             slice_m5_cfg <= m5_cfg;
                             corr_m0_cfg  <= m0_cfg;
                             corr_m0_bit3_corrector_reg <= m0_cfg[3];
@@ -810,6 +825,7 @@ module final_alu_runtime_top #(
                             corr_m2_cfg  <= m2_cfg;
                             corr_m3_cfg  <= m3_cfg;
                             corr_m4_cfg  <= m4_cfg;
+                            corr_m4_bit3_corrector_reg <= m4_cfg[3];
                             corr_m5_cfg  <= m5_cfg;
                         end
                         config_valid_reg      <= precomp_ok;
