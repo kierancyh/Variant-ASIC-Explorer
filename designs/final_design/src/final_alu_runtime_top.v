@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-// V38A source marker: V36B baseline plus operand consumer-bank isolation for A_reg/B_reg antenna robustness.
+// V40A source marker: V36B baseline plus single-bit operand-fanout isolation for A/B bit 5.
 module final_alu_runtime_top #(
     parameter integer WM = 5,
     parameter integer XW = 24,
@@ -227,17 +227,6 @@ module final_alu_runtime_top #(
     reg  signed [XW-1:0] A_reg;
     reg  signed [XW-1:0] B_reg;
 
-    /* V38A: operand consumer-bank isolation.
-       V37B's common remaining antenna blocker across 20ns and 40ns was
-       A_reg[5]. Keep A_reg/B_reg as retained capture operands, but feed
-       the encoder and true-range helper from separate local copies so one
-       operand bit no longer has to route into every physical consumer
-       cluster. */
-    (* keep = "true", dont_touch = "true" *) reg signed [XW-1:0] A_enc_reg;
-    (* keep = "true", dont_touch = "true" *) reg signed [XW-1:0] B_enc_reg;
-    (* keep = "true", dont_touch = "true" *) reg signed [XW-1:0] A_calc_reg;
-    (* keep = "true", dont_touch = "true" *) reg signed [XW-1:0] B_calc_reg;
-
     /* V36B: top-level input shadow registers.
        V36A reduced antenna on internal result/candidate paths, but final
        antenna still showed a small violation on the B_in[2] input route.
@@ -245,6 +234,20 @@ module final_alu_runtime_top #(
        byte-wide A_reg/B_reg capture sequence from these local shadows. */
     (* keep = "true", dont_touch = "true" *) reg signed [XW-1:0] A_in_shadow_reg;
     (* keep = "true", dont_touch = "true" *) reg signed [XW-1:0] B_in_shadow_reg;
+
+    /* V40A: very narrow operand fanout isolation.
+       V37B repeatedly failed final antenna on A_reg[5] (and earlier runs also
+       exposed B_reg[5]). V38A duplicated the full operand banks and disturbed
+       placement enough to reintroduce max slew/cap. Keep this fix surgical:
+       duplicate only bit 5 for the encoder and range-helper consumers. */
+    (* keep = "true", dont_touch = "true" *) reg A_bit5_enc_reg;
+    (* keep = "true", dont_touch = "true" *) reg B_bit5_enc_reg;
+    (* keep = "true", dont_touch = "true" *) reg A_bit5_calc_reg;
+    (* keep = "true", dont_touch = "true" *) reg B_bit5_calc_reg;
+    wire signed [XW-1:0] A_enc_iso_wire;
+    wire signed [XW-1:0] B_enc_iso_wire;
+    wire signed [XW-1:0] A_calc_iso_wire;
+    wire signed [XW-1:0] B_calc_iso_wire;
 
     /* Saturated true-range tracker.
        The residue datapath still performs the actual RRNS operation, while this
@@ -312,6 +315,11 @@ module final_alu_runtime_top #(
     assign half_range_reg           = half_range_live;
     assign usable_subset_bitmap_reg = usable_subset_bitmap_live;
 
+    assign A_enc_iso_wire  = {A_reg[XW-1:6], A_bit5_enc_reg,  A_reg[4:0]};
+    assign B_enc_iso_wire  = {B_reg[XW-1:6], B_bit5_enc_reg,  B_reg[4:0]};
+    assign A_calc_iso_wire = {A_reg[XW-1:6], A_bit5_calc_reg, A_reg[4:0]};
+    assign B_calc_iso_wire = {B_reg[XW-1:6], B_bit5_calc_reg, B_reg[4:0]};
+
     assign mul_addend_sat_wire     = mul_mult_sat_reg[0] ? mul_mcand_sat_reg : {(PW+1){1'b0}};
     assign mul_acc_sum_wire        = {1'b0, mul_acc_sat_reg} + {1'b0, mul_addend_sat_wire};
     assign mul_acc_next_sat_wire   = (mul_acc_sum_wire > {1'b0, MUL_SAT_MAX}) ?
@@ -320,16 +328,16 @@ module final_alu_runtime_top #(
     assign mul_mcand_next_sat_wire = (mul_mcand_shift_wire > {1'b0, MUL_SAT_MAX}) ?
                                      MUL_SAT_MAX : mul_mcand_shift_wire[PW:0];
 
-    assign a_abs_wire              = A_calc_reg[XW-1] ? ((~A_calc_reg) + {{(XW-1){1'b0}}, 1'b1}) : A_calc_reg;
-    assign b_abs_wire              = B_calc_reg[XW-1] ? ((~B_calc_reg) + {{(XW-1){1'b0}}, 1'b1}) : B_calc_reg;
+    assign a_abs_wire              = A_calc_iso_wire[XW-1] ? ((~A_calc_iso_wire) + {{(XW-1){1'b0}}, 1'b1}) : A_calc_iso_wire;
+    assign b_abs_wire              = B_calc_iso_wire[XW-1] ? ((~B_calc_iso_wire) + {{(XW-1){1'b0}}, 1'b1}) : B_calc_iso_wire;
     assign a_abs_ext_wire          = {1'b0, a_abs_wire};
     assign b_abs_ext_wire          = {1'b0, b_abs_wire};
     assign mul_sat_max_ext_wire    = {{(XW-PW){1'b0}}, MUL_SAT_MAX};
     assign a_abs_sat_wire          = (a_abs_ext_wire > mul_sat_max_ext_wire) ? MUL_SAT_MAX : a_abs_ext_wire[PW:0];
     assign b_abs_sat_wire          = (b_abs_ext_wire > mul_sat_max_ext_wire) ? MUL_SAT_MAX : b_abs_ext_wire[PW:0];
 
-    assign add_true_wire           = {A_calc_reg[XW-1], A_calc_reg} + {B_calc_reg[XW-1], B_calc_reg};
-    assign sub_true_wire           = {A_calc_reg[XW-1], A_calc_reg} - {B_calc_reg[XW-1], B_calc_reg};
+    assign add_true_wire           = {A_calc_iso_wire[XW-1], A_calc_iso_wire} + {B_calc_iso_wire[XW-1], B_calc_iso_wire};
+    assign sub_true_wire           = {A_calc_iso_wire[XW-1], A_calc_iso_wire} - {B_calc_iso_wire[XW-1], B_calc_iso_wire};
     assign half_range_xw_wire      = $signed({1'b0, {{(XW-PW){1'b0}}, half_range_live}});
     assign neg_half_range_xw_wire  = -half_range_xw_wire;
     assign add_range_error_wire    = (add_true_wire > half_range_xw_wire) ||
@@ -412,7 +420,7 @@ module final_alu_runtime_top #(
         .clk(clk),
         .rst_n(rst_encoder_n),
         .start(enc_start_reg),
-        .x_in(enc_select_b_reg ? B_enc_reg : A_enc_reg),
+        .x_in(enc_select_b_reg ? B_enc_iso_wire : A_enc_iso_wire),
         .m0(enc_m0_cfg),
         .m1(enc_m1_cfg),
         .m2(enc_m2_cfg),
@@ -633,10 +641,10 @@ module final_alu_runtime_top #(
             corrector_candidate_base_hold <= {PW{1'b0}};
             A_in_shadow_reg              <= {XW{1'b0}};
             B_in_shadow_reg              <= {XW{1'b0}};
-            A_enc_reg                    <= {XW{1'b0}};
-            B_enc_reg                    <= {XW{1'b0}};
-            A_calc_reg                   <= {XW{1'b0}};
-            B_calc_reg                   <= {XW{1'b0}};
+            A_bit5_enc_reg               <= 1'b0;
+            B_bit5_enc_reg               <= 1'b0;
+            A_bit5_calc_reg              <= 1'b0;
+            B_bit5_calc_reg              <= 1'b0;
             Corrected                    <= 1'b0;
             cfg_clear_loaded             <= 1'b0;
             checker_start_reg            <= 1'b0;
@@ -763,48 +771,40 @@ module final_alu_runtime_top #(
                 MS_OP_CAP_A0: begin
                     op_state_dbg <= 4'd1;
                     A_reg[7:0]      <= A_in_shadow_reg[7:0];
-                    A_enc_reg[7:0]  <= A_in_shadow_reg[7:0];
-                    A_calc_reg[7:0] <= A_in_shadow_reg[7:0];
-                    main_state   <= MS_OP_CAP_A1;
+                    A_bit5_enc_reg  <= A_in_shadow_reg[5];
+                    A_bit5_calc_reg <= A_in_shadow_reg[5];
+                    main_state      <= MS_OP_CAP_A1;
                 end
 
                 MS_OP_CAP_A1: begin
                     op_state_dbg <= 4'd1;
-                    A_reg[15:8]      <= A_in_shadow_reg[15:8];
-                    A_enc_reg[15:8]  <= A_in_shadow_reg[15:8];
-                    A_calc_reg[15:8] <= A_in_shadow_reg[15:8];
+                    A_reg[15:8] <= A_in_shadow_reg[15:8];
                     main_state   <= MS_OP_CAP_A2;
                 end
 
                 MS_OP_CAP_A2: begin
                     op_state_dbg  <= 4'd1;
-                    A_reg[23:16]      <= A_in_shadow_reg[23:16];
-                    A_enc_reg[23:16]  <= A_in_shadow_reg[23:16];
-                    A_calc_reg[23:16] <= A_in_shadow_reg[23:16];
+                    A_reg[23:16] <= A_in_shadow_reg[23:16];
                     main_state    <= MS_OP_CAP_B0;
                 end
 
                 MS_OP_CAP_B0: begin
                     op_state_dbg <= 4'd1;
                     B_reg[7:0]      <= B_in_shadow_reg[7:0];
-                    B_enc_reg[7:0]  <= B_in_shadow_reg[7:0];
-                    B_calc_reg[7:0] <= B_in_shadow_reg[7:0];
-                    main_state   <= MS_OP_CAP_B1;
+                    B_bit5_enc_reg  <= B_in_shadow_reg[5];
+                    B_bit5_calc_reg <= B_in_shadow_reg[5];
+                    main_state      <= MS_OP_CAP_B1;
                 end
 
                 MS_OP_CAP_B1: begin
                     op_state_dbg <= 4'd1;
-                    B_reg[15:8]      <= B_in_shadow_reg[15:8];
-                    B_enc_reg[15:8]  <= B_in_shadow_reg[15:8];
-                    B_calc_reg[15:8] <= B_in_shadow_reg[15:8];
+                    B_reg[15:8] <= B_in_shadow_reg[15:8];
                     main_state   <= MS_OP_CAP_B2;
                 end
 
                 MS_OP_CAP_B2: begin
                     op_state_dbg  <= 4'd1;
-                    B_reg[23:16]      <= B_in_shadow_reg[23:16];
-                    B_enc_reg[23:16]  <= B_in_shadow_reg[23:16];
-                    B_calc_reg[23:16] <= B_in_shadow_reg[23:16];
+                    B_reg[23:16] <= B_in_shadow_reg[23:16];
                     main_state    <= MS_OP_INIT_FLAGS;
                 end
 
