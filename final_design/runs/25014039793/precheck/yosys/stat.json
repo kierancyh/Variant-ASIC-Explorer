@@ -1,0 +1,209 @@
+{
+   "creator": "Yosys 0.33 (git sha1 2584903a060)",
+   "invocation": "stat -json ",
+   "modules": {
+      "$paramod$3d5933457824fda5c29cfed42e669bf3c7234f6e\\final_alu_encoder_runtime": {
+         "num_wires":         281,
+         "num_wire_bits":     1094,
+         "num_pub_wires":     24,
+         "num_pub_wire_bits": 204,
+         "num_memories":      0,
+         "num_memory_bits":   0,
+         "num_processes":     0,
+         "num_cells":         835,
+         "num_cells_by_type": {
+            "$_AND_": 243,
+            "$_DFFE_PP_": 89,
+            "$_MUX_": 170,
+            "$_NOT_": 75,
+            "$_OR_": 189,
+            "$_SDFFE_PN0P_": 14,
+            "$_SDFFE_PN1P_": 1,
+            "$_SDFF_PN0_": 1,
+            "$_XOR_": 53
+         }
+      },
+      "$paramod$4189ba8f5f2c2b48a04fc022fed7b1fdd11c3d0e\\final_alu_cfg_precompute": {
+         "num_wires":         13,
+         "num_wire_bits":     70,
+         "num_pub_wires":     13,
+         "num_pub_wire_bits": 70,
+         "num_memories":      0,
+         "num_memory_bits":   0,
+         "num_processes":     0,
+         "num_cells":         2,
+         "num_cells_by_type": {
+            "$_SDFFE_PN0P_": 1,
+            "$_SDFF_PN0_": 1
+         }
+      },
+      "$paramod$4189ba8f5f2c2b48a04fc022fed7b1fdd11c3d0e\\final_alu_corrector_search_v18": {
+         "num_wires":         720,
+         "num_wire_bits":     3570,
+         "num_pub_wires":     68,
+         "num_pub_wire_bits": 441,
+         "num_memories":      0,
+         "num_memory_bits":   0,
+         "num_processes":     0,
+         "num_cells":         2167,
+         "num_cells_by_type": {
+            "$_AND_": 475,
+            "$_DFFE_PP_": 149,
+            "$_MUX_": 785,
+            "$_NOT_": 159,
+            "$_OR_": 368,
+            "$_SDFFE_PN0P_": 6,
+            "$_SDFFE_PN1P_": 1,
+            "$_SDFF_PN0_": 1,
+            "$_XOR_": 223
+         }
+      },
+      "$paramod$7fc61225471e37c5061c2290377709fe8f34c170\\final_alu_runtime_cu": {
+         "num_wires":         4,
+         "num_wire_bits":     14,
+         "num_pub_wires":     4,
+         "num_pub_wire_bits": 14,
+         "num_memories":      0,
+         "num_memory_bits":   0,
+         "num_processes":     0,
+         "num_cells":         0,
+         "num_cells_by_type": {
+
+         }
+      },
+      "$paramod$9b3939a60ab655ff6b5bd5df57c0bdbbd255081a\\final_alu_cfg_checker": {
+         "num_wires":         560,
+         "num_wire_bits":     3066,
+         "num_pub_wires":     39,
+         "num_pub_wire_bits": 250,
+         "num_memories":      0,
+         "num_memory_bits":   0,
+         "num_processes":     0,
+         "num_cells":         1679,
+         "num_cells_by_type": {
+            "$_AND_": 673,
+            "$_DFFE_PP_": 49,
+            "$_DFF_P_": 20,
+            "$_MUX_": 124,
+            "$_NOT_": 80,
+            "$_OR_": 422,
+            "$_SDFFE_PN0P_": 11,
+            "$_SDFFE_PN1P_": 1,
+            "$_SDFF_PN0_": 1,
+            "$_XOR_": 298
+         }
+      },
+      "$paramod$a1eea2f2e8d1a342568fc48780b8e97a0b12c301\\final_alu_range_check": {
+         "num_wires":         125,
+         "num_wire_bits":     424,
+         "num_pub_wires":     8,
+         "num_pub_wire_bits": 131,
+         "num_memories":      0,
+         "num_memory_bits":   0,
+         "num_processes":     0,
+         "num_cells":         296,
+         "num_cells_by_type": {
+            "$_AND_": 120,
+            "$_MUX_": 21,
+            "$_NOT_": 42,
+            "$_OR_": 54,
+            "$_XOR_": 59
+         }
+      },
+      "$paramod\\final_alu_cfg_regs\\WM=s32'00000000000000000000000000000101": {
+         "num_wires":         53,
+         "num_wire_bits":     118,
+         "num_pub_wires":     17,
+         "num_pub_wire_bits": 75,
+         "num_memories":      0,
+         "num_memory_bits":   0,
+         "num_processes":     0,
+         "num_cells":         75,
+         "num_cells_by_type": {
+            "$_AND_": 9,
+            "$_MUX_": 3,
+            "$_NOT_": 10,
+            "$_OR_": 19,
+            "$_SDFFE_PN0P_": 31,
+            "$_SDFFE_PN1P_": 2,
+            "$_SDFF_PN0_": 1
+         }
+      },
+      "$paramod\\final_alu_slice_runtime\\WM=s32'00000000000000000000000000000101": {
+         "num_wires":         274,
+         "num_wire_bits":     894,
+         "num_pub_wires":     45,
+         "num_pub_wire_bits": 207,
+         "num_memories":      0,
+         "num_memory_bits":   0,
+         "num_processes":     0,
+         "num_cells":         619,
+         "num_cells_by_type": {
+            "$_AND_": 193,
+            "$_DFFE_PP_": 40,
+            "$_MUX_": 103,
+            "$_NOT_": 58,
+            "$_OR_": 128,
+            "$_SDFFE_PN0P_": 3,
+            "$_SDFFE_PN1P_": 1,
+            "$_SDFF_PN0_": 1,
+            "$_XOR_": 92
+         }
+      },
+      "\\final_alu_runtime_top": {
+         "num_wires":         1506,
+         "num_wire_bits":     9290,
+         "num_pub_wires":     190,
+         "num_pub_wire_bits": 1689,
+         "num_memories":      0,
+         "num_memory_bits":   0,
+         "num_processes":     0,
+         "num_cells":         3886,
+         "num_cells_by_type": {
+            "$_AND_": 1166,
+            "$_DFFE_PP_": 245,
+            "$_DFF_P_": 1,
+            "$_MUX_": 579,
+            "$_NOT_": 357,
+            "$_OR_": 927,
+            "$_SDFFE_PN0N_": 4,
+            "$_SDFFE_PN0P_": 230,
+            "$_SDFFE_PN1P_": 4,
+            "$_SDFF_PN0_": 36,
+            "$_XOR_": 329,
+            "$paramod$3d5933457824fda5c29cfed42e669bf3c7234f6e\\final_alu_encoder_runtime": 1,
+            "$paramod$4189ba8f5f2c2b48a04fc022fed7b1fdd11c3d0e\\final_alu_cfg_precompute": 1,
+            "$paramod$4189ba8f5f2c2b48a04fc022fed7b1fdd11c3d0e\\final_alu_corrector_search_v18": 1,
+            "$paramod$7fc61225471e37c5061c2290377709fe8f34c170\\final_alu_runtime_cu": 1,
+            "$paramod$9b3939a60ab655ff6b5bd5df57c0bdbbd255081a\\final_alu_cfg_checker": 1,
+            "$paramod$a1eea2f2e8d1a342568fc48780b8e97a0b12c301\\final_alu_range_check": 1,
+            "$paramod\\final_alu_cfg_regs\\WM=s32'00000000000000000000000000000101": 1,
+            "$paramod\\final_alu_slice_runtime\\WM=s32'00000000000000000000000000000101": 1
+         }
+      }
+   },
+      "design": {
+         "num_wires":         3536,
+         "num_wire_bits":     18540,
+         "num_pub_wires":     408,
+         "num_pub_wire_bits": 3081,
+         "num_memories":      0,
+         "num_memory_bits":   0,
+         "num_processes":     0,
+         "num_cells":         9551,
+         "num_cells_by_type": {
+            "$_AND_": 2879,
+            "$_DFFE_PP_": 572,
+            "$_DFF_P_": 21,
+            "$_MUX_": 1785,
+            "$_NOT_": 781,
+            "$_OR_": 2107,
+            "$_SDFFE_PN0N_": 4,
+            "$_SDFFE_PN0P_": 296,
+            "$_SDFFE_PN1P_": 10,
+            "$_SDFF_PN0_": 42,
+            "$_XOR_": 1054
+         }
+      }
+}
+

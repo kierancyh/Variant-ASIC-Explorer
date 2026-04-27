@@ -1,0 +1,10 @@
+{
+  "variant": "designs_final_design",
+  "clock_ns_requested": 147.0,
+  "github_run_id": "25014039793",
+  "github_run_number": "204",
+  "commit_sha": "81e591f970227be8c58d00dff6f7c6194e9c0e7a",
+  "synth_strategy_override": "",
+  "stage_label": "refine-1",
+  "artifact_name": "refine1-designs_final_design-147ns-r25014039793"
+}
