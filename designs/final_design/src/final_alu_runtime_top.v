@@ -1,7 +1,8 @@
 `timescale 1ns/1ps
-// V44A source marker: V43A with the A_calc_iso_wire[15] isolation reverted.
-// Reason: V43A introduced one final max-cap violation on the saturated multiply helper cone.
-// Keeps the safer slice_z/slice_a/corr_m0 bit-level antenna isolations, but leaves A[15] in the V42A operand path.
+// V46A source marker: V45A reduced back to one narrow encoder-side m4[3] isolation.
+// Reason: V45A kept timing/load clean but worsened final antenna by splitting m4[3]
+// across encoder, slice and corrector consumers. V44 showed the only failing sink was
+// corr_m4_cfg[3] -> enc_m4_cfg[3], so V46A isolates only that encoder leg.
 module final_alu_runtime_top #(
     parameter integer WM = 5,
     parameter integer XW = 24,
@@ -321,13 +322,11 @@ module final_alu_runtime_top #(
     (* keep = "true", dont_touch = "true" *) reg [PW-1:0] range_half_range_hold;
     (* keep = "true", dont_touch = "true" *) reg corr_m0_bit3_corrector_reg;
     (* keep = "true", dont_touch = "true" *) reg corr_m0_bit4_corrector_reg;
-    /* V45A: V44A 40 ns was down to a single final-route antenna pin on
-       corr_m4_cfg[3] feeding the encoder/slice/corrector modulus-4 cone.
-       Split only bit 3 into local consumers so the original corr_m4_cfg[3]
-       Q net no longer has to span those physical regions after routing. */
+    /* V46A: keep only the encoder-side m4[3] isolation.
+       In V44, the single final antenna pin was corr_m4_cfg[3] -> enc_m4_cfg[3].
+       V45 also split the slice/corrector legs and disturbed routing, so those
+       two extra copies are removed here. */
     (* keep = "true", dont_touch = "true" *) reg enc_m4_bit3_encoder_reg;
-    (* keep = "true", dont_touch = "true" *) reg slice_m4_bit3_lane_reg;
-    (* keep = "true", dont_touch = "true" *) reg corr_m4_bit3_corrector_reg;
     /* V41A: separate the external X_out flop from the internal retained
        output value.  The V40A 40 ns artifact showed antenna on net87, the
        X_out[19] output path, because the output flop Q also fed internal
@@ -363,8 +362,6 @@ module final_alu_runtime_top #(
     wire [WM-1:0] slice_z_store_wire      = {slice_z_res_hold[WM-1:4], slice_z_res_bit3_store_reg, slice_z_res_bit2_store_reg, slice_z_res_hold[1], slice_z_res_bit0_store_reg};
     wire [WM-1:0] corr_m0_corrector_wire  = {corr_m0_bit4_corrector_reg, corr_m0_bit3_corrector_reg, corr_m0_cfg[2:0]};
     wire [WM-1:0] enc_m4_encoder_wire     = {enc_m4_cfg[WM-1:4], enc_m4_bit3_encoder_reg, enc_m4_cfg[2:0]};
-    wire [WM-1:0] slice_m4_lane_wire      = {slice_m4_cfg[WM-1:4], slice_m4_bit3_lane_reg, slice_m4_cfg[2:0]};
-    wire [WM-1:0] corr_m4_corrector_wire  = {corr_m4_cfg[WM-1:4], corr_m4_bit3_corrector_reg, corr_m4_cfg[2:0]};
 
     assign mul_addend_sat_wire     = mul_mult_sat_reg[0] ? mul_mcand_sat_reg : {(PW+1){1'b0}};
     assign mul_acc_sum_wire        = {1'b0, mul_acc_sat_reg} + {1'b0, mul_addend_sat_wire};
@@ -502,7 +499,7 @@ module final_alu_runtime_top #(
         .m1(corr_m1_cfg),
         .m2(corr_m2_cfg),
         .m3(corr_m3_cfg),
-        .m4(corr_m4_corrector_wire),
+        .m4(corr_m4_cfg),
         .m5(corr_m5_cfg),
         .done(corrector_done),
         .residue_error(corrector_residue_error),
@@ -568,7 +565,7 @@ module final_alu_runtime_top #(
                 oh[1]: get_mod_oh = slice_m1_cfg;
                 oh[2]: get_mod_oh = slice_m2_cfg;
                 oh[3]: get_mod_oh = slice_m3_cfg;
-                oh[4]: get_mod_oh = slice_m4_lane_wire;
+                oh[4]: get_mod_oh = slice_m4_cfg;
                 oh[5]: get_mod_oh = slice_m5_cfg;
                 default: get_mod_oh = {WM{1'b0}};
             endcase
@@ -704,8 +701,6 @@ module final_alu_runtime_top #(
             corr_m0_bit3_corrector_reg   <= 1'b0;
             corr_m0_bit4_corrector_reg   <= 1'b0;
             enc_m4_bit3_encoder_reg      <= 1'b0;
-            slice_m4_bit3_lane_reg       <= 1'b0;
-            corr_m4_bit3_corrector_reg   <= 1'b0;
             x_out_core_reg               <= {XW{1'b0}};
             Corrected                    <= 1'b0;
             cfg_clear_loaded             <= 1'b0;
@@ -816,7 +811,6 @@ module final_alu_runtime_top #(
                             slice_m2_cfg <= m2_cfg;
                             slice_m3_cfg <= m3_cfg;
                             slice_m4_cfg <= m4_cfg;
-                            slice_m4_bit3_lane_reg <= m4_cfg[3];
                             slice_m5_cfg <= m5_cfg;
                             corr_m0_cfg  <= m0_cfg;
                             corr_m0_bit3_corrector_reg <= m0_cfg[3];
@@ -825,7 +819,6 @@ module final_alu_runtime_top #(
                             corr_m2_cfg  <= m2_cfg;
                             corr_m3_cfg  <= m3_cfg;
                             corr_m4_cfg  <= m4_cfg;
-                            corr_m4_bit3_corrector_reg <= m4_cfg[3];
                             corr_m5_cfg  <= m5_cfg;
                         end
                         config_valid_reg      <= precomp_ok;
