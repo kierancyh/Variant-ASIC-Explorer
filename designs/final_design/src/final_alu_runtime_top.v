@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-// V36B source marker: V36A antenna isolation plus top-level input shadowing and registered Corrected output isolation.
+// V36D source marker: V36C operand/corrector isolation plus slice-launch, op-select, range-output, and corrector-enable isolation.
 module final_alu_runtime_top #(
     parameter integer WM = 5,
     parameter integer XW = 24,
@@ -38,7 +38,7 @@ module final_alu_runtime_top #(
      * each capture/init/update state its own local select bit instead of
      * one shared high-load binary decode net.
      */
-    localparam integer MAIN_STATE_W = 36;
+    localparam integer MAIN_STATE_W = 40;
     localparam [MAIN_STATE_W-1:0]
         MS_IDLE           = 36'h000000001,
         MS_CFG_WAIT_CHK   = 36'h000000002,
@@ -96,7 +96,13 @@ module final_alu_runtime_top #(
 
         /* Legacy/unreachable config-commit fallbacks. */
         MS_CFG_COMMIT1    = 36'h400000000,
-        MS_CFG_COMMIT2    = 36'h800000000;
+        MS_CFG_COMMIT2    = 36'h800000000,
+
+        /* V36D: extra local isolation stages. These are intentionally above
+         * the original 36-bit one-hot range so no historical state encoding
+         * is reused or aliased. */
+        MS_OP_ARM_LANE    = 40'h1000000000,
+        MS_OP_FINAL_HOLD  = 40'h2000000000;
 
     /* Range multiplier side-path constants.
        For 5-bit moduli, the largest base product is below 2^PW.
@@ -156,6 +162,14 @@ module final_alu_runtime_top #(
     wire cfg_loaded_cfg;
     reg  cfg_clear_loaded;
     wire cfg_write_allow;
+
+    /* V36D: local copies for the corrector feature enables.  The V36C 40 ns
+       run had one tiny max-slew/max-cap issue around corrector control/state
+       logic.  Capturing the enable bits with the accepted configuration keeps
+       the CSR outputs from becoming another routed control source inside the
+       corrector start/update cone. */
+    (* keep = "true", dont_touch = "true" *) reg corr_detect_en_reg;
+    (* keep = "true", dont_touch = "true" *) reg corr_correct_en_reg;
 
     reg        config_valid_reg;
     reg        config_busy_reg;
@@ -222,7 +236,22 @@ module final_alu_runtime_top #(
     reg  [WM-1:0] slice_a_reg;
     reg  [WM-1:0] slice_b_reg;
     reg  [WM-1:0] slice_m_reg;
+
+    /* V36D: launch-stage isolation for the residue slice.  V36C moved final
+       antenna to slice_a_reg[4], which means the prep register was still
+       exposed as the launch source into u_slice.  These launch registers form
+       a short local handoff point before asserting slice_start. */
+    (* keep = "true", dont_touch = "true" *) reg [WM-1:0] slice_a_launch_reg;
+    (* keep = "true", dont_touch = "true" *) reg [WM-1:0] slice_b_launch_reg;
+    (* keep = "true", dont_touch = "true" *) reg [WM-1:0] slice_m_launch_reg;
+    (* keep = "true", dont_touch = "true" *) reg [1:0]  slice_op_launch_reg;
+
     reg  [1:0] op_sel_reg;
+    /* V36D: split operation-select consumers.  op_sel_reg is the retained
+       capture/debug copy, while calc/slice copies feed the true-range helper
+       and residue-slice launch path respectively. */
+    (* keep = "true", dont_touch = "true" *) reg [1:0] op_sel_calc_reg;
+    (* keep = "true", dont_touch = "true" *) reg [1:0] op_sel_slice_reg;
 
     reg  signed [XW-1:0] A_reg;
     reg  signed [XW-1:0] B_reg;
@@ -295,6 +324,12 @@ module final_alu_runtime_top #(
 
     wire signed [XW-1:0] x_centered_wire;
     wire range_error_wire;
+    /* V36D: hold final range/centering outputs before committing X_out/status.
+       V36C final antenna moved downstream into the range/centering cone
+       (_02081_), so this register boundary reduces direct fanout from that
+       combinational cone into the final output/status commit. */
+    (* keep = "true", dont_touch = "true" *) reg signed [XW-1:0] x_centered_hold;
+    (* keep = "true", dont_touch = "true" *) reg range_error_hold;
     wire [WM-1:0] slice_a_sel;
     wire [WM-1:0] slice_b_sel;
     wire [WM-1:0] slice_m_sel;
@@ -427,7 +462,7 @@ module final_alu_runtime_top #(
         .clk(clk),
         .rst_n(rst_slice_n),
         .start(slice_start_reg),
-        .op_sel(op_sel_reg),
+        .op_sel(slice_op_launch_reg),
         .a_res(slice_a_sel),
         .b_res(slice_b_sel),
         .modulus(slice_m_sel),
@@ -439,8 +474,8 @@ module final_alu_runtime_top #(
         .clk(clk),
         .rst_n(rst_corrector_n),
         .start(corrector_start_reg),
-        .enable_detection(detect_en_cfg),
-        .enable_correction(correct_en_cfg),
+        .enable_detection(corr_detect_en_reg),
+        .enable_correction(corr_correct_en_reg),
         .z_res_flat(z_res_flat),
         .M_base(M_base_live),
         .usable_subset_bitmap(usable_subset_bitmap_live),
@@ -542,9 +577,9 @@ module final_alu_runtime_top #(
     wire [WM-1:0] slice_a_next = get_flat_oh(a_res_flat_reg, slice_a_lane_oh);
     wire [WM-1:0] slice_b_next = get_flat_oh(b_res_flat_reg, slice_b_lane_oh);
 
-    assign slice_a_sel = slice_a_reg;
-    assign slice_b_sel = slice_b_reg;
-    assign slice_m_sel = slice_m_reg;
+    assign slice_a_sel = slice_a_launch_reg;
+    assign slice_b_sel = slice_b_launch_reg;
+    assign slice_m_sel = slice_m_launch_reg;
 
     always @* begin
         if (!cfg_re) begin
@@ -629,8 +664,16 @@ module final_alu_runtime_top #(
             corr_m3_cfg                  <= {WM{1'b0}};
             corr_m4_cfg                  <= {WM{1'b0}};
             corr_m5_cfg                  <= {WM{1'b0}};
+            corr_detect_en_reg           <= 1'b0;
+            corr_correct_en_reg          <= 1'b0;
             slice_z_res_hold             <= {WM{1'b0}};
+            slice_a_launch_reg           <= {WM{1'b0}};
+            slice_b_launch_reg           <= {WM{1'b0}};
+            slice_m_launch_reg           <= {WM{1'b0}};
+            slice_op_launch_reg          <= 2'b00;
             corrector_candidate_base_hold <= {PW{1'b0}};
+            x_centered_hold              <= {XW{1'b0}};
+            range_error_hold             <= 1'b0;
             A_in_shadow_reg              <= {XW{1'b0}};
             B_in_shadow_reg              <= {XW{1'b0}};
             A_enc_reg                    <= {XW{1'b0}};
@@ -643,6 +686,9 @@ module final_alu_runtime_top #(
             precomp_start_reg            <= 1'b0;
             enc_start_reg                <= 1'b0;
             enc_select_b_reg             <= 1'b0;
+            op_sel_reg                   <= 2'b00;
+            op_sel_calc_reg              <= 2'b00;
+            op_sel_slice_reg             <= 2'b00;
             slice_start_reg              <= 1'b0;
             corrector_start_reg          <= 1'b0;
             config_valid_reg             <= 1'b0;
@@ -693,6 +739,8 @@ module final_alu_runtime_top #(
                          * below, which breaks the former high-slew _0983_ mux
                          * select that drove the full 48-bit operand bank. */
                         op_sel_reg       <= Op_Sel;
+                        op_sel_calc_reg  <= Op_Sel;
+                        op_sel_slice_reg <= Op_Sel;
                         A_in_shadow_reg <= A_in;
                         B_in_shadow_reg <= B_in;
                         op_busy_reg      <= 1'b1;
@@ -739,6 +787,8 @@ module final_alu_runtime_top #(
                             corr_m3_cfg  <= m3_cfg;
                             corr_m4_cfg  <= m4_cfg;
                             corr_m5_cfg  <= m5_cfg;
+                            corr_detect_en_reg  <= detect_en_cfg;
+                            corr_correct_en_reg <= correct_en_cfg;
                         end
                         config_valid_reg      <= precomp_ok;
                         config_error_reg      <= !precomp_ok;
@@ -820,12 +870,12 @@ module final_alu_runtime_top #(
                     last_corrected_lane_mask_reg <= 6'd0;
                     residue_error_reg            <= 1'b0;
                     range_error_reg              <= 1'b0;
-                    main_state                   <= (op_sel_reg == 2'b10) ? MS_OP_INIT_MUL0 : MS_OP_INIT_RANGE;
+                    main_state                   <= (op_sel_calc_reg == 2'b10) ? MS_OP_INIT_MUL0 : MS_OP_INIT_RANGE;
                 end
 
                 MS_OP_INIT_RANGE: begin
                     op_state_dbg <= 4'd1;
-                    case (op_sel_reg)
+                    case (op_sel_calc_reg)
                         2'b00: raw_range_error_reg <= add_range_error_wire;
                         2'b01: raw_range_error_reg <= sub_range_error_wire;
                         default: raw_range_error_reg <= 1'b0;
@@ -948,7 +998,7 @@ module final_alu_runtime_top #(
                     slice_m_reg <= slice_m0_cfg;
                     slice_a_reg <= a_res_flat_reg[(0*WM)+:WM];
                     slice_b_reg <= b_res_flat_reg[(0*WM)+:WM];
-                    main_state  <= MS_OP_START_LANE;
+                    main_state  <= MS_OP_ARM_LANE;
                 end
 
                 MS_OP_PREP_M: begin
@@ -972,7 +1022,16 @@ module final_alu_runtime_top #(
                 MS_OP_PREP_B: begin
                     op_state_dbg <= 4'd3;
                     slice_b_reg <= slice_b_next;
-                    main_state <= MS_OP_START_LANE;
+                    main_state <= MS_OP_ARM_LANE;
+                end
+
+                MS_OP_ARM_LANE: begin
+                    op_state_dbg        <= 4'd3;
+                    slice_a_launch_reg  <= slice_a_reg;
+                    slice_b_launch_reg  <= slice_b_reg;
+                    slice_m_launch_reg  <= slice_m_reg;
+                    slice_op_launch_reg <= op_sel_slice_reg;
+                    main_state          <= MS_OP_START_LANE;
                 end
 
                 MS_OP_START_LANE: begin
@@ -1024,27 +1083,34 @@ module final_alu_runtime_top #(
                     op_state_dbg <= 4'd6;
                     if (corrector_done) begin
                         corrector_candidate_base_hold <= corrector_candidate_base;
-                        main_state <= MS_OP_FINAL;
+                        main_state <= MS_OP_FINAL_HOLD;
                     end
+                end
+
+                MS_OP_FINAL_HOLD: begin
+                    op_state_dbg     <= 4'd7;
+                    range_error_hold <= range_error_wire;
+                    x_centered_hold  <= x_centered_wire;
+                    main_state       <= MS_OP_FINAL;
                 end
 
                 MS_OP_FINAL: begin
                     op_state_dbg                 <= 4'd7;
                     residue_error_reg            <= corrector_residue_error;
-                    range_error_reg              <= range_error_wire;
+                    range_error_reg              <= range_error_hold;
                     error_detected_reg           <= corrector_residue_error |
-                                                    range_error_wire |
-                                                    (corrector_uncorrectable & ~range_error_wire);
-                    corrected_reg                <= corrector_corrected_success & ~range_error_wire;
-                    Corrected                    <= corrector_corrected_success & ~range_error_wire;
+                                                    range_error_hold |
+                                                    (corrector_uncorrectable & ~range_error_hold);
+                    corrected_reg                <= corrector_corrected_success & ~range_error_hold;
+                    Corrected                    <= corrector_corrected_success & ~range_error_hold;
                     valid_reg                    <= config_valid_reg &
-                                                    ~range_error_wire &
-                                                    ~(corrector_uncorrectable & ~range_error_wire);
-                    uncorrectable_reg            <= corrector_uncorrectable & ~range_error_wire;
+                                                    ~range_error_hold &
+                                                    ~(corrector_uncorrectable & ~range_error_hold);
+                    uncorrectable_reg            <= corrector_uncorrectable & ~range_error_hold;
                     last_mismatch_mask_reg       <= corrector_mismatch_mask;
                     last_mismatch_count_reg      <= corrector_mismatch_count;
                     last_corrected_lane_mask_reg <= corrector_lane_mask;
-                    X_out                        <= x_centered_wire;
+                    X_out                        <= x_centered_hold;
                     Done                         <= 1'b1;
                     op_busy_reg                  <= 1'b0;
                     enc_select_b_reg             <= 1'b0;
