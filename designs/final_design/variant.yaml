@@ -39,8 +39,8 @@ ll_policy:
   gpl_cell_padding: 1
   run_antenna_repair: true
   run_post_grt_design_repair: true
-  run_post_grt_resizer_timing: true
-  run_heuristic_diode_insertion: true
+  run_post_grt_resizer_timing: false
+  run_heuristic_diode_insertion: false
   grt_antenna_margin: 30
   grt_antenna_iters: 6
   heuristic_antenna_threshold: 150

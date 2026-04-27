@@ -335,12 +335,12 @@ jobs:
             --pdk-root "${PDK_ROOT}" \
             --openlane-image "${OPENLANE_IMAGE}" \
             --stage-label coarse \
-            --artifact-name "coarse-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns"
+            --artifact-name "coarse-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns-r${{ github.run_id }}"
       - name: Upload coarse attempt artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coarse-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns
+          name: coarse-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns-r${{ github.run_id }}
           path: ci_out/${{ needs.plan.outputs.safe_variant }}/
           if-no-files-found: warn
 
@@ -458,11 +458,11 @@ jobs:
             --pdk-root "${PDK_ROOT}" \
             --openlane-image "${OPENLANE_IMAGE}" \
             --stage-label mid \
-            --artifact-name "mid-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns"
+            --artifact-name "mid-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns-r${{ github.run_id }}"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: mid-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns
+          name: mid-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns-r${{ github.run_id }}
           path: ci_out/${{ needs.plan.outputs.safe_variant }}/
           if-no-files-found: warn
 
@@ -578,11 +578,11 @@ jobs:
             --pdk-root "${PDK_ROOT}" \
             --openlane-image "${OPENLANE_IMAGE}" \
             --stage-label refine-1 \
-            --artifact-name "refine1-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns"
+            --artifact-name "refine1-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns-r${{ github.run_id }}"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: refine1-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns
+          name: refine1-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns-r${{ github.run_id }}
           path: ci_out/${{ needs.plan.outputs.safe_variant }}/
           if-no-files-found: warn
 
@@ -692,11 +692,11 @@ jobs:
             --pdk-root "${PDK_ROOT}" \
             --openlane-image "${OPENLANE_IMAGE}" \
             --stage-label refine-2 \
-            --artifact-name "refine2-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns"
+            --artifact-name "refine2-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns-r${{ github.run_id }}"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: refine2-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns
+          name: refine2-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns-r${{ github.run_id }}
           path: ci_out/${{ needs.plan.outputs.safe_variant }}/
           if-no-files-found: warn
 
@@ -806,11 +806,11 @@ jobs:
             --pdk-root "${PDK_ROOT}" \
             --openlane-image "${OPENLANE_IMAGE}" \
             --stage-label refine-3 \
-            --artifact-name "refine3-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns"
+            --artifact-name "refine3-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns-r${{ github.run_id }}"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: refine3-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns
+          name: refine3-${{ needs.plan.outputs.safe_variant }}-${{ matrix.clock_ns }}ns-r${{ github.run_id }}
           path: ci_out/${{ needs.plan.outputs.safe_variant }}/
           if-no-files-found: warn
 
