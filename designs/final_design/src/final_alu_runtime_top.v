@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
-// V42A source marker: V41A plus surgical isolation for the four V41 40ns antenna nets.
-// Targets: op_sel_reg[0], corr_m0_cfg[3], Config_Busy/output66, and slice_z_res_hold[3].
+// V43A source marker: V42A plus surgical isolation for the V42 final-route antenna remnants.
+// Targets: A_calc_iso_wire[15]/A reload select, slice_a_reg[0], slice_z_res_hold[0]/[2], and corr_m0_cfg[4].
 module final_alu_runtime_top #(
     parameter integer WM = 5,
     parameter integer XW = 24,
@@ -221,8 +221,11 @@ module final_alu_runtime_top #(
     /* V36A: one-cycle local capture of the slice output before the z-bank
        store mux.  This targets recurring final antenna on slice_z_res[3]. */
     (* keep = "true", dont_touch = "true" *) reg [WM-1:0] slice_z_res_hold;
+    (* keep = "true", dont_touch = "true" *) reg slice_z_res_bit0_store_reg;
+    (* keep = "true", dont_touch = "true" *) reg slice_z_res_bit2_store_reg;
     (* keep = "true", dont_touch = "true" *) reg slice_z_res_bit3_store_reg;
     reg  [WM-1:0] slice_a_reg;
+    (* keep = "true", dont_touch = "true" *) reg slice_a_bit0_launch_reg;
     reg  [WM-1:0] slice_b_reg;
     reg  [WM-1:0] slice_m_reg;
     reg  [1:0] op_sel_reg;
@@ -258,6 +261,10 @@ module final_alu_runtime_top #(
     (* keep = "true", dont_touch = "true" *) reg B_bit4_enc_reg;
     (* keep = "true", dont_touch = "true" *) reg A_bit4_calc_reg;
     (* keep = "true", dont_touch = "true" *) reg B_bit4_calc_reg;
+    /* V43A: V42 final-route antenna exposed A_calc_iso_wire[15] and the
+       reload select feeding the A[15:8] bank.  Isolate only A calc bit 15
+       instead of duplicating the full operand bank. */
+    (* keep = "true", dont_touch = "true" *) reg A_bit15_calc_reg;
     wire signed [XW-1:0] A_enc_iso_wire;
     wire signed [XW-1:0] B_enc_iso_wire;
     wire signed [XW-1:0] A_calc_iso_wire;
@@ -316,6 +323,7 @@ module final_alu_runtime_top #(
     (* keep = "true", dont_touch = "true" *) reg [PW-1:0] range_M_base_hold;
     (* keep = "true", dont_touch = "true" *) reg [PW-1:0] range_half_range_hold;
     (* keep = "true", dont_touch = "true" *) reg corr_m0_bit3_corrector_reg;
+    (* keep = "true", dont_touch = "true" *) reg corr_m0_bit4_corrector_reg;
     /* V41A: separate the external X_out flop from the internal retained
        output value.  The V40A 40 ns artifact showed antenna on net87, the
        X_out[19] output path, because the output flop Q also fed internal
@@ -343,13 +351,13 @@ module final_alu_runtime_top #(
 
     assign A_enc_iso_wire  = {A_reg[XW-1:6], A_bit5_enc_reg,  A_bit4_enc_reg,  A_reg[3:0]};
     assign B_enc_iso_wire  = {B_reg[XW-1:6], B_bit5_enc_reg,  B_bit4_enc_reg,  B_reg[3:0]};
-    assign A_calc_iso_wire = {A_reg[XW-1:6], A_bit5_calc_reg, A_bit4_calc_reg, A_reg[3:0]};
+    assign A_calc_iso_wire = {A_reg[XW-1:16], A_bit15_calc_reg, A_reg[14:6], A_bit5_calc_reg, A_bit4_calc_reg, A_reg[3:0]};
     assign B_calc_iso_wire = {B_reg[XW-1:6], B_bit5_calc_reg, B_bit4_calc_reg, B_reg[3:0]};
 
     /* V42A: isolate only the exact bits that appeared in V41 40ns antenna.
        Keep the wider banks untouched so we do not repeat the V38A max-slew/max-cap regression. */
-    wire [WM-1:0] slice_z_store_wire     = {slice_z_res_hold[WM-1:4], slice_z_res_bit3_store_reg, slice_z_res_hold[2:0]};
-    wire [WM-1:0] corr_m0_corrector_wire = {corr_m0_cfg[WM-1:4], corr_m0_bit3_corrector_reg, corr_m0_cfg[2:0]};
+    wire [WM-1:0] slice_z_store_wire     = {slice_z_res_hold[WM-1:4], slice_z_res_bit3_store_reg, slice_z_res_bit2_store_reg, slice_z_res_hold[1], slice_z_res_bit0_store_reg};
+    wire [WM-1:0] corr_m0_corrector_wire = {corr_m0_bit4_corrector_reg, corr_m0_bit3_corrector_reg, corr_m0_cfg[2:0]};
 
     assign mul_addend_sat_wire     = mul_mult_sat_reg[0] ? mul_mcand_sat_reg : {(PW+1){1'b0}};
     assign mul_acc_sum_wire        = {1'b0, mul_acc_sat_reg} + {1'b0, mul_addend_sat_wire};
@@ -581,7 +589,7 @@ module final_alu_runtime_top #(
     wire [WM-1:0] slice_a_next = get_flat_oh(a_res_flat_reg, slice_a_lane_oh);
     wire [WM-1:0] slice_b_next = get_flat_oh(b_res_flat_reg, slice_b_lane_oh);
 
-    assign slice_a_sel = slice_a_reg;
+    assign slice_a_sel = {slice_a_reg[WM-1:1], slice_a_bit0_launch_reg};
     assign slice_b_sel = slice_b_reg;
     assign slice_m_sel = slice_m_reg;
 
@@ -669,7 +677,10 @@ module final_alu_runtime_top #(
             corr_m4_cfg                  <= {WM{1'b0}};
             corr_m5_cfg                  <= {WM{1'b0}};
             slice_z_res_hold             <= {WM{1'b0}};
+            slice_z_res_bit0_store_reg    <= 1'b0;
+            slice_z_res_bit2_store_reg    <= 1'b0;
             slice_z_res_bit3_store_reg    <= 1'b0;
+            slice_a_bit0_launch_reg       <= 1'b0;
             corrector_candidate_base_hold <= {PW{1'b0}};
             A_in_shadow_reg              <= {XW{1'b0}};
             B_in_shadow_reg              <= {XW{1'b0}};
@@ -681,9 +692,11 @@ module final_alu_runtime_top #(
             B_bit4_enc_reg               <= 1'b0;
             A_bit4_calc_reg              <= 1'b0;
             B_bit4_calc_reg              <= 1'b0;
+            A_bit15_calc_reg             <= 1'b0;
             range_M_base_hold            <= {PW{1'b0}};
             range_half_range_hold        <= {PW{1'b0}};
             corr_m0_bit3_corrector_reg   <= 1'b0;
+            corr_m0_bit4_corrector_reg   <= 1'b0;
             x_out_core_reg               <= {XW{1'b0}};
             Corrected                    <= 1'b0;
             cfg_clear_loaded             <= 1'b0;
@@ -796,6 +809,7 @@ module final_alu_runtime_top #(
                             slice_m5_cfg <= m5_cfg;
                             corr_m0_cfg  <= m0_cfg;
                             corr_m0_bit3_corrector_reg <= m0_cfg[3];
+                            corr_m0_bit4_corrector_reg <= m0_cfg[4];
                             corr_m1_cfg  <= m1_cfg;
                             corr_m2_cfg  <= m2_cfg;
                             corr_m3_cfg  <= m3_cfg;
@@ -836,8 +850,9 @@ module final_alu_runtime_top #(
 
                 MS_OP_CAP_A1: begin
                     op_state_dbg <= 4'd1;
-                    A_reg[15:8] <= A_in_shadow_reg[15:8];
-                    main_state   <= MS_OP_CAP_A2;
+                    A_reg[15:8]       <= A_in_shadow_reg[15:8];
+                    A_bit15_calc_reg <= A_in_shadow_reg[15];
+                    main_state        <= MS_OP_CAP_A2;
                 end
 
                 MS_OP_CAP_A2: begin
@@ -1008,8 +1023,9 @@ module final_alu_runtime_top #(
                        then start the slice.  Later lanes still use the
                        self-shifting one-hot PREP_M/A/B sequence. */
                     slice_m_reg <= slice_m0_cfg;
-                    slice_a_reg <= a_res_flat_reg[(0*WM)+:WM];
-                    slice_b_reg <= b_res_flat_reg[(0*WM)+:WM];
+                    slice_a_reg             <= a_res_flat_reg[(0*WM)+:WM];
+                    slice_a_bit0_launch_reg <= a_res_flat_reg[(0*WM)+0];
+                    slice_b_reg             <= b_res_flat_reg[(0*WM)+:WM];
                     main_state  <= MS_OP_START_LANE;
                 end
 
@@ -1026,8 +1042,9 @@ module final_alu_runtime_top #(
 
                 MS_OP_PREP_A: begin
                     op_state_dbg <= 4'd3;
-                    slice_a_reg <= slice_a_next;
-                    slice_b_lane_oh <= op_lane_oh;
+                    slice_a_reg             <= slice_a_next;
+                    slice_a_bit0_launch_reg <= slice_a_next[0];
+                    slice_b_lane_oh         <= op_lane_oh;
                     main_state <= MS_OP_PREP_B;
                 end
 
@@ -1047,6 +1064,8 @@ module final_alu_runtime_top #(
                     op_state_dbg <= 4'd4;
                     if (slice_done) begin
                         slice_z_res_hold           <= slice_z_res;
+                        slice_z_res_bit0_store_reg <= slice_z_res[0];
+                        slice_z_res_bit2_store_reg <= slice_z_res[2];
                         slice_z_res_bit3_store_reg <= slice_z_res[3];
                         main_state                 <= MS_OP_STORE_Z;
                     end
