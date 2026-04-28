@@ -1,4 +1,5 @@
 `timescale 1ns/1ps
+// V51A source marker: split post-corrector finalisation to remove shared max-slew hold-enable net.
 // V50A source marker: design-simplification patch based on V44A.
 // The ADD/SUB/MUL mathematical range guard is now a separate sequential module,
 // the corrector-to-range/output boundary is registered, and final range/centering
@@ -41,41 +42,41 @@ module final_alu_runtime_top #(
      * each capture/init/update state its own local select bit instead of
      * one shared high-load binary decode net.
      */
-    localparam integer MAIN_STATE_W = 36;
+    localparam integer MAIN_STATE_W = 44;
     localparam [MAIN_STATE_W-1:0]
-        MS_IDLE           = 36'h000000001,
-        MS_CFG_WAIT_CHK   = 36'h000000002,
-        MS_CFG_WAIT_PRE   = 36'h000000004,
+        MS_IDLE           = 44'h000000001,
+        MS_CFG_WAIT_CHK   = 44'h000000002,
+        MS_CFG_WAIT_PRE   = 44'h000000004,
 
         /* Byte-wide operation-capture states. */
-        MS_OP_CAP_A0      = 36'h000000008,
-        MS_OP_CAP_A1      = 36'h000000010,
-        MS_OP_CAP_A2      = 36'h000000020,
-        MS_OP_CAP_B0      = 36'h000000040,
-        MS_OP_CAP_B1      = 36'h000000080,
-        MS_OP_CAP_B2      = 36'h000000100,
-        MS_OP_INIT_FLAGS  = 36'h000000200,
-        MS_OP_START_RANGE = 36'h000000400,
-        MS_OP_WAIT_RANGE  = 36'h000000800,
-        MS_OP_START_FINAL_RANGE = 36'h000001000,
-        MS_OP_WAIT_FINAL_RANGE  = 36'h000002000,
+        MS_OP_CAP_A0      = 44'h000000008,
+        MS_OP_CAP_A1      = 44'h000000010,
+        MS_OP_CAP_A2      = 44'h000000020,
+        MS_OP_CAP_B0      = 44'h000000040,
+        MS_OP_CAP_B1      = 44'h000000080,
+        MS_OP_CAP_B2      = 44'h000000100,
+        MS_OP_INIT_FLAGS  = 44'h000000200,
+        MS_OP_START_RANGE = 44'h000000400,
+        MS_OP_WAIT_RANGE  = 44'h000000800,
+        MS_OP_START_FINAL_RANGE = 44'h000001000,
+        MS_OP_WAIT_FINAL_RANGE  = 44'h000002000,
 
-        /* Legacy/unreachable helper encodings kept to preserve the 36-bit map. */
-        MS_OP_UNUSED0     = 36'h000004000,
-        MS_OP_UNUSED1     = 36'h000008000,
-        MS_OP_UNUSED2     = 36'h000010000,
-        MS_OP_START_ENC   = 36'h000020000,
-        MS_OP_WAIT_ENC    = 36'h000040000,
+        /* Legacy/unreachable helper encodings kept as spare one-hot states. */
+        MS_OP_UNUSED0     = 44'h000004000,
+        MS_OP_UNUSED1     = 44'h000008000,
+        MS_OP_UNUSED2     = 44'h000010000,
+        MS_OP_START_ENC   = 44'h000020000,
+        MS_OP_WAIT_ENC    = 44'h000040000,
 
         /* V20: copy encoder residues into the A/B holding banks in
          * 10-bit chunks.  V19 copied all 30 residue bits in one cycle and
          * the post-PnR report showed that mux select as a new max-slew net. */
-        MS_OP_STORE_A0    = 36'h000080000,
-        MS_OP_STORE_A1    = 36'h000100000,
-        MS_OP_STORE_A2    = 36'h000200000,
-        MS_OP_STORE_B0    = 36'h000400000,
-        MS_OP_STORE_B1    = 36'h000800000,
-        MS_OP_STORE_B2    = 36'h001000000,
+        MS_OP_STORE_A0    = 44'h000080000,
+        MS_OP_STORE_A1    = 44'h000100000,
+        MS_OP_STORE_A2    = 44'h000200000,
+        MS_OP_STORE_B0    = 44'h000400000,
+        MS_OP_STORE_B1    = 44'h000800000,
+        MS_OP_STORE_B2    = 44'h001000000,
 
         /*
          * V33A physical-signoff cleanup: V31A split PREP into M/A/B states,
@@ -84,22 +85,37 @@ module final_alu_runtime_top #(
          * advancing one-hot state so the M/A/B mux banks no longer depend on
          * shared binary lane_idx==N decoder cells.
          */
-        MS_OP_PREP_M      = 36'h002000000,
-        MS_OP_PREP_A      = 36'h004000000,
-        MS_OP_PREP_B      = 36'h008000000,
-        MS_OP_START_LANE  = 36'h010000000,
-        MS_OP_WAIT_LANE   = 36'h020000000,
-        MS_OP_START_CORR  = 36'h040000000,
-        MS_OP_WAIT_CORR   = 36'h080000000,
-        MS_OP_FINAL       = 36'h100000000,
+        MS_OP_PREP_M      = 44'h002000000,
+        MS_OP_PREP_A      = 44'h004000000,
+        MS_OP_PREP_B      = 44'h008000000,
+        MS_OP_START_LANE  = 44'h010000000,
+        MS_OP_WAIT_LANE   = 44'h020000000,
+        MS_OP_START_CORR  = 44'h040000000,
+        MS_OP_WAIT_CORR   = 44'h080000000,
+        MS_OP_FINAL       = 44'h100000000,
 
         /* V36A: store the slice result from a local holding register rather
          * than routing the slice output directly into the z0..z5 bank. */
-        MS_OP_STORE_Z     = 36'h200000000,
+        MS_OP_STORE_Z     = 44'h200000000,
 
         /* Legacy/unreachable config-commit fallbacks. */
-        MS_CFG_COMMIT1    = 36'h400000000,
-        MS_CFG_COMMIT2    = 36'h800000000;
+        MS_CFG_COMMIT1    = 44'h400000000,
+        MS_CFG_COMMIT2    = 44'h800000000,
+
+        /* V51A: post-corrector finalisation split into small capture states.
+         * V50B captured candidate, status, M_base, and half_range in one
+         * corrector_done-gated cycle.  The routed reports showed the resulting
+         * shared enable net feeding many hold muxes as the dominant max-slew
+         * source.  These states keep the same semantics but limit each state
+         * bit to a small physical register bank. */
+        MS_OP_LATCH_CAND0 = 44'h1000000000,
+        MS_OP_LATCH_CAND1 = 44'h2000000000,
+        MS_OP_LATCH_CAND2 = 44'h4000000000,
+        MS_OP_LATCH_FLAGS = 44'h8000000000,
+        MS_OP_LATCH_M0    = 44'h10000000000,
+        MS_OP_LATCH_M1    = 44'h20000000000,
+        MS_OP_LATCH_H0    = 44'h40000000000,
+        MS_OP_LATCH_H1    = 44'h80000000000;
 
     /* V50A: true-result range checking moved to final_alu_op_range_guard.v. */
 
@@ -1012,17 +1028,61 @@ module final_alu_runtime_top #(
                 MS_OP_WAIT_CORR: begin
                     op_state_dbg <= 4'd6;
                     if (corrector_done) begin
-                        corrector_candidate_base_hold    <= corrector_candidate_base;
-                        corrector_residue_error_hold     <= corrector_residue_error;
-                        corrector_corrected_success_hold <= corrector_corrected_success;
-                        corrector_uncorrectable_hold     <= corrector_uncorrectable;
-                        corrector_lane_mask_hold         <= corrector_lane_mask;
-                        corrector_mismatch_mask_hold     <= corrector_mismatch_mask;
-                        corrector_mismatch_count_hold    <= corrector_mismatch_count;
-                        range_M_base_hold                <= M_base_live;
-                        range_half_range_hold            <= half_range_live;
-                        main_state                       <= MS_OP_START_FINAL_RANGE;
+                        main_state <= MS_OP_LATCH_CAND0;
                     end
+                end
+
+                MS_OP_LATCH_CAND0: begin
+                    op_state_dbg <= 4'd6;
+                    corrector_candidate_base_hold[6:0] <= corrector_candidate_base[6:0];
+                    main_state <= MS_OP_LATCH_CAND1;
+                end
+
+                MS_OP_LATCH_CAND1: begin
+                    op_state_dbg <= 4'd6;
+                    corrector_candidate_base_hold[13:7] <= corrector_candidate_base[13:7];
+                    main_state <= MS_OP_LATCH_CAND2;
+                end
+
+                MS_OP_LATCH_CAND2: begin
+                    op_state_dbg <= 4'd6;
+                    corrector_candidate_base_hold[PW-1:14] <= corrector_candidate_base[PW-1:14];
+                    main_state <= MS_OP_LATCH_FLAGS;
+                end
+
+                MS_OP_LATCH_FLAGS: begin
+                    op_state_dbg <= 4'd6;
+                    corrector_residue_error_hold     <= corrector_residue_error;
+                    corrector_corrected_success_hold <= corrector_corrected_success;
+                    corrector_uncorrectable_hold     <= corrector_uncorrectable;
+                    corrector_lane_mask_hold         <= corrector_lane_mask;
+                    corrector_mismatch_mask_hold     <= corrector_mismatch_mask;
+                    corrector_mismatch_count_hold    <= corrector_mismatch_count;
+                    main_state <= MS_OP_LATCH_M0;
+                end
+
+                MS_OP_LATCH_M0: begin
+                    op_state_dbg <= 4'd6;
+                    range_M_base_hold[9:0] <= M_base_live[9:0];
+                    main_state <= MS_OP_LATCH_M1;
+                end
+
+                MS_OP_LATCH_M1: begin
+                    op_state_dbg <= 4'd6;
+                    range_M_base_hold[PW-1:10] <= M_base_live[PW-1:10];
+                    main_state <= MS_OP_LATCH_H0;
+                end
+
+                MS_OP_LATCH_H0: begin
+                    op_state_dbg <= 4'd6;
+                    range_half_range_hold[9:0] <= half_range_live[9:0];
+                    main_state <= MS_OP_LATCH_H1;
+                end
+
+                MS_OP_LATCH_H1: begin
+                    op_state_dbg <= 4'd6;
+                    range_half_range_hold[PW-1:10] <= half_range_live[PW-1:10];
+                    main_state <= MS_OP_START_FINAL_RANGE;
                 end
 
                 MS_OP_START_FINAL_RANGE: begin
