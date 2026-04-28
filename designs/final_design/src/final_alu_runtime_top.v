@@ -1,9 +1,9 @@
 `timescale 1ns/1ps
-// V47A source marker: V44A plus one manual synthesis-only antenna diode on corr_m4_cfg[3].
-// Reason: V44A was the cleanest baseline (setup/hold/slew/cap/DRC/LVS all clean) and
-// had only one final antenna pin on corr_m4_cfg[3]. V45/V46 RTL fanout splits disturbed
-// routing and caused antenna/electrical regressions, so V47A avoids extra mux/register
-// restructuring and adds only targeted physical antenna protection.
+// V48A source marker: return to the clean V44A RTL structure.
+// Reason: V47A manual diode on corr_m4_cfg[3] removed the old antenna symptom but
+// caused post-route max-slew/max-cap regressions through automatic antenna buffering.
+// V48A removes the manual RTL diode; the experiment is now flow-only via a stronger
+// normal GRT antenna repair margin in variant.yaml.
 module final_alu_runtime_top #(
     parameter integer WM = 5,
     parameter integer XW = 24,
@@ -324,17 +324,8 @@ module final_alu_runtime_top #(
     (* keep = "true", dont_touch = "true" *) reg corr_m0_bit3_corrector_reg;
     (* keep = "true", dont_touch = "true" *) reg corr_m0_bit4_corrector_reg;
 
-    /* V47A: targeted manual antenna protection for the single V44A final-route
-       antenna net corr_m4_cfg[3]. This is intentionally synthesis-only so RTL
-       simulation remains generic, while OpenLane/Yosys keeps a real SKY130
-       antenna diode on the exact physical net instead of splitting m4[3] into
-       extra RTL fanout copies. */
-`ifdef SYNTHESIS
-    (* keep = "true", dont_touch = "true" *)
-    sky130_fd_sc_hd__diode_2 u_manual_ant_corr_m4_cfg3 (
-        .DIODE(corr_m4_cfg[3])
-    );
-`endif
+    /* V48A: no manual RTL diode. Keep the clean V44A netlist shape and let the
+       normal OpenROAD antenna repair pass handle protection with extra margin. */
 
     /* V41A: separate the external X_out flop from the internal retained
        output value.  The V40A 40 ns artifact showed antenna on net87, the
