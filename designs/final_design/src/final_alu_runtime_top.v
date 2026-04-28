@@ -1,7 +1,8 @@
 `timescale 1ns/1ps
-// V49A source marker: reject V48 flow-margin regression, return to V44-style locked flow.
-// Adds narrow encoder-only m4[3] isolation for the V44 corr_m4_cfg[3] antenna sink
-// and registers CSR readback to avoid cfg_rdata output-mux max-cap/slew regressions.
+// V50A source marker: design-simplification patch based on V44A.
+// The ADD/SUB/MUL mathematical range guard is now a separate sequential module,
+// the corrector-to-range/output boundary is registered, and final range/centering
+// is a one-cycle registered stage. No LibreLane/variant flow changes.
 module final_alu_runtime_top #(
     parameter integer WM = 5,
     parameter integer XW = 24,
@@ -54,15 +55,15 @@ module final_alu_runtime_top #(
         MS_OP_CAP_B1      = 36'h000000080,
         MS_OP_CAP_B2      = 36'h000000100,
         MS_OP_INIT_FLAGS  = 36'h000000200,
-        MS_OP_INIT_RANGE  = 36'h000000400,
-        MS_OP_INIT_MUL0   = 36'h000000800,
-        MS_OP_INIT_MUL1   = 36'h000001000,
-        MS_OP_INIT_MUL2   = 36'h000002000,
+        MS_OP_START_RANGE = 36'h000000400,
+        MS_OP_WAIT_RANGE  = 36'h000000800,
+        MS_OP_START_FINAL_RANGE = 36'h000001000,
+        MS_OP_WAIT_FINAL_RANGE  = 36'h000002000,
 
-        /* Split saturated-MUL range tracker states. */
-        MS_OP_MUL_ACC     = 36'h000004000,
-        MS_OP_MUL_MCAND   = 36'h000008000,
-        MS_OP_MUL_MULT    = 36'h000010000,
+        /* Legacy/unreachable helper encodings kept to preserve the 36-bit map. */
+        MS_OP_UNUSED0     = 36'h000004000,
+        MS_OP_UNUSED1     = 36'h000008000,
+        MS_OP_UNUSED2     = 36'h000010000,
         MS_OP_START_ENC   = 36'h000020000,
         MS_OP_WAIT_ENC    = 36'h000040000,
 
@@ -100,12 +101,7 @@ module final_alu_runtime_top #(
         MS_CFG_COMMIT1    = 36'h400000000,
         MS_CFG_COMMIT2    = 36'h800000000;
 
-    /* Range multiplier side-path constants.
-       For 5-bit moduli, the largest base product is below 2^PW.
-       Saturating at 2^PW is therefore always above half_range, so it is
-       sufficient for overflow/range detection without a 24-bit multiplier. */
-    localparam [PW:0] MUL_SAT_MAX    = {1'b1, {PW{1'b0}}};
-    localparam [5:0]  MUL_LAST_COUNT = PW;
+    /* V50A: true-result range checking moved to final_alu_op_range_guard.v. */
 
     (* keep = "true", dont_touch = "true", fsm_encoding = "none" *) reg [MAIN_STATE_W-1:0] main_state;
     reg [2:0] cfg_state_dbg;
@@ -164,10 +160,6 @@ module final_alu_runtime_top #(
     (* keep = "true", dont_touch = "true" *) reg config_busy_pad_reg;
     reg        config_error_reg;
     reg [3:0]  config_error_code_reg;
-
-    /* V49A: registered CSR readback keeps the same address map but removes the
-       large zero-cycle cfg_rdata output mux from the external output route. */
-    reg [31:0] cfg_rdata_next;
 
     /*
      * V12 physical-signoff cleanup:
@@ -250,56 +242,20 @@ module final_alu_runtime_top #(
     (* keep = "true", dont_touch = "true" *) reg signed [XW-1:0] A_in_shadow_reg;
     (* keep = "true", dont_touch = "true" *) reg signed [XW-1:0] B_in_shadow_reg;
 
-    /* V40A: very narrow operand fanout isolation.
-       V37B repeatedly failed final antenna on A_reg[5] (and earlier runs also
-       exposed B_reg[5]). V38A duplicated the full operand banks and disturbed
-       placement enough to reintroduce max slew/cap. Keep this fix surgical:
-       duplicate only bit 5 for the encoder and range-helper consumers. */
+    /* V50A: keep only the proven encoder-side operand isolation.
+       Calculation-side copies are removed because ADD/SUB/MUL mathematical
+       range checking now lives in final_alu_op_range_guard.v. */
     (* keep = "true", dont_touch = "true" *) reg A_bit5_enc_reg;
     (* keep = "true", dont_touch = "true" *) reg B_bit5_enc_reg;
-    (* keep = "true", dont_touch = "true" *) reg A_bit5_calc_reg;
-    (* keep = "true", dont_touch = "true" *) reg B_bit5_calc_reg;
-    /* V41A: V40A removed A_reg[5], but final antenna moved to
-       A_calc_iso_wire[4].  Isolate bit 4 as well, without duplicating
-       the full operand bank as V38A did. */
     (* keep = "true", dont_touch = "true" *) reg A_bit4_enc_reg;
     (* keep = "true", dont_touch = "true" *) reg B_bit4_enc_reg;
-    (* keep = "true", dont_touch = "true" *) reg A_bit4_calc_reg;
-    (* keep = "true", dont_touch = "true" *) reg B_bit4_calc_reg;
     wire signed [XW-1:0] A_enc_iso_wire;
     wire signed [XW-1:0] B_enc_iso_wire;
-    wire signed [XW-1:0] A_calc_iso_wire;
-    wire signed [XW-1:0] B_calc_iso_wire;
 
-    /* Saturated true-range tracker.
-       The residue datapath still performs the actual RRNS operation, while this
-       small side-path only decides whether the mathematical result is outside
-       the signed base range. With 5-bit runtime moduli, the base product fits
-       in PW=20, so a 48-bit range multiplier is unnecessary and physically
-       expensive. */
     reg               raw_range_error_reg;
-    reg  [PW:0]       mul_acc_sat_reg;
-    reg  [PW:0]       mul_mcand_sat_reg;
-    reg  [PW:0]       mul_mult_sat_reg;
-    reg  [5:0]        mul_count_reg;
-    wire [PW:0]       mul_addend_sat_wire;
-    wire [PW+1:0]     mul_acc_sum_wire;
-    wire [PW:0]       mul_acc_next_sat_wire;
-    wire [PW+1:0]     mul_mcand_shift_wire;
-    wire [PW:0]       mul_mcand_next_sat_wire;
-    wire [XW-1:0]     a_abs_wire;
-    wire [XW-1:0]     b_abs_wire;
-    wire [XW:0]       a_abs_ext_wire;
-    wire [XW:0]       b_abs_ext_wire;
-    wire [XW:0]       mul_sat_max_ext_wire;
-    wire [PW:0]       a_abs_sat_wire;
-    wire [PW:0]       b_abs_sat_wire;
-    wire signed [XW:0] add_true_wire;
-    wire signed [XW:0] sub_true_wire;
-    wire signed [XW:0] half_range_xw_wire;
-    wire signed [XW:0] neg_half_range_xw_wire;
-    wire              add_range_error_wire;
-    wire              sub_range_error_wire;
+    reg               op_range_start_reg;
+    wire              op_range_done;
+    wire              op_range_error;
 
     reg  [WM-1:0] z0_reg, z1_reg, z2_reg, z3_reg, z4_reg, z5_reg;
     wire [6*WM-1:0] z_res_flat;
@@ -317,6 +273,14 @@ module final_alu_runtime_top #(
        logic. Repeated final antenna reports included corrector_candidate_base
        bits, especially [10] and [11]. */
     (* keep = "true", dont_touch = "true" *) reg [PW-1:0] corrector_candidate_base_hold;
+    (* keep = "true", dont_touch = "true" *) reg corrector_residue_error_hold;
+    (* keep = "true", dont_touch = "true" *) reg corrector_corrected_success_hold;
+    (* keep = "true", dont_touch = "true" *) reg corrector_uncorrectable_hold;
+    (* keep = "true", dont_touch = "true" *) reg [5:0] corrector_lane_mask_hold;
+    (* keep = "true", dont_touch = "true" *) reg [5:0] corrector_mismatch_mask_hold;
+    (* keep = "true", dont_touch = "true" *) reg [2:0] corrector_mismatch_count_hold;
+    reg final_range_start_reg;
+    wire final_range_done;
     /* V41A: local range-check operands.  V40A still showed final antenna on
        M_base_live[14] and a downstream range/centering net.  Capture the
        range operands when the corrector completes, then let the final state
@@ -325,14 +289,6 @@ module final_alu_runtime_top #(
     (* keep = "true", dont_touch = "true" *) reg [PW-1:0] range_half_range_hold;
     (* keep = "true", dont_touch = "true" *) reg corr_m0_bit3_corrector_reg;
     (* keep = "true", dont_touch = "true" *) reg corr_m0_bit4_corrector_reg;
-
-    /* V49A: only isolate the encoder-side m4[3] sink that remained as the
-       single V44 antenna failure. Do not split the slice/corrector m4 legs. */
-    (* keep = "true", dont_touch = "true" *) reg enc_m4_bit3_encoder_reg;
-
-    /* V48A: no manual RTL diode. Keep the clean V44A netlist shape and let the
-       normal OpenROAD antenna repair pass handle protection with extra margin. */
-
     /* V41A: separate the external X_out flop from the internal retained
        output value.  The V40A 40 ns artifact showed antenna on net87, the
        X_out[19] output path, because the output flop Q also fed internal
@@ -350,6 +306,10 @@ module final_alu_runtime_top #(
 
     assign z_res_flat = {z5_reg, z4_reg, z3_reg, z2_reg, z1_reg, z0_reg};
 
+    // V50B: keep one FSM bubble after corrector capture while retaining the
+    // original combinational range_check module interface.
+    assign final_range_done = final_range_start_reg;
+
     assign M_base_live               = checker_M_base;
     assign half_range_live           = checker_half_range;
     assign usable_subset_bitmap_live = config_valid_reg ? precomp_bitmap : 15'd0;
@@ -360,39 +320,10 @@ module final_alu_runtime_top #(
 
     assign A_enc_iso_wire  = {A_reg[XW-1:6], A_bit5_enc_reg,  A_bit4_enc_reg,  A_reg[3:0]};
     assign B_enc_iso_wire  = {B_reg[XW-1:6], B_bit5_enc_reg,  B_bit4_enc_reg,  B_reg[3:0]};
-    assign A_calc_iso_wire = {A_reg[XW-1:6], A_bit5_calc_reg, A_bit4_calc_reg, A_reg[3:0]};
-    assign B_calc_iso_wire = {B_reg[XW-1:6], B_bit5_calc_reg, B_bit4_calc_reg, B_reg[3:0]};
 
-    /* V42A: isolate only the exact bits that appeared in V41 40ns antenna.
-       Keep the wider banks untouched so we do not repeat the V38A max-slew/max-cap regression. */
-    wire [WM-1:0] slice_z_store_wire      = {slice_z_res_hold[WM-1:4], slice_z_res_bit3_store_reg, slice_z_res_bit2_store_reg, slice_z_res_hold[1], slice_z_res_bit0_store_reg};
-    wire [WM-1:0] corr_m0_corrector_wire  = {corr_m0_bit4_corrector_reg, corr_m0_bit3_corrector_reg, corr_m0_cfg[2:0]};
-    wire [WM-1:0] enc_m4_encoder_wire     = {enc_m4_cfg[WM-1:4], enc_m4_bit3_encoder_reg, enc_m4_cfg[2:0]};
-
-    assign mul_addend_sat_wire     = mul_mult_sat_reg[0] ? mul_mcand_sat_reg : {(PW+1){1'b0}};
-    assign mul_acc_sum_wire        = {1'b0, mul_acc_sat_reg} + {1'b0, mul_addend_sat_wire};
-    assign mul_acc_next_sat_wire   = (mul_acc_sum_wire > {1'b0, MUL_SAT_MAX}) ?
-                                     MUL_SAT_MAX : mul_acc_sum_wire[PW:0];
-    assign mul_mcand_shift_wire    = {1'b0, mul_mcand_sat_reg} << 1;
-    assign mul_mcand_next_sat_wire = (mul_mcand_shift_wire > {1'b0, MUL_SAT_MAX}) ?
-                                     MUL_SAT_MAX : mul_mcand_shift_wire[PW:0];
-
-    assign a_abs_wire              = A_calc_iso_wire[XW-1] ? ((~A_calc_iso_wire) + {{(XW-1){1'b0}}, 1'b1}) : A_calc_iso_wire;
-    assign b_abs_wire              = B_calc_iso_wire[XW-1] ? ((~B_calc_iso_wire) + {{(XW-1){1'b0}}, 1'b1}) : B_calc_iso_wire;
-    assign a_abs_ext_wire          = {1'b0, a_abs_wire};
-    assign b_abs_ext_wire          = {1'b0, b_abs_wire};
-    assign mul_sat_max_ext_wire    = {{(XW-PW){1'b0}}, MUL_SAT_MAX};
-    assign a_abs_sat_wire          = (a_abs_ext_wire > mul_sat_max_ext_wire) ? MUL_SAT_MAX : a_abs_ext_wire[PW:0];
-    assign b_abs_sat_wire          = (b_abs_ext_wire > mul_sat_max_ext_wire) ? MUL_SAT_MAX : b_abs_ext_wire[PW:0];
-
-    assign add_true_wire           = {A_calc_iso_wire[XW-1], A_calc_iso_wire} + {B_calc_iso_wire[XW-1], B_calc_iso_wire};
-    assign sub_true_wire           = {A_calc_iso_wire[XW-1], A_calc_iso_wire} - {B_calc_iso_wire[XW-1], B_calc_iso_wire};
-    assign half_range_xw_wire      = $signed({1'b0, {{(XW-PW){1'b0}}, half_range_live}});
-    assign neg_half_range_xw_wire  = -half_range_xw_wire;
-    assign add_range_error_wire    = (add_true_wire > half_range_xw_wire) ||
-                                     (add_true_wire < neg_half_range_xw_wire);
-    assign sub_range_error_wire    = (sub_true_wire > half_range_xw_wire) ||
-                                     (sub_true_wire < neg_half_range_xw_wire);
+    /* V42A proven small stores retained; no additional one-bit antenna chasing. */
+    wire [WM-1:0] slice_z_store_wire     = {slice_z_res_hold[WM-1:4], slice_z_res_bit3_store_reg, slice_z_res_bit2_store_reg, slice_z_res_hold[1], slice_z_res_bit0_store_reg};
+    wire [WM-1:0] corr_m0_corrector_wire = {corr_m0_bit4_corrector_reg, corr_m0_bit3_corrector_reg, corr_m0_cfg[2:0]};
 
     assign Busy              = config_busy_reg | op_busy_reg;
     assign Config_Valid      = config_valid_reg;
@@ -465,6 +396,18 @@ module final_alu_runtime_top #(
         .usable_subset_bitmap(precomp_bitmap)
     );
 
+    final_alu_op_range_guard #(.XW(XW), .PW(PW)) u_op_range_guard (
+        .clk(clk),
+        .rst_n(rst_main_n),
+        .start(op_range_start_reg),
+        .op_sel(op_sel_reg),
+        .A_in(A_reg),
+        .B_in(B_reg),
+        .half_range(half_range_live),
+        .done(op_range_done),
+        .raw_range_error(op_range_error)
+    );
+
     final_alu_encoder_runtime #(.WM(WM), .XW(XW)) u_encoder (
         .clk(clk),
         .rst_n(rst_encoder_n),
@@ -474,7 +417,7 @@ module final_alu_runtime_top #(
         .m1(enc_m1_cfg),
         .m2(enc_m2_cfg),
         .m3(enc_m3_cfg),
-        .m4(enc_m4_encoder_wire),
+        .m4(enc_m4_cfg),
         .m5(enc_m5_cfg),
         .done(enc_done),
         .res_flat(enc_res_flat)
@@ -605,26 +548,26 @@ module final_alu_runtime_top #(
 
     always @* begin
         if (!cfg_re) begin
-            cfg_rdata_next = 32'd0;
+            cfg_rdata = 32'd0;
         end else begin
             case (cfg_addr)
-                4'h0: cfg_rdata_next = {29'd0, cfg_lock_cfg, correct_en_cfg, detect_en_cfg};
-                4'h1: cfg_rdata_next = {{(32-WM){1'b0}}, m0_cfg};
-                4'h2: cfg_rdata_next = {{(32-WM){1'b0}}, m1_cfg};
-                4'h3: cfg_rdata_next = {{(32-WM){1'b0}}, m2_cfg};
-                4'h4: cfg_rdata_next = {{(32-WM){1'b0}}, m3_cfg};
-                4'h5: cfg_rdata_next = {{(32-WM){1'b0}}, m4_cfg};
-                4'h6: cfg_rdata_next = {{(32-WM){1'b0}}, m5_cfg};
-                4'h7: cfg_rdata_next = {26'd0, Done, op_busy_reg, config_error_reg, config_busy_reg, config_valid_reg, cfg_loaded_cfg};
-                4'h8: cfg_rdata_next = {28'd0, config_error_code_reg};
-                4'h9: cfg_rdata_next = {{(32-PW){1'b0}}, M_base_live};
-                4'hA: cfg_rdata_next = {{(32-PW){1'b0}}, half_range_live};
-                4'hB: cfg_rdata_next = {17'd0, usable_subset_bitmap_live};
-                4'hC: cfg_rdata_next = {23'd0, last_mismatch_count_reg, last_mismatch_mask_reg};
-                4'hD: cfg_rdata_next = {26'd0, last_corrected_lane_mask_reg};
-                4'hE: cfg_rdata_next = {22'd0, cfg_state_dbg_wire, op_state_dbg_wire, lane_idx};
-                4'hF: cfg_rdata_next = 32'h0001_0000;
-                default: cfg_rdata_next = 32'd0;
+                4'h0: cfg_rdata = {29'd0, cfg_lock_cfg, correct_en_cfg, detect_en_cfg};
+                4'h1: cfg_rdata = {{(32-WM){1'b0}}, m0_cfg};
+                4'h2: cfg_rdata = {{(32-WM){1'b0}}, m1_cfg};
+                4'h3: cfg_rdata = {{(32-WM){1'b0}}, m2_cfg};
+                4'h4: cfg_rdata = {{(32-WM){1'b0}}, m3_cfg};
+                4'h5: cfg_rdata = {{(32-WM){1'b0}}, m4_cfg};
+                4'h6: cfg_rdata = {{(32-WM){1'b0}}, m5_cfg};
+                4'h7: cfg_rdata = {26'd0, Done, op_busy_reg, config_error_reg, config_busy_reg, config_valid_reg, cfg_loaded_cfg};
+                4'h8: cfg_rdata = {28'd0, config_error_code_reg};
+                4'h9: cfg_rdata = {{(32-PW){1'b0}}, M_base_live};
+                4'hA: cfg_rdata = {{(32-PW){1'b0}}, half_range_live};
+                4'hB: cfg_rdata = {17'd0, usable_subset_bitmap_live};
+                4'hC: cfg_rdata = {23'd0, last_mismatch_count_reg, last_mismatch_mask_reg};
+                4'hD: cfg_rdata = {26'd0, last_corrected_lane_mask_reg};
+                4'hE: cfg_rdata = {22'd0, cfg_state_dbg_wire, op_state_dbg_wire, lane_idx};
+                4'hF: cfg_rdata = 32'h0001_0000;
+                default: cfg_rdata = 32'd0;
             endcase
         end
     end
@@ -696,18 +639,20 @@ module final_alu_runtime_top #(
             B_in_shadow_reg              <= {XW{1'b0}};
             A_bit5_enc_reg               <= 1'b0;
             B_bit5_enc_reg               <= 1'b0;
-            A_bit5_calc_reg              <= 1'b0;
-            B_bit5_calc_reg              <= 1'b0;
             A_bit4_enc_reg               <= 1'b0;
             B_bit4_enc_reg               <= 1'b0;
-            A_bit4_calc_reg              <= 1'b0;
-            B_bit4_calc_reg              <= 1'b0;
+            op_range_start_reg           <= 1'b0;
+            final_range_start_reg        <= 1'b0;
+            corrector_residue_error_hold <= 1'b0;
+            corrector_corrected_success_hold <= 1'b0;
+            corrector_uncorrectable_hold <= 1'b0;
+            corrector_lane_mask_hold     <= 6'd0;
+            corrector_mismatch_mask_hold <= 6'd0;
+            corrector_mismatch_count_hold <= 3'd0;
             range_M_base_hold            <= {PW{1'b0}};
             range_half_range_hold        <= {PW{1'b0}};
             corr_m0_bit3_corrector_reg   <= 1'b0;
             corr_m0_bit4_corrector_reg   <= 1'b0;
-            enc_m4_bit3_encoder_reg      <= 1'b0;
-            cfg_rdata                    <= 32'd0;
             x_out_core_reg               <= {XW{1'b0}};
             Corrected                    <= 1'b0;
             cfg_clear_loaded             <= 1'b0;
@@ -745,9 +690,10 @@ module final_alu_runtime_top #(
             enc_start_reg       <= 1'b0;
             slice_start_reg     <= 1'b0;
             corrector_start_reg <= 1'b0;
+            op_range_start_reg  <= 1'b0;
+            final_range_start_reg <= 1'b0;
             Done                <= 1'b0;
             Corrected           <= corrected_reg;
-            cfg_rdata           <= cfg_rdata_next;
             X_out               <= x_out_core_reg;
 
             case (main_state)
@@ -812,7 +758,6 @@ module final_alu_runtime_top #(
                             enc_m2_cfg   <= m2_cfg;
                             enc_m3_cfg   <= m3_cfg;
                             enc_m4_cfg   <= m4_cfg;
-                            enc_m4_bit3_encoder_reg <= m4_cfg[3];
                             enc_m5_cfg   <= m5_cfg;
                             slice_m0_cfg <= m0_cfg;
                             slice_m1_cfg <= m1_cfg;
@@ -855,9 +800,7 @@ module final_alu_runtime_top #(
                     op_state_dbg <= 4'd1;
                     A_reg[7:0]      <= A_in_shadow_reg[7:0];
                     A_bit5_enc_reg  <= A_in_shadow_reg[5];
-                    A_bit5_calc_reg <= A_in_shadow_reg[5];
                     A_bit4_enc_reg  <= A_in_shadow_reg[4];
-                    A_bit4_calc_reg <= A_in_shadow_reg[4];
                     main_state      <= MS_OP_CAP_A1;
                 end
 
@@ -877,9 +820,7 @@ module final_alu_runtime_top #(
                     op_state_dbg <= 4'd1;
                     B_reg[7:0]      <= B_in_shadow_reg[7:0];
                     B_bit5_enc_reg  <= B_in_shadow_reg[5];
-                    B_bit5_calc_reg <= B_in_shadow_reg[5];
                     B_bit4_enc_reg  <= B_in_shadow_reg[4];
-                    B_bit4_calc_reg <= B_in_shadow_reg[4];
                     main_state      <= MS_OP_CAP_B1;
                 end
 
@@ -907,66 +848,20 @@ module final_alu_runtime_top #(
                     last_corrected_lane_mask_reg <= 6'd0;
                     residue_error_reg            <= 1'b0;
                     range_error_reg              <= 1'b0;
-                    main_state                   <= op_is_mul_reg ? MS_OP_INIT_MUL0 : MS_OP_INIT_RANGE;
+                    main_state                   <= MS_OP_START_RANGE;
                 end
 
-                MS_OP_INIT_RANGE: begin
+                MS_OP_START_RANGE: begin
+                    op_state_dbg       <= 4'd1;
+                    op_range_start_reg <= 1'b1;
+                    main_state         <= MS_OP_WAIT_RANGE;
+                end
+
+                MS_OP_WAIT_RANGE: begin
                     op_state_dbg <= 4'd1;
-                    if (op_is_add_reg) begin
-                        raw_range_error_reg <= add_range_error_wire;
-                    end else if (op_is_sub_reg) begin
-                        raw_range_error_reg <= sub_range_error_wire;
-                    end else begin
-                        raw_range_error_reg <= 1'b0;
-                    end
-                    main_state <= MS_OP_START_ENC;
-                end
-
-                MS_OP_INIT_MUL0: begin
-                    op_state_dbg        <= 4'd1;
-                    raw_range_error_reg <= 1'b0;
-                    mul_acc_sat_reg     <= {(PW+1){1'b0}};
-                    mul_count_reg       <= 6'd0;
-                    main_state          <= MS_OP_INIT_MUL1;
-                end
-
-                MS_OP_INIT_MUL1: begin
-                    op_state_dbg      <= 4'd1;
-                    mul_mcand_sat_reg <= a_abs_sat_wire;
-                    main_state        <= MS_OP_INIT_MUL2;
-                end
-
-                MS_OP_INIT_MUL2: begin
-                    op_state_dbg     <= 4'd1;
-                    mul_mult_sat_reg <= b_abs_sat_wire;
-                    main_state       <= MS_OP_MUL_ACC;
-                end
-
-                MS_OP_MUL_ACC: begin
-                    op_state_dbg    <= 4'd1;
-                    mul_acc_sat_reg <= mul_acc_next_sat_wire;
-                    main_state      <= MS_OP_MUL_MCAND;
-                end
-
-                MS_OP_MUL_MCAND: begin
-                    op_state_dbg      <= 4'd1;
-                    mul_mcand_sat_reg <= mul_mcand_next_sat_wire;
-                    main_state        <= MS_OP_MUL_MULT;
-                end
-
-                MS_OP_MUL_MULT: begin
-                    op_state_dbg     <= 4'd1;
-                    mul_mult_sat_reg <= {1'b0, mul_mult_sat_reg[PW:1]};
-                    if (mul_count_reg == MUL_LAST_COUNT) begin
-                        /*
-                         * mul_acc_sat_reg already contains the accumulator
-                         * produced by the preceding MS_OP_MUL_ACC state.
-                         */
-                        raw_range_error_reg <= (mul_acc_sat_reg > {1'b0, half_range_live});
+                    if (op_range_done) begin
+                        raw_range_error_reg <= op_range_error;
                         main_state          <= MS_OP_START_ENC;
-                    end else begin
-                        mul_count_reg <= mul_count_reg + 6'd1;
-                        main_state    <= MS_OP_MUL_ACC;
                     end
                 end
 
@@ -1117,30 +1012,49 @@ module final_alu_runtime_top #(
                 MS_OP_WAIT_CORR: begin
                     op_state_dbg <= 4'd6;
                     if (corrector_done) begin
-                        corrector_candidate_base_hold <= corrector_candidate_base;
-                        range_M_base_hold             <= M_base_live;
-                        range_half_range_hold         <= half_range_live;
+                        corrector_candidate_base_hold    <= corrector_candidate_base;
+                        corrector_residue_error_hold     <= corrector_residue_error;
+                        corrector_corrected_success_hold <= corrector_corrected_success;
+                        corrector_uncorrectable_hold     <= corrector_uncorrectable;
+                        corrector_lane_mask_hold         <= corrector_lane_mask;
+                        corrector_mismatch_mask_hold     <= corrector_mismatch_mask;
+                        corrector_mismatch_count_hold    <= corrector_mismatch_count;
+                        range_M_base_hold                <= M_base_live;
+                        range_half_range_hold            <= half_range_live;
+                        main_state                       <= MS_OP_START_FINAL_RANGE;
+                    end
+                end
+
+                MS_OP_START_FINAL_RANGE: begin
+                    op_state_dbg          <= 4'd7;
+                    final_range_start_reg <= 1'b1;
+                    main_state            <= MS_OP_WAIT_FINAL_RANGE;
+                end
+
+                MS_OP_WAIT_FINAL_RANGE: begin
+                    op_state_dbg <= 4'd7;
+                    if (final_range_done) begin
                         main_state <= MS_OP_FINAL;
                     end
                 end
 
                 MS_OP_FINAL: begin
                     op_state_dbg                 <= 4'd7;
-                    residue_error_reg            <= corrector_residue_error;
+                    residue_error_reg            <= corrector_residue_error_hold;
                     range_error_reg              <= range_error_wire;
-                    error_detected_reg           <= corrector_residue_error |
+                    error_detected_reg           <= corrector_residue_error_hold |
                                                     range_error_wire |
-                                                    (corrector_uncorrectable & ~range_error_wire);
-                    corrected_reg                <= corrector_corrected_success & ~range_error_wire;
-                    Corrected                    <= corrector_corrected_success & ~range_error_wire;
+                                                    (corrector_uncorrectable_hold & ~range_error_wire);
+                    corrected_reg                <= corrector_corrected_success_hold & ~range_error_wire;
+                    Corrected                    <= corrector_corrected_success_hold & ~range_error_wire;
                     valid_reg                    <= config_valid_reg &
                                                     ~range_error_wire &
-                                                    ~(corrector_uncorrectable & ~range_error_wire);
-                    uncorrectable_reg            <= corrector_uncorrectable & ~range_error_wire;
-                    last_mismatch_mask_reg       <= corrector_mismatch_mask;
-                    last_mismatch_count_reg      <= corrector_mismatch_count;
-                    last_corrected_lane_mask_reg <= corrector_lane_mask;
-                    x_out_core_reg             <= x_centered_wire;
+                                                    ~(corrector_uncorrectable_hold & ~range_error_wire);
+                    uncorrectable_reg            <= corrector_uncorrectable_hold & ~range_error_wire;
+                    last_mismatch_mask_reg       <= corrector_mismatch_mask_hold;
+                    last_mismatch_count_reg      <= corrector_mismatch_count_hold;
+                    last_corrected_lane_mask_reg <= corrector_lane_mask_hold;
+                    x_out_core_reg               <= x_centered_wire;
                     X_out                        <= x_centered_wire;
                     Done                         <= 1'b1;
                     op_busy_reg                  <= 1'b0;
@@ -1156,11 +1070,3 @@ module final_alu_runtime_top #(
     end
 
 endmodule
-
-`ifdef SYNTHESIS
-(* blackbox *)
-module sky130_fd_sc_hd__diode_2 (
-    input wire DIODE
-);
-endmodule
-`endif

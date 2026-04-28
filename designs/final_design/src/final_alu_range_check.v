@@ -1,4 +1,7 @@
 `timescale 1ns/1ps
+// V50B: conservative combinational range/centering stage.
+// The top-level captures corrector outputs before this stage, but the module
+// interface stays compatible with the original working design.
 module final_alu_range_check #(
     parameter integer XW = 24,
     parameter integer PW = 20

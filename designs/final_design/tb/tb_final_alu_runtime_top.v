@@ -66,7 +66,7 @@ module tb_final_alu_runtime_top;
     );
 
     initial begin
-        $dumpfile("final_alu_runtime_rtl.vcd");
+        $dumpfile("sim/waves/final_alu_runtime_rtl.vcd");
         $dumpvars(0, tb_final_alu_runtime_top);
     end
 
@@ -100,7 +100,7 @@ module tb_final_alu_runtime_top;
             timeout = 0;
             // Wait for the current config transaction to fully settle.
             // This avoids returning early on stale Config_Valid during reconfiguration.
-            while (((!Config_Valid && !Config_Error) || Config_Busy) && timeout < 400) begin
+            while (((!Config_Valid && !Config_Error) || Config_Busy) && timeout < 2000) begin
                 @(posedge clk);
                 timeout = timeout + 1;
             end
@@ -169,12 +169,12 @@ module tb_final_alu_runtime_top;
         integer timeout;
         begin
             timeout = 0;
-            while (!Done && timeout < 2000) begin
+            while (!Done && timeout < 20000) begin
                 @(posedge clk);
                 timeout = timeout + 1;
                 op_cycle_count = op_cycle_count + 1;
             end
-            if (timeout >= 2000) begin
+            if (timeout >= 20000) begin
                 $display("[FAIL] operation timeout");
                 $fatal(1);
             end

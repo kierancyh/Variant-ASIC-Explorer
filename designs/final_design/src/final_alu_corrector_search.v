@@ -1,5 +1,6 @@
 `timescale 1ns/1ps
 // V18 source marker: module renamed to prevent stale corrector source from silently compiling.
+// V50A source marker: corrector has registered final-output boundary.
 // V18 source marker: corrector has no wide input-capture register bank.
 module final_alu_corrector_search_v18 #(
     parameter integer WM = 5,
@@ -45,13 +46,14 @@ module final_alu_corrector_search_v18 #(
      * using last_candidate as the hold/update select, which attacks the V14
      * _01641_ comparator fanout cluster.
      */
-    localparam [6:0] ST_IDLE      = 7'b0000001;
-    localparam [6:0] ST_INIT_CTRL = 7'b0000010;
-    localparam [6:0] ST_INIT_L01  = 7'b0000100;
-    localparam [6:0] ST_INIT_L23  = 7'b0001000;
-    localparam [6:0] ST_INIT_L45  = 7'b0010000;
-    localparam [6:0] ST_SCAN      = 7'b0100000;
-    localparam [6:0] ST_DONE      = 7'b1000000;
+    localparam [7:0] ST_IDLE      = 8'b00000001;
+    localparam [7:0] ST_INIT_CTRL = 8'b00000010;
+    localparam [7:0] ST_INIT_L01  = 8'b00000100;
+    localparam [7:0] ST_INIT_L23  = 8'b00001000;
+    localparam [7:0] ST_INIT_L45  = 8'b00010000;
+    localparam [7:0] ST_SCAN      = 8'b00100000;
+    localparam [7:0] ST_FINALIZE  = 8'b01000000;
+    localparam [7:0] ST_DONE      = 8'b10000000;
 
     wire [WM-1:0] z0 = z_res_flat[(0*WM)+:WM];
     wire [WM-1:0] z1 = z_res_flat[(1*WM)+:WM];
@@ -60,7 +62,7 @@ module final_alu_corrector_search_v18 #(
     wire [WM-1:0] z4 = z_res_flat[(4*WM)+:WM];
     wire [WM-1:0] z5 = z_res_flat[(5*WM)+:WM];
 
-    (* keep = "true" *) reg [6:0] state;
+    (* keep = "true" *) reg [7:0] state;
     reg [PW-1:0] cand;
 
     reg [WM-1:0] p0;
@@ -89,6 +91,15 @@ module final_alu_corrector_search_v18 #(
 
     reg [5:0] cmp_mask;
     reg [2:0] cmp_count;
+
+    reg          final_residue_error_q;
+    reg          final_corrected_success_q;
+    reg          final_uncorrectable_q;
+    reg [5:0]    final_corrected_lane_mask_q;
+    reg [5:0]    final_mismatch_mask_q;
+    reg [2:0]    final_mismatch_count_q;
+    reg [PW-1:0] final_corrected_candidate_base_q;
+
 
     wire [PW-1:0] zero_pw = {PW{1'b0}};
     wire [PW-1:0] one_pw  = {{(PW-1){1'b0}}, 1'b1};
@@ -141,7 +152,7 @@ module final_alu_corrector_search_v18 #(
 
                 ST_INIT_CTRL: begin
                     if (M_base == zero_pw)
-                        state <= ST_DONE;
+                        state <= ST_FINALIZE;
                     else
                         state <= ST_INIT_L01;
                 end
@@ -160,12 +171,16 @@ module final_alu_corrector_search_v18 #(
 
                 ST_SCAN: begin
                     if (!enable_detection) begin
-                        state <= ST_DONE;
+                        state <= ST_FINALIZE;
                     end else if (cmp_count == 3'd0) begin
-                        state <= ST_DONE;
+                        state <= ST_FINALIZE;
                     end else if (last_candidate) begin
-                        state <= ST_DONE;
+                        state <= ST_FINALIZE;
                     end
+                end
+
+                ST_FINALIZE: begin
+                    state <= ST_DONE;
                 end
 
                 ST_DONE: begin
@@ -195,14 +210,22 @@ module final_alu_corrector_search_v18 #(
                 base_mask      <= 6'd0;
                 base_count     <= 3'd0;
 
+                final_residue_error_q            <= 1'b0;
+                final_corrected_success_q        <= 1'b0;
+                final_uncorrectable_q            <= 1'b0;
+                final_corrected_lane_mask_q      <= 6'd0;
+                final_mismatch_mask_q            <= 6'd0;
+                final_mismatch_count_q           <= 3'd0;
+                final_corrected_candidate_base_q <= zero_pw;
+
                 if (M_base == zero_pw) begin
-                    residue_error            <= 1'b1;
-                    corrected_success        <= 1'b0;
-                    uncorrectable            <= 1'b1;
-                    corrected_lane_mask      <= 6'd0;
-                    mismatch_mask_out        <= 6'd0;
-                    mismatch_count_out       <= 3'd0;
-                    corrected_candidate_base <= zero_pw;
+                    final_residue_error_q            <= 1'b1;
+                    final_corrected_success_q        <= 1'b0;
+                    final_uncorrectable_q            <= 1'b1;
+                    final_corrected_lane_mask_q      <= 6'd0;
+                    final_mismatch_mask_q            <= 6'd0;
+                    final_mismatch_count_q           <= 3'd0;
+                    final_corrected_candidate_base_q <= zero_pw;
                 end
             end
 
@@ -229,22 +252,22 @@ module final_alu_corrector_search_v18 #(
 
             ST_SCAN: begin
                 if (!enable_detection) begin
-                    residue_error            <= 1'b0;
-                    corrected_success        <= 1'b0;
-                    uncorrectable            <= 1'b0;
-                    corrected_lane_mask      <= 6'd0;
-                    mismatch_mask_out        <= 6'd0;
-                    mismatch_count_out       <= 3'd0;
-                    corrected_candidate_base <= cand;
+                    final_residue_error_q            <= 1'b0;
+                    final_corrected_success_q        <= 1'b0;
+                    final_uncorrectable_q            <= 1'b0;
+                    final_corrected_lane_mask_q      <= 6'd0;
+                    final_mismatch_mask_q            <= 6'd0;
+                    final_mismatch_count_q           <= 3'd0;
+                    final_corrected_candidate_base_q <= cand;
                 end else if (cmp_count == 3'd0) begin
                     // A clean all-lane match is unique enough to stop early.
-                    residue_error            <= 1'b0;
-                    corrected_success        <= 1'b0;
-                    uncorrectable            <= 1'b0;
-                    corrected_lane_mask      <= 6'd0;
-                    mismatch_mask_out        <= 6'd0;
-                    mismatch_count_out       <= 3'd0;
-                    corrected_candidate_base <= cand;
+                    final_residue_error_q            <= 1'b0;
+                    final_corrected_success_q        <= 1'b0;
+                    final_uncorrectable_q            <= 1'b0;
+                    final_corrected_lane_mask_q      <= 6'd0;
+                    final_mismatch_mask_q            <= 6'd0;
+                    final_mismatch_count_q           <= 3'd0;
+                    final_corrected_candidate_base_q <= cand;
                 end else begin
                     if (!base_found && base_match) begin
                         base_found     <= 1'b1;
@@ -265,29 +288,29 @@ module final_alu_corrector_search_v18 #(
 
                     if (last_candidate) begin
                         if (corr_valid_final) begin
-                            residue_error            <= 1'b1;
-                            corrected_success        <= 1'b1;
-                            uncorrectable            <= 1'b0;
-                            corrected_lane_mask      <= corr_mask_final;
-                            mismatch_mask_out        <= corr_mask_final;
-                            mismatch_count_out       <= 3'd1;
-                            corrected_candidate_base <= corr_candidate_final;
+                            final_residue_error_q            <= 1'b1;
+                            final_corrected_success_q        <= 1'b1;
+                            final_uncorrectable_q            <= 1'b0;
+                            final_corrected_lane_mask_q      <= corr_mask_final;
+                            final_mismatch_mask_q            <= corr_mask_final;
+                            final_mismatch_count_q           <= 3'd1;
+                            final_corrected_candidate_base_q <= corr_candidate_final;
                         end else if (base_found_final) begin
-                            residue_error            <= (base_count_final != 3'd0);
-                            corrected_success        <= 1'b0;
-                            uncorrectable            <= enable_correction && (base_count_final > 3'd1);
-                            corrected_lane_mask      <= 6'd0;
-                            mismatch_mask_out        <= base_mask_final;
-                            mismatch_count_out       <= base_count_final;
-                            corrected_candidate_base <= base_candidate_final;
+                            final_residue_error_q            <= (base_count_final != 3'd0);
+                            final_corrected_success_q        <= 1'b0;
+                            final_uncorrectable_q            <= enable_correction && (base_count_final > 3'd1);
+                            final_corrected_lane_mask_q      <= 6'd0;
+                            final_mismatch_mask_q            <= base_mask_final;
+                            final_mismatch_count_q           <= base_count_final;
+                            final_corrected_candidate_base_q <= base_candidate_final;
                         end else begin
-                            residue_error            <= 1'b1;
-                            corrected_success        <= 1'b0;
-                            uncorrectable            <= enable_correction;
-                            corrected_lane_mask      <= 6'd0;
-                            mismatch_mask_out        <= cmp_mask;
-                            mismatch_count_out       <= cmp_count;
-                            corrected_candidate_base <= cand;
+                            final_residue_error_q            <= 1'b1;
+                            final_corrected_success_q        <= 1'b0;
+                            final_uncorrectable_q            <= enable_correction;
+                            final_corrected_lane_mask_q      <= 6'd0;
+                            final_mismatch_mask_q            <= cmp_mask;
+                            final_mismatch_count_q           <= cmp_count;
+                            final_corrected_candidate_base_q <= cand;
                         end
                     end
 
@@ -342,6 +365,16 @@ module final_alu_corrector_search_v18 #(
                         if ((m5 <= 1) || ((p5 + {{(WM-1){1'b0}},1'b1}) >= m5)) p5 <= {WM{1'b0}}; else p5 <= p5 + {{(WM-1){1'b0}},1'b1};
                     end
                 end
+            end
+
+            ST_FINALIZE: begin
+                residue_error            <= final_residue_error_q;
+                corrected_success        <= final_corrected_success_q;
+                uncorrectable            <= final_uncorrectable_q;
+                corrected_lane_mask      <= final_corrected_lane_mask_q;
+                mismatch_mask_out        <= final_mismatch_mask_q;
+                mismatch_count_out       <= final_mismatch_count_q;
+                corrected_candidate_base <= final_corrected_candidate_base_q;
             end
 
             default: begin
