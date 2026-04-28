@@ -1,4 +1,6 @@
 `timescale 1ns/1ps
+// V51C source marker: pre-latch operation range constants, split final output, remove dead kept flags.
+// V51B source marker: reset-minimal top-level domain after V51A exposed rst_main_n max-slew.
 // V51A source marker: split post-corrector finalisation to remove shared max-slew hold-enable net.
 // V50A source marker: design-simplification patch based on V44A.
 // The ADD/SUB/MUL mathematical range guard is now a separate sequential module,
@@ -61,10 +63,11 @@ module final_alu_runtime_top #(
         MS_OP_START_FINAL_RANGE = 44'h000001000,
         MS_OP_WAIT_FINAL_RANGE  = 44'h000002000,
 
-        /* Legacy/unreachable helper encodings kept as spare one-hot states. */
-        MS_OP_UNUSED0     = 44'h000004000,
-        MS_OP_UNUSED1     = 44'h000008000,
-        MS_OP_UNUSED2     = 44'h000010000,
+        /* V51C: operation-local M_base/half_range capture states.  These isolate
+         * checker_M_base/checker_half_range from the range guard and corrector. */
+        MS_OP_LATCH_OP_R0 = 44'h000004000,
+        MS_OP_LATCH_OP_R1 = 44'h000008000,
+        MS_OP_UNUSED0     = 44'h000010000,
         MS_OP_START_ENC   = 44'h000020000,
         MS_OP_WAIT_ENC    = 44'h000040000,
 
@@ -92,15 +95,15 @@ module final_alu_runtime_top #(
         MS_OP_WAIT_LANE   = 44'h020000000,
         MS_OP_START_CORR  = 44'h040000000,
         MS_OP_WAIT_CORR   = 44'h080000000,
-        MS_OP_FINAL       = 44'h100000000,
+        MS_OP_FINAL_FLAGS = 44'h100000000,
 
         /* V36A: store the slice result from a local holding register rather
          * than routing the slice output directly into the z0..z5 bank. */
         MS_OP_STORE_Z     = 44'h200000000,
 
-        /* Legacy/unreachable config-commit fallbacks. */
-        MS_CFG_COMMIT1    = 44'h400000000,
-        MS_CFG_COMMIT2    = 44'h800000000,
+        /* V51C: split final public-output/status update. */
+        MS_OP_FINAL_OUT   = 44'h400000000,
+        MS_OP_FINAL_DONE  = 44'h800000000,
 
         /* V51A: post-corrector finalisation split into small capture states.
          * V50B captured candidate, status, M_base, and half_range in one
@@ -120,6 +123,7 @@ module final_alu_runtime_top #(
     /* V50A: true-result range checking moved to final_alu_op_range_guard.v. */
 
     (* keep = "true", dont_touch = "true", fsm_encoding = "none" *) reg [MAIN_STATE_W-1:0] main_state;
+    reg top_init_done_reg;
     reg [2:0] cfg_state_dbg;
     reg [3:0] op_state_dbg;
     reg [2:0] lane_idx;
@@ -190,6 +194,13 @@ module final_alu_runtime_top #(
     wire [PW-1:0] half_range_live;
     wire [14:0]   usable_subset_bitmap_live;
 
+    /* V51C: operation-local copies of range constants.
+       The checker outputs stay available for CSR/debug readback, but the
+       active operation no longer routes checker_M_base/checker_half_range
+       directly into the range guard, corrector, and final range latch. */
+    reg [PW-1:0] op_M_base_hold;
+    reg [PW-1:0] op_half_range_hold;
+
     // Backwards-compatible debug aliases for the existing RTL/GLS testbench.
     // V12 deliberately removed the physical commit register bank, but the
     // testbench still probes these historical hierarchical names.  Keep these
@@ -206,8 +217,6 @@ module final_alu_runtime_top #(
     reg [5:0]  last_mismatch_mask_reg;
     reg [2:0]  last_mismatch_count_reg;
     reg [5:0]  last_corrected_lane_mask_reg;
-    reg        residue_error_reg;
-    reg        range_error_reg;
 
     reg        checker_start_reg;
     wire       checker_done;
@@ -243,9 +252,6 @@ module final_alu_runtime_top #(
     reg  [WM-1:0] slice_m_reg;
     reg  [1:0] op_sel_reg;
     (* keep = "true", dont_touch = "true" *) reg [1:0] op_sel_slice_reg;
-    (* keep = "true", dont_touch = "true" *) reg op_is_add_reg;
-    (* keep = "true", dont_touch = "true" *) reg op_is_sub_reg;
-    (* keep = "true", dont_touch = "true" *) reg op_is_mul_reg;
 
     reg  signed [XW-1:0] A_reg;
     reg  signed [XW-1:0] B_reg;
@@ -419,7 +425,7 @@ module final_alu_runtime_top #(
         .op_sel(op_sel_reg),
         .A_in(A_reg),
         .B_in(B_reg),
-        .half_range(half_range_live),
+        .half_range(op_half_range_hold),
         .done(op_range_done),
         .raw_range_error(op_range_error)
     );
@@ -458,7 +464,7 @@ module final_alu_runtime_top #(
         .enable_detection(detect_en_cfg),
         .enable_correction(correct_en_cfg),
         .z_res_flat(z_res_flat),
-        .M_base(M_base_live),
+        .M_base(op_M_base_hold),
         .usable_subset_bitmap(usable_subset_bitmap_live),
         .m0(corr_m0_corrector_wire),
         .m1(corr_m1_cfg),
@@ -619,70 +625,30 @@ module final_alu_runtime_top #(
 
     always @(posedge clk) begin
         if (!rst_main_n) begin
-            main_state                   <= MS_IDLE;
-            cfg_state_dbg                <= 3'd0;
-            op_state_dbg                 <= 4'd0;
-            lane_idx                     <= 3'd0;
-            op_lane_oh                   <= 6'b000001;
-            slice_m_lane_oh              <= 6'b000001;
-            slice_a_lane_oh              <= 6'b000001;
-            slice_b_lane_oh              <= 6'b000001;
-            enc_m0_cfg                   <= {WM{1'b0}};
-            enc_m1_cfg                   <= {WM{1'b0}};
-            enc_m2_cfg                   <= {WM{1'b0}};
-            enc_m3_cfg                   <= {WM{1'b0}};
-            enc_m4_cfg                   <= {WM{1'b0}};
-            enc_m5_cfg                   <= {WM{1'b0}};
-            slice_m0_cfg                 <= {WM{1'b0}};
-            slice_m1_cfg                 <= {WM{1'b0}};
-            slice_m2_cfg                 <= {WM{1'b0}};
-            slice_m3_cfg                 <= {WM{1'b0}};
-            slice_m4_cfg                 <= {WM{1'b0}};
-            slice_m5_cfg                 <= {WM{1'b0}};
-            corr_m0_cfg                  <= {WM{1'b0}};
-            corr_m1_cfg                  <= {WM{1'b0}};
-            corr_m2_cfg                  <= {WM{1'b0}};
-            corr_m3_cfg                  <= {WM{1'b0}};
-            corr_m4_cfg                  <= {WM{1'b0}};
-            corr_m5_cfg                  <= {WM{1'b0}};
-            slice_z_res_hold             <= {WM{1'b0}};
-            slice_z_res_bit0_store_reg    <= 1'b0;
-            slice_z_res_bit2_store_reg    <= 1'b0;
-            slice_z_res_bit3_store_reg    <= 1'b0;
-            slice_a_bit0_launch_reg       <= 1'b0;
-            corrector_candidate_base_hold <= {PW{1'b0}};
-            A_in_shadow_reg              <= {XW{1'b0}};
-            B_in_shadow_reg              <= {XW{1'b0}};
-            A_bit5_enc_reg               <= 1'b0;
-            B_bit5_enc_reg               <= 1'b0;
-            A_bit4_enc_reg               <= 1'b0;
-            B_bit4_enc_reg               <= 1'b0;
-            op_range_start_reg           <= 1'b0;
-            final_range_start_reg        <= 1'b0;
-            corrector_residue_error_hold <= 1'b0;
-            corrector_corrected_success_hold <= 1'b0;
-            corrector_uncorrectable_hold <= 1'b0;
-            corrector_lane_mask_hold     <= 6'd0;
-            corrector_mismatch_mask_hold <= 6'd0;
-            corrector_mismatch_count_hold <= 3'd0;
-            range_M_base_hold            <= {PW{1'b0}};
-            range_half_range_hold        <= {PW{1'b0}};
-            corr_m0_bit3_corrector_reg   <= 1'b0;
-            corr_m0_bit4_corrector_reg   <= 1'b0;
-            x_out_core_reg               <= {XW{1'b0}};
-            Corrected                    <= 1'b0;
+            /*
+             * V51B: reset-minimal top domain.
+             * V51A split the post-corrector latch cone, but final routed
+             * reports then showed rst_main_n as the dominant max-slew net.
+             * Do not synchronously reset every datapath/config-shadow bank
+             * from this one local reset copy. Only reset the controller,
+             * start strobes, public outputs, and status flags. Datapath
+             * registers below are loaded by CFG/LOAD/operation states before
+             * they are observed, so their reset value is not functionally
+             * required. This should remove the wide rst_main_n mux/reset
+             * cone seen at the post-PnR max_ss corner.
+             */
+            top_init_done_reg            <= 1'b0;
+
             cfg_clear_loaded             <= 1'b0;
             checker_start_reg            <= 1'b0;
             precomp_start_reg            <= 1'b0;
             enc_start_reg                <= 1'b0;
-            op_sel_reg                   <= 2'b00;
-            op_sel_slice_reg             <= 2'b00;
-            op_is_add_reg                <= 1'b0;
-            op_is_sub_reg                <= 1'b0;
-            op_is_mul_reg                <= 1'b0;
-            enc_select_b_reg             <= 1'b0;
             slice_start_reg              <= 1'b0;
             corrector_start_reg          <= 1'b0;
+            op_range_start_reg           <= 1'b0;
+            final_range_start_reg        <= 1'b0;
+
+
             config_valid_reg             <= 1'b0;
             config_busy_reg              <= 1'b0;
             config_busy_pad_reg          <= 1'b0;
@@ -693,11 +659,10 @@ module final_alu_runtime_top #(
             corrected_reg                <= 1'b0;
             valid_reg                    <= 1'b0;
             uncorrectable_reg            <= 1'b0;
-            last_mismatch_mask_reg       <= 6'd0;
-            last_mismatch_count_reg      <= 3'd0;
-            last_corrected_lane_mask_reg <= 6'd0;
-            residue_error_reg            <= 1'b0;
-            range_error_reg              <= 1'b0;
+
+            x_out_core_reg               <= {XW{1'b0}};
+            X_out                        <= {XW{1'b0}};
+            Corrected                    <= 1'b0;
             Done                         <= 1'b0;
         end else begin
             cfg_clear_loaded    <= 1'b0;
@@ -712,7 +677,19 @@ module final_alu_runtime_top #(
             Corrected           <= corrected_reg;
             X_out               <= x_out_core_reg;
 
-            case (main_state)
+            if (!top_init_done_reg) begin
+                top_init_done_reg <= 1'b1;
+                main_state        <= MS_IDLE;
+                cfg_state_dbg     <= 3'd0;
+                op_state_dbg      <= 4'd0;
+                lane_idx          <= 3'd0;
+                op_lane_oh        <= 6'b000001;
+                slice_m_lane_oh   <= 6'b000001;
+                slice_a_lane_oh   <= 6'b000001;
+                slice_b_lane_oh   <= 6'b000001;
+                enc_select_b_reg  <= 1'b0;
+            end else begin
+                case (main_state)
                 MS_IDLE: begin
                     cfg_state_dbg <= 3'd0;
                     op_state_dbg     <= 4'd0;
@@ -737,9 +714,6 @@ module final_alu_runtime_top #(
                          * select that drove the full 48-bit operand bank. */
                         op_sel_reg       <= Op_Sel;
                         op_sel_slice_reg <= Op_Sel;
-                        op_is_add_reg    <= (Op_Sel == 2'b00);
-                        op_is_sub_reg    <= (Op_Sel == 2'b01);
-                        op_is_mul_reg    <= (Op_Sel == 2'b10);
                         A_in_shadow_reg <= A_in;
                         B_in_shadow_reg <= B_in;
                         op_busy_reg      <= 1'b1;
@@ -800,16 +774,8 @@ module final_alu_runtime_top #(
                     end
                 end
 
-                /*
-                 * Legacy/unreachable encodings. V12 no longer uses the wide
-                 * config-commit register bank; removing it deletes the routed
-                 * _2124-style max-slew/max-cap mux-select cluster.
-                 */
-                MS_CFG_COMMIT1,
-                MS_CFG_COMMIT2: begin
-                    config_busy_reg      <= 1'b0;
-                    config_busy_pad_reg  <= 1'b0;
-                    main_state           <= MS_IDLE;
+                MS_OP_UNUSED0: begin
+                    main_state <= MS_IDLE;
                 end
 
                 MS_OP_CAP_A0: begin
@@ -849,7 +815,21 @@ module final_alu_runtime_top #(
                 MS_OP_CAP_B2: begin
                     op_state_dbg  <= 4'd1;
                     B_reg[23:16] <= B_in_shadow_reg[23:16];
-                    main_state    <= MS_OP_INIT_FLAGS;
+                    main_state    <= MS_OP_LATCH_OP_R0;
+                end
+
+                MS_OP_LATCH_OP_R0: begin
+                    op_state_dbg <= 4'd1;
+                    op_M_base_hold[9:0]      <= M_base_live[9:0];
+                    op_half_range_hold[9:0]  <= half_range_live[9:0];
+                    main_state               <= MS_OP_LATCH_OP_R1;
+                end
+
+                MS_OP_LATCH_OP_R1: begin
+                    op_state_dbg <= 4'd1;
+                    op_M_base_hold[PW-1:10]     <= M_base_live[PW-1:10];
+                    op_half_range_hold[PW-1:10] <= half_range_live[PW-1:10];
+                    main_state                  <= MS_OP_INIT_FLAGS;
                 end
 
                 MS_OP_INIT_FLAGS: begin
@@ -859,11 +839,6 @@ module final_alu_runtime_top #(
                     Corrected                    <= 1'b0;
                     valid_reg                    <= 1'b0;
                     uncorrectable_reg            <= 1'b0;
-                    last_mismatch_mask_reg       <= 6'd0;
-                    last_mismatch_count_reg      <= 3'd0;
-                    last_corrected_lane_mask_reg <= 6'd0;
-                    residue_error_reg            <= 1'b0;
-                    range_error_reg              <= 1'b0;
                     main_state                   <= MS_OP_START_RANGE;
                 end
 
@@ -1063,25 +1038,25 @@ module final_alu_runtime_top #(
 
                 MS_OP_LATCH_M0: begin
                     op_state_dbg <= 4'd6;
-                    range_M_base_hold[9:0] <= M_base_live[9:0];
+                    range_M_base_hold[9:0] <= op_M_base_hold[9:0];
                     main_state <= MS_OP_LATCH_M1;
                 end
 
                 MS_OP_LATCH_M1: begin
                     op_state_dbg <= 4'd6;
-                    range_M_base_hold[PW-1:10] <= M_base_live[PW-1:10];
+                    range_M_base_hold[PW-1:10] <= op_M_base_hold[PW-1:10];
                     main_state <= MS_OP_LATCH_H0;
                 end
 
                 MS_OP_LATCH_H0: begin
                     op_state_dbg <= 4'd6;
-                    range_half_range_hold[9:0] <= half_range_live[9:0];
+                    range_half_range_hold[9:0] <= op_half_range_hold[9:0];
                     main_state <= MS_OP_LATCH_H1;
                 end
 
                 MS_OP_LATCH_H1: begin
                     op_state_dbg <= 4'd6;
-                    range_half_range_hold[PW-1:10] <= half_range_live[PW-1:10];
+                    range_half_range_hold[PW-1:10] <= op_half_range_hold[PW-1:10];
                     main_state <= MS_OP_START_FINAL_RANGE;
                 end
 
@@ -1094,14 +1069,12 @@ module final_alu_runtime_top #(
                 MS_OP_WAIT_FINAL_RANGE: begin
                     op_state_dbg <= 4'd7;
                     if (final_range_done) begin
-                        main_state <= MS_OP_FINAL;
+                        main_state <= MS_OP_FINAL_FLAGS;
                     end
                 end
 
-                MS_OP_FINAL: begin
+                MS_OP_FINAL_FLAGS: begin
                     op_state_dbg                 <= 4'd7;
-                    residue_error_reg            <= corrector_residue_error_hold;
-                    range_error_reg              <= range_error_wire;
                     error_detected_reg           <= corrector_residue_error_hold |
                                                     range_error_wire |
                                                     (corrector_uncorrectable_hold & ~range_error_wire);
@@ -1114,18 +1087,29 @@ module final_alu_runtime_top #(
                     last_mismatch_mask_reg       <= corrector_mismatch_mask_hold;
                     last_mismatch_count_reg      <= corrector_mismatch_count_hold;
                     last_corrected_lane_mask_reg <= corrector_lane_mask_hold;
-                    x_out_core_reg               <= x_centered_wire;
-                    X_out                        <= x_centered_wire;
-                    Done                         <= 1'b1;
-                    op_busy_reg                  <= 1'b0;
-                    enc_select_b_reg             <= 1'b0;
-                    main_state                   <= MS_IDLE;
+                    main_state                   <= MS_OP_FINAL_OUT;
+                end
+
+                MS_OP_FINAL_OUT: begin
+                    op_state_dbg   <= 4'd7;
+                    x_out_core_reg <= x_centered_wire;
+                    X_out          <= x_centered_wire;
+                    main_state     <= MS_OP_FINAL_DONE;
+                end
+
+                MS_OP_FINAL_DONE: begin
+                    op_state_dbg     <= 4'd7;
+                    Done             <= 1'b1;
+                    op_busy_reg      <= 1'b0;
+                    enc_select_b_reg <= 1'b0;
+                    main_state       <= MS_IDLE;
                 end
 
                 default: begin
                     main_state <= MS_IDLE;
                 end
-            endcase
+                endcase
+            end
         end
     end
 
