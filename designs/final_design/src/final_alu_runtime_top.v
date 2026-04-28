@@ -1,9 +1,7 @@
 `timescale 1ns/1ps
-// V48A source marker: return to the clean V44A RTL structure.
-// Reason: V47A manual diode on corr_m4_cfg[3] removed the old antenna symptom but
-// caused post-route max-slew/max-cap regressions through automatic antenna buffering.
-// V48A removes the manual RTL diode; the experiment is now flow-only via a stronger
-// normal GRT antenna repair margin in variant.yaml.
+// V49A source marker: reject V48 flow-margin regression, return to V44-style locked flow.
+// Adds narrow encoder-only m4[3] isolation for the V44 corr_m4_cfg[3] antenna sink
+// and registers CSR readback to avoid cfg_rdata output-mux max-cap/slew regressions.
 module final_alu_runtime_top #(
     parameter integer WM = 5,
     parameter integer XW = 24,
@@ -167,6 +165,10 @@ module final_alu_runtime_top #(
     reg        config_error_reg;
     reg [3:0]  config_error_code_reg;
 
+    /* V49A: registered CSR readback keeps the same address map but removes the
+       large zero-cycle cfg_rdata output mux from the external output route. */
+    reg [31:0] cfg_rdata_next;
+
     /*
      * V12 physical-signoff cleanup:
      * V11A still produced a very slow config-commit mux-select net for the
@@ -324,6 +326,10 @@ module final_alu_runtime_top #(
     (* keep = "true", dont_touch = "true" *) reg corr_m0_bit3_corrector_reg;
     (* keep = "true", dont_touch = "true" *) reg corr_m0_bit4_corrector_reg;
 
+    /* V49A: only isolate the encoder-side m4[3] sink that remained as the
+       single V44 antenna failure. Do not split the slice/corrector m4 legs. */
+    (* keep = "true", dont_touch = "true" *) reg enc_m4_bit3_encoder_reg;
+
     /* V48A: no manual RTL diode. Keep the clean V44A netlist shape and let the
        normal OpenROAD antenna repair pass handle protection with extra margin. */
 
@@ -359,8 +365,9 @@ module final_alu_runtime_top #(
 
     /* V42A: isolate only the exact bits that appeared in V41 40ns antenna.
        Keep the wider banks untouched so we do not repeat the V38A max-slew/max-cap regression. */
-    wire [WM-1:0] slice_z_store_wire     = {slice_z_res_hold[WM-1:4], slice_z_res_bit3_store_reg, slice_z_res_bit2_store_reg, slice_z_res_hold[1], slice_z_res_bit0_store_reg};
-    wire [WM-1:0] corr_m0_corrector_wire = {corr_m0_bit4_corrector_reg, corr_m0_bit3_corrector_reg, corr_m0_cfg[2:0]};
+    wire [WM-1:0] slice_z_store_wire      = {slice_z_res_hold[WM-1:4], slice_z_res_bit3_store_reg, slice_z_res_bit2_store_reg, slice_z_res_hold[1], slice_z_res_bit0_store_reg};
+    wire [WM-1:0] corr_m0_corrector_wire  = {corr_m0_bit4_corrector_reg, corr_m0_bit3_corrector_reg, corr_m0_cfg[2:0]};
+    wire [WM-1:0] enc_m4_encoder_wire     = {enc_m4_cfg[WM-1:4], enc_m4_bit3_encoder_reg, enc_m4_cfg[2:0]};
 
     assign mul_addend_sat_wire     = mul_mult_sat_reg[0] ? mul_mcand_sat_reg : {(PW+1){1'b0}};
     assign mul_acc_sum_wire        = {1'b0, mul_acc_sat_reg} + {1'b0, mul_addend_sat_wire};
@@ -467,7 +474,7 @@ module final_alu_runtime_top #(
         .m1(enc_m1_cfg),
         .m2(enc_m2_cfg),
         .m3(enc_m3_cfg),
-        .m4(enc_m4_cfg),
+        .m4(enc_m4_encoder_wire),
         .m5(enc_m5_cfg),
         .done(enc_done),
         .res_flat(enc_res_flat)
@@ -598,26 +605,26 @@ module final_alu_runtime_top #(
 
     always @* begin
         if (!cfg_re) begin
-            cfg_rdata = 32'd0;
+            cfg_rdata_next = 32'd0;
         end else begin
             case (cfg_addr)
-                4'h0: cfg_rdata = {29'd0, cfg_lock_cfg, correct_en_cfg, detect_en_cfg};
-                4'h1: cfg_rdata = {{(32-WM){1'b0}}, m0_cfg};
-                4'h2: cfg_rdata = {{(32-WM){1'b0}}, m1_cfg};
-                4'h3: cfg_rdata = {{(32-WM){1'b0}}, m2_cfg};
-                4'h4: cfg_rdata = {{(32-WM){1'b0}}, m3_cfg};
-                4'h5: cfg_rdata = {{(32-WM){1'b0}}, m4_cfg};
-                4'h6: cfg_rdata = {{(32-WM){1'b0}}, m5_cfg};
-                4'h7: cfg_rdata = {26'd0, Done, op_busy_reg, config_error_reg, config_busy_reg, config_valid_reg, cfg_loaded_cfg};
-                4'h8: cfg_rdata = {28'd0, config_error_code_reg};
-                4'h9: cfg_rdata = {{(32-PW){1'b0}}, M_base_live};
-                4'hA: cfg_rdata = {{(32-PW){1'b0}}, half_range_live};
-                4'hB: cfg_rdata = {17'd0, usable_subset_bitmap_live};
-                4'hC: cfg_rdata = {23'd0, last_mismatch_count_reg, last_mismatch_mask_reg};
-                4'hD: cfg_rdata = {26'd0, last_corrected_lane_mask_reg};
-                4'hE: cfg_rdata = {22'd0, cfg_state_dbg_wire, op_state_dbg_wire, lane_idx};
-                4'hF: cfg_rdata = 32'h0001_0000;
-                default: cfg_rdata = 32'd0;
+                4'h0: cfg_rdata_next = {29'd0, cfg_lock_cfg, correct_en_cfg, detect_en_cfg};
+                4'h1: cfg_rdata_next = {{(32-WM){1'b0}}, m0_cfg};
+                4'h2: cfg_rdata_next = {{(32-WM){1'b0}}, m1_cfg};
+                4'h3: cfg_rdata_next = {{(32-WM){1'b0}}, m2_cfg};
+                4'h4: cfg_rdata_next = {{(32-WM){1'b0}}, m3_cfg};
+                4'h5: cfg_rdata_next = {{(32-WM){1'b0}}, m4_cfg};
+                4'h6: cfg_rdata_next = {{(32-WM){1'b0}}, m5_cfg};
+                4'h7: cfg_rdata_next = {26'd0, Done, op_busy_reg, config_error_reg, config_busy_reg, config_valid_reg, cfg_loaded_cfg};
+                4'h8: cfg_rdata_next = {28'd0, config_error_code_reg};
+                4'h9: cfg_rdata_next = {{(32-PW){1'b0}}, M_base_live};
+                4'hA: cfg_rdata_next = {{(32-PW){1'b0}}, half_range_live};
+                4'hB: cfg_rdata_next = {17'd0, usable_subset_bitmap_live};
+                4'hC: cfg_rdata_next = {23'd0, last_mismatch_count_reg, last_mismatch_mask_reg};
+                4'hD: cfg_rdata_next = {26'd0, last_corrected_lane_mask_reg};
+                4'hE: cfg_rdata_next = {22'd0, cfg_state_dbg_wire, op_state_dbg_wire, lane_idx};
+                4'hF: cfg_rdata_next = 32'h0001_0000;
+                default: cfg_rdata_next = 32'd0;
             endcase
         end
     end
@@ -699,6 +706,8 @@ module final_alu_runtime_top #(
             range_half_range_hold        <= {PW{1'b0}};
             corr_m0_bit3_corrector_reg   <= 1'b0;
             corr_m0_bit4_corrector_reg   <= 1'b0;
+            enc_m4_bit3_encoder_reg      <= 1'b0;
+            cfg_rdata                    <= 32'd0;
             x_out_core_reg               <= {XW{1'b0}};
             Corrected                    <= 1'b0;
             cfg_clear_loaded             <= 1'b0;
@@ -738,6 +747,7 @@ module final_alu_runtime_top #(
             corrector_start_reg <= 1'b0;
             Done                <= 1'b0;
             Corrected           <= corrected_reg;
+            cfg_rdata           <= cfg_rdata_next;
             X_out               <= x_out_core_reg;
 
             case (main_state)
@@ -802,6 +812,7 @@ module final_alu_runtime_top #(
                             enc_m2_cfg   <= m2_cfg;
                             enc_m3_cfg   <= m3_cfg;
                             enc_m4_cfg   <= m4_cfg;
+                            enc_m4_bit3_encoder_reg <= m4_cfg[3];
                             enc_m5_cfg   <= m5_cfg;
                             slice_m0_cfg <= m0_cfg;
                             slice_m1_cfg <= m1_cfg;
