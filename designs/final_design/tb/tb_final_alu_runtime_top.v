@@ -66,7 +66,7 @@ module tb_final_alu_runtime_top;
     );
 
     initial begin
-        $dumpfile("sim/waves/final_alu_runtime_rtl.vcd");
+        $dumpfile("final_alu_runtime_rtl.vcd");
         $dumpvars(0, tb_final_alu_runtime_top);
     end
 
